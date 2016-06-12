@@ -206,13 +206,7 @@ public:
     // Then we can define the functions to deal with serialisation.
     
     virtual std::string Serialize( void ) const = 0;
-    virtual bool        Deserialize( const SerializedPayload & Payload ) = 0;
-    
-    // Although there is no way to force the implementation, a message that 
-    // can be serialised should provide a constructor that takes the 
-    // serialised payload as argument and initiates the message if the payload
-    // corresponds to the message or throws a standard invalid_argument 
-    // exception if the de-serialise function fails.
+    virtual bool        Deserialize( const SerializedPayload & Payload ) = 0;    
   };
   
   // --------------------------------------------------------------------------
@@ -292,11 +286,6 @@ protected:
   
   void IncomingMessage( const SerialMessage & TheMessage, const Address From )
   {
-    
-    std::cout << TheMessage.GetSender().AsString() << " sends message to " 
-		    << TheMessage.GetReceiver().AsString() << " with content = " 
-		    << TheMessage.GetPayload() << std::endl;
-
     
     TheFramework->Send( SerializedPayload( TheMessage.GetPayload() ), 
 			TheMessage.GetSender(),
@@ -541,9 +530,9 @@ protected:
     // function with the payload and the sender, and if this function returns 
     // positively (true), then we apply Rivest' transposition rule.
     
-    for ( auto Message  = AvailableMessages->begin(); 
-	       Message != AvailableMessages->end();  
-	    ++ Message )
+    auto Message = AvailableMessages->begin();
+    
+    for ( Message; Message != AvailableMessages->end(); ++Message )
       if ( (*Message)( this, Payload, Sender ) )
       { 
 	// Optimise the list pushing this message type forward one position if 
@@ -553,11 +542,25 @@ protected:
 	  std::iter_swap( Message, std::prev(Message) );
 	
 	// The Payload should correspond to one message type only, so there is 
-	// no reason to continue testing more messages and we can safely break
-	// out of the for loop.
+	// no reason to continue testing more messages and we can safely return.
 	
-	break;
+	return;
       }
+      
+    // If the search terminated with no message type found that corresponds to
+    // the presented payload, there is a serious problem and this is indicated
+    // by throwing a general run-time exception.
+    
+    if ( Message == AvailableMessages->end() )
+    {
+      std::ostringstream Error;
+      
+      Error << "Agent " << GetAddress().AsString() << " has received payload \""
+            << Payload << "\" from agent " << Sender.AsString() 
+	    << " not corresponding to any message type";
+	    
+      throw std::runtime_error( Error.str() );
+    }
   }
 
 public:
