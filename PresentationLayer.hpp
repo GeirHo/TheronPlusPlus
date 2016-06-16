@@ -532,7 +532,7 @@ protected:
     
     auto Message = AvailableMessages->begin();
     
-    for ( Message; Message != AvailableMessages->end(); ++Message )
+    for ( ; Message != AvailableMessages->end(); ++Message )
       if ( (*Message)( this, Payload, Sender ) )
       { 
 	// Optimise the list pushing this message type forward one position if 
