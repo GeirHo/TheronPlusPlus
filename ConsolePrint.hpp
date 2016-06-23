@@ -18,16 +18,25 @@ be given for the formatted output to reach the console.
 
 Author: Geir Horn, 2013
 Lisence: LGPL 3.0
+
+Revisions:
+  Geir Horn, 2016: Put the class under the Theron name space,
+		   Added automatic actor naming by default
+		   Added ostream constructor argument
+		   Drain functionality moved to the destructor
+		   Stream will use the server's execution framework
 =============================================================================*/
 
 #ifndef CONSOLE_PRINT
 #define CONSOLE_PRINT
 
-#include <limits>
-#include <string>
-#include <iostream>
-#include <sstream>
-#include <Theron/Theron.h>
+#include <string>		// Standard strings
+#include <iostream>		// For doing the output and input
+#include <sstream>		// Formatted strings
+#include <memory>		// For shared pointers
+#include <type_traits>		// For compile time checks
+
+#include <Theron/Theron.h>	// The Theron framework
 
 #undef max
 #undef min
@@ -41,112 +50,141 @@ namespace Theron
  This is almost too trivial as it simply register the output handler for the
  incoming string which will print the string when it is called. The agents
  can either send std::string messages directly to this server by using its 
- agent name at Theron::Address("ConsolePrintServer"), or through the child
+ agent name given by the static Address function, or through the child
  agent stream class defined below which automates much of the work.
 
- The print server is used by agents across different endpoints and in general
- it is impossible to know when the last message has been handled by the 
- server. A working actor will normally have a way to find out that it has 
- completed its tasks, and then terminate or deregister from the registry if
- that utility class is used. However for the print actor there is no way to 
- know that the last message has been printed. 
-
- The mechanism offered to handle this situation is the following:
-
- 1) When the main thread hosting the print server object is about to close
-    (knowing that all other agents have finished), it calls the Drain 
-	function on the print server. 
- 2) The Drain function creates a receiver object, and stores that address 
-    in the print server.
- 3) When the unhandled message counter reaches zero, the print server 
-    sends a dummy message to the waiting receiver and the Drain function
-	terminates.
- 
 ******************************************************************************/
 
-class ConsolePrintServer : public Theron::Actor
+class ConsolePrintServer : public Actor
 {
+  // Other actors in the system will need to know the address of the print 
+  // server event without knowing where the print server is located. One could 
+  // imagine to have a global Theron::Address defined for this purpose. 
+  // Unfortunately, this is not possible since no Theron object can be defined 
+  // before the framework.
+  // 
+  // The solution is to store the symbolic name of the print server as a string, 
+  // and then generate the Theron::Address when needed. Since there address 
+  // function should be callable without a reference to the print server, the 
+  // function must be static. This implies that also the name of the print 
+  // server must be static.
+
 private:
 
-    // A flag for the termination phase
+  static std::string ServerName;
+    
+public:
 
-    bool TerminationPhase;
+  static Address GetAddress( void )
+  {
+    if ( ServerName.empty() )
+      return Address::Null();
+    else
+      return Address( ServerName.data() );
+  }  
+  
+  // In the same way, it is necessary to provide an execution framework for 
+  // the console print stream class so that it can be used also from places 
+  // where the Theron framework is not readily available. Again, the actual 
+  // framework cannot be stored a static variable, and a pointer is needed.
+  
+private:
+  
+  static Framework * ExecutionFramework;
+  
+  // Then it is a classical function to get this framework simply dereferencing 
+  // the pointer. I runtime error should occur if this is done before the 
+  // server has been initialised, i.e. when the pointer is null.
 
-    // The counter for unhandled messages. By default initialised to a very
-    // big number of messages since is is decremented for all messages 
-    // not only in the termination phase.
+  static Framework & GetFramework( void )
+  {
+    return *ExecutionFramework;
+  }
+  
+  // Since the access to this framework should be restricted to the console 
+  // print stream it is declared as a friend.
+  
+  friend class ConsolePrint;
+  
+  // Termination is handled by the destructor creating a termination receiver
+  // that will wait for the normal message handler to indicate that all 
+  // messages have been printed. However, it should be noted that this 
+  // approach is fragile if other actors are still running sending messages 
+  // to this print server. To be on the safe side, it should be the first 
+  // actor created, because then it will be the last actor destroyed.
+  
+  class Terminator : public Receiver
+  {
+  private:
+      void DrainQueueConfirmation ( const bool & Confirmation, 
+				    const Address TheServer )
+      {};	// We simply ignore everything
+  public:
+      Terminator (void) : Receiver()
+      {
+	  RegisterHandler( this, &Terminator::DrainQueueConfirmation );
+      };
+  };
 
-    Theron::uint32_t MessagesToGo;
+  // A shared pointer is initialised to this receiver by the destructor, 
+  // and if this pointer is assigned it is an indication that the server is 
+  // terminating and 'true' should be sent to the receiver when there are no
+  // more messages in the queue.
 
-    // Address of the receiver to signal when the last pending message has
-    // been handled
+  std::shared_ptr< Terminator > TerminationPhase;
+  
+  // The actual output is sent to a stream provided to the constructor to allow
+  // the stream to be set to cout or cerr or a file in one place.
+  
+  std::ostream * OutputStream;
 
-    Theron::Address TheReceiver;
+  // Handler function to print the content of the string
 
-    // Handler function to print the content of the string
+  void PrintString ( const std::string & message, const Address sender )
+  {
+      *OutputStream << message << std::endl;
 
-    void PrintString ( const std::string & message, 
-		       const Theron::Address sender )
-    {
-	std::cout << message << std::endl;
-
-	if ( TerminationPhase )
-	  if ( --MessagesToGo == 0 )
-		Send( true, TheReceiver );
-    };
+      if ( TerminationPhase )
+	if ( GetNumQueuedMessages() == 0 )
+	      Send( true, TerminationPhase->GetAddress() );
+  };
 
 public:
-	
-    // The constructor initialises the actor, and registers the 
-    // server function. Note that this print server has a name so that
-    // it can be found by the output streams later.
+      
+  // The constructor initialises the actor, and registers the 
+  // server function. It takes an optional actor name, and if this is not 
+  // given the framework will automatically generate a unique name. It is 
+  // strongly recommended that a name is given for debugging purposes. Note
+  // that in order to capture an automatically constructed actor address, the 
+  // global server name is initialised from the actor's own address.
 
-    ConsolePrintServer ( Theron::Framework & TheFramework )
-	    :  Theron::Actor(TheFramework, "ConsolePrintServer")
+  ConsolePrintServer ( Theron::Framework & TheFramework, 
+		       std::ostream * Output = &std::cout,
+		       const std::string & TheName = std::string() )
+  : Actor( TheFramework, ( TheName.empty() ? nullptr : TheName.data() ) ),
+    OutputStream( Output )
+  {
+    ServerName = Actor::GetAddress().AsString();
+    ExecutionFramework = &TheFramework;
+    RegisterHandler(this, &ConsolePrintServer::PrintString );
+  };
+
+  // If there are outstanding messages pending, the destructor must create 
+  // the terminator receiver and wait for it to receive the information 
+  // from the message handler that there are no more outstanding messages.
+
+  ~ConsolePrintServer( void )
+  {
+    if ( GetNumQueuedMessages() > 0 )
     {
-	RegisterHandler(this, & ConsolePrintServer::PrintString );
-	TerminationPhase = false;
-	MessagesToGo     = std::numeric_limits<Theron::uint32_t>::max();
-    };
-
-    // The Drain function is supposed to be called on the actual console
-    // print server object, and it initialises the class variables for 
-    // termination and let the terminator wait for the right number of 
-    // messages to be completely served.
-
-    void Drain (void)
-    {
-	// The reciver class used for the termination
-
-	class Terminator : public Theron::Receiver
-	{
-	private:
-	    void DrainQueueConfirmation ( const bool & Confirmation, 
- 				          const Theron::Address TheServer )
-	    {};	// We simply ignore everything
-	public:
-	    Terminator (void) : Receiver()
-	    {
-		RegisterHandler( this, &Terminator::DrainQueueConfirmation );
-	    };
-	} AllServed;
-	
-	TerminationPhase = true;
-	TheReceiver      = AllServed.GetAddress();
-	MessagesToGo     = GetNumQueuedMessages();
-
-	if ( MessagesToGo > 0 ) AllServed.Wait();
-    };
-
-    // It should really not be necessary to call the drain function directly,
-    // as one should rather let the destructor of the print server do the 
-    // drain - only when the destructor is called, we will be certain that 
-    // there will be no more messages generated for the print server.
-
-    ~ConsolePrintServer( void )
-    {
-      if ( GetNumQueuedMessages() > 0 ) Drain();
-    };
+      TerminationPhase = std::make_shared< Terminator >();
+      
+      TerminationPhase->Wait();
+    }
+    
+    ExecutionFramework = nullptr;
+    ServerName.clear();
+  }
 };
 
 /*****************************************************************************
@@ -167,13 +205,13 @@ we send the stream if its length is larger than zero.
 
 ******************************************************************************/
 
-class ConsolePrint : public std::ostringstream, public Theron::Actor
+class ConsolePrint : public std::ostringstream, public Actor
 {
 private:
 
     // We cache the address of the print server - note that it is assumed
     // that there is only one - so that we avoid a possibly more expensive 
-    // lookup if the strema is used for multiple messages.
+    // lookup if the stream is used for multiple messages.
 
     Theron::Address TheConsole;
 
@@ -182,10 +220,11 @@ public:
     // The constructor is just empty since the actual messaging is handled
     // by the flush function or the destructor below.
 
-    ConsolePrint (Theron::Framework & TheFramework) 
-    	: std::ostringstream(), Theron::Actor( TheFramework )
+    ConsolePrint (Theron::Framework & TheFramework 
+					  = ConsolePrintServer::GetFramework() ) 
+    : std::ostringstream(), Theron::Actor( TheFramework )
     { 	
-	TheConsole = Theron::Address("ConsolePrintServer");
+	TheConsole = ConsolePrintServer::GetAddress();
     };
 
     // The flush method sends the content of the stream to the print 
@@ -202,7 +241,6 @@ public:
 
 	  clear();
 	  str("");
-	  // seekp(0);
 	}
 	
 	return this;
