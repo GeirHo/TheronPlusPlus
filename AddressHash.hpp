@@ -27,10 +27,10 @@ namespace std {
     
     size_t operator() (const Theron::Address & TheAddress ) const
     {
-      return std::hash< string >( TheAddress.AsString() );
+      return std::hash< string >()( TheAddress.AsString() );
     }
     
   };
 }
 
-#endif THERON_ADDRESS_HASH
+#endif // THERON_ADDRESS_HASH
