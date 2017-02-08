@@ -10,7 +10,7 @@
   of Naples for the selection of the Swiften library, and for guiding 
   implementations of similar mechanism for the CoSSMic project that has been 
   the basis for the Network Layer implementation here. Without his kind help 
-  this XMPP interface would never have happend.
+  this XMPP interface would never have happened.
       
   Author: Geir Horn, University of Oslo, 2015, 2016
   Contact: Geir.Horn [at] mn.uio.no
@@ -53,6 +53,12 @@
 
 #include <ostream>  // For error messages
 #include <iostream> // TEST debugging messages
+
+// Swiften returns a boost optional for the message body and it may be necessary
+// to print this in error messages without first converting the optional to 
+// a legal string. Hence, the IO support for optionals is included.
+
+#include <boost/optional/optional_io.hpp>
 
 namespace Theron {
 namespace XMPP {
@@ -435,11 +441,11 @@ void Link::DispatchKnownPeers( JabberID ThisEndpoint, JabberID NewEndpoint,
 // not occur. 
 
 void Link::SubscribeKnownPeers( JabberID NewEndpoint,
-				Swift::Message::ref XMPPMessage )
+                                Swift::Message::ref XMPPMessage )
 {
   if ( XMPPMessage->getSubject() == "SUBSCRIBE" )
     SendPresence( NewEndpoint, Swift::Presence::Type::Subscribe,
-		  JabberID( XMPPMessage->getBody() ) );
+                  JabberID( XMPPMessage->getBody().value() ) );
   else
   {
     std::ostringstream ErrorMessage;
@@ -532,7 +538,8 @@ void Link::CreateClient( const Link::NewClient & Request, const Address From )
       [=](Swift::Message::ref XMPPMessage)->void {
 	  ProcessMessage( 
 	    OutsideMessage( XMPPMessage->getFrom(), XMPPMessage->getTo(),
-			    XMPPMessage->getBody(), XMPPMessage->getSubject()
+                        XMPPMessage->getBody().value(), 
+                        XMPPMessage->getSubject()
 	    ));
       });
          

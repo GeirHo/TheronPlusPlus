@@ -12,108 +12,562 @@ Note also that the event handler ignores what action the actor does for an
 event, so in is possible to register several events for the same actor at 
 the same time - the actor will have to handle this situation.
 
-Author: Geir Horn, 2013, 2016
-Lisence: LGPL 3.0
+Author and Copyright: Geir Horn, 2013, 2016, 2017
+Revision 2017: Major re-factoring
+License: LGPL 3.0
 =============================================================================*/
 
 #ifndef EVENT_HANDLER
 #define EVENT_HANDLER
 
-#include <Theron/Theron.h>
-#include <set>
-#include <map>
-#include <ctime>
+#include <Theron/Theron.h>		// The actor framework
+#include <set>								// The subscribers to the Now() updates
+#include <map>								// The time sorted event queue
+#include <chrono>							// Time in POSIX seconds
+#include <limits>							// To set the end of simulation at infinitum
+#include <string>							// Text strings
+#include <memory>							// For smart pointers
 
 namespace Theron
 {
 
-class EventHandler : public Theron::Actor
+/*=============================================================================
+
+ Event Handler
+
+=============================================================================*/
+//
+// The event handler basically deals with the event time:
+//
+// 	 1. It ensures that all actors needing the current event time gets it
+//	 2. It ensures that there is one and only one event handler in the system
+//
+// To satisfy the first task it has a set of addresses that each must provide 
+// ha message handler to receive the event time. Such an object will be defined
+// later in this file. Then it provides two procedures to allow these objects 
+// to register and de-register.
+//
+// Uniqueness is enforced by a flag to indicate if an event handler object has 
+// already been created, and by the constructor throwing a standard logic 
+// error on the attempt to construct a second event handler.
+//
+// Furthermore, the event handler is the actual actor, and defines abstract 
+// dispatch functions that derived event manager must provide. A derived 
+// manager must also be able to return the time of the first event, i.e. the 
+// time now.
+
+class EventHandler : public Actor
+{
+  // ---------------------------------------------------------------------------
+  // Managing the current event time 
+  // ---------------------------------------------------------------------------
+
+public:
+	
+  // The time to call the events are defined by the Event Time type
+  // which is for the current implementation simply an unsigned long
+
+  using EventTime = std::chrono::seconds::rep;
+		
+protected:
+	
+	// The time of the next event must be provided by the derived queue 
+	// manager.
+	
+	virtual EventTime NextEventTime( void ) = 0;
+	
+	// It is however necessary to know the current time which must be static 
+	// in order to be used in the static functions.
+	
+	static EventTime CurrentTime;
+	
+	// This time can be read by other parts of the program simply by checking 
+	// the now function. However, there is a separate class below that can be 
+	// used to wait for the event clock to advance.
+	
+public:
+	
+	inline static EventTime Now( void )
+	{
+		return CurrentTime;
+	}
+	
+private:
+	
+	// There is a flag to ensure that there is only one event handler
+	
+	static EventHandler * TheEventHandler;
+	
+  // All the subscribed Now objects are kept in a simple set since the 
+  // addresses have to be unique. It is static because is is accessed by 
+	// static functions, and there is only one event handler in the system.
+	
+	static std::set< Address > NowSubscribers;
+	
+	// The functions to register and de-register actors subscribing to the changes
+	// in the event time. Note that these are private as only the Now object 
+	// defined later will be allowed to access these.
+
+public:
+		
+	static EventTime RegisterTimeObject( const Address & Subscriber )
+	{
+		NowSubscribers.insert( Subscriber );
+		return CurrentTime;
+	}
+ 
+  static void DeRegisterTimeObject( const Address & Subscriber )
+	{
+		NowSubscribers.erase( Subscriber );
+	}
+ 
+  // ---------------------------------------------------------------------------
+  // Event management 
+  // ---------------------------------------------------------------------------
+		
+	// When the dispatched event is completed, the actor processing the event 
+	// must send back a message to acknowledge this to allow the event manager 
+	// to move to the next event in the queue. This class only carries the status
+	// of the event processing, which is default by definition.
+	
+	class EventCompleted
+	{
+	public:
+		
+		enum class Outcome
+		{
+			Success,
+			Failure
+		};
+		
+	private:
+		
+		Outcome Status;
+		
+		// This status field can be read only by the Event Handler class
+		
+		friend class EventHandler;
+		
+	public:
+		
+		EventCompleted( Outcome TheResult = Outcome::Success )
+		{
+			Status = TheResult;
+		}
+		
+	};
+
+protected:
+	
+	// A derived event manager will be passed the status in the completed event 
+	// feedback function. This function is supposed to delete the event (at least
+	// when it was successfully processed), so that a subsequent call on the 
+	// current event time will result in the time of the next event to be 
+	// processed
+	
+	virtual void CompletedEvent( Address EventConsumer,  
+															 EventCompleted::Outcome Status ) = 0;
+	
+	// The next event will then be dispatched by a method of the derived event 
+	// queue manager. Note that all the now subscribers have been notified before
+	// the event is dispatched.
+	
+	virtual void DispatchEvents( void ) = 0;
+	
+private:
+	
+	// The handler for the completed events will first ask the derived class to 
+	// clean the event, then dispatch the time of the next event to all actors 
+	// needing to know the current event time, before the next event is dispatched
+	
+	void CompletedEventHandler( const EventCompleted & Ack, 
+															const Address EventProcessor );
+	
+public:
+	
+	// There is a static function to obtain the address of the event handler 
+	// actor so that events can be sent to it without having direct access to 
+	// the event handler object.
+	
+	inline static Address GlobalAddress( void )
+	{
+		return TheEventHandler->GetAddress();
+	}
+	
+	// The constructor register the handler and the pointer to the instantiation 
+	// of this class, or potentially throws the standard logic error if there 
+	// is already an event handler registered.
+	
+	EventHandler( Framework & ExecutionFramework, 
+								const std::string & HandlerName = std::string() );
+	
+	// The destructor is virtual to ensure that the event handler is properly 
+	// removed. After destruction another discrete event handler system may be 
+	// constructed.
+	
+	virtual ~EventHandler();
+};
+
+/*=============================================================================
+
+ Discrete Event Manager
+
+=============================================================================*/
+//
+// The event handler has one instantiation as a discrete event manager. This 
+// maintains a queue of events where each event holds a message that will be 
+// transferred back to the actor setting up the event. The actor must provide 
+// handler for this message type as the one to be invoked when the event time 
+// is due.
+//
+// Since the message type to transfer is application dependent, this class is 
+// a template on the message type, and provides a handler for the event
+// message that should contain the time of the event, the message to return for 
+// the event and the address of the receiving actor. The last field can be 
+// omitted, which makes the event manager assumed that the event message should 
+// be sent back to the actor setting the event.
+	
+template< class EventMessage >
+class DiscreteEventManager : public EventHandler
 {
 public:
 
-    // The time to call the events are defined by the Event Time type
-    // which is for the current implementation simply an unsigned long
+  // ---------------------------------------------------------------------------
+  // Events 
+  // ---------------------------------------------------------------------------
+  //
+  // The events are held in a map structure where the sorting key is the 
+  // event time which then identifies which actor to call at that time and 
+	// the message to send to that actor. A shorthand exists allowing the 
+	// address to be omitted in which case the event is sent back to the actor
+	// submitting the event
 
-    typedef std::time_t EventTime;
+  class Event
+  {
+	private:
+		EventTime 	 TimeOfEvent;
+		Address	  	 EventReceiver;
+		EventMessage TheMessage;
+		
+		// These fields will be directly accessed by the event manager when 
+		// the event message is received and enqueued.
+		
+		friend class DiscreteEventManager< EventMessage >;
+		
+	public:
+		
+		Event( const EventTime & TheTime, const EventMessage & MessageToSend,
+					 const Address TheReceiver = Address::Null() )
+		: TimeOfEvent( TheTime ), EventReceiver( TheReceiver ), 
+		  TheMessage( MessageToSend )
+		{ }
+	};
+
+	// Since the map will use the event time as the key, the receiver and 
+	// the event message must be kept as the data field in the map. However,
+	// this pair should not be publicly available
+	
+private:
+
+  class EnqueuedEvent
+  {
+	public:
+		
+		Address 		 EventReceiver;
+		EventMessage Message;
+		
+		EnqueuedEvent( const Address & TheReceiver, 
+									 const EventMessage & TheMessage  )
+		: EventReceiver( TheReceiver ), Message( TheMessage )
+		{ }
+	};
+
+  // Then the structure holding the events can be defined as a time sorted 
+	// map sorted on the event times. It is a multi-map since it is perfectly 
+	// possible that two events may occur at the same time.
+
+  std::multimap< EventTime, EnqueuedEvent > EventQueue;
+	
+	// In order to iterate over these events, a shorthand for the iterator 
+	// is needed
+	
+	using EventReference 
+				= typename std::multimap< EventTime, EnqueuedEvent >::iterator;
+
+protected:
+  
+  // Derived classes will need to know if the queue is empty and the time  
+  // of the first event and the current time.
+
+  inline bool PendingEvents ( void )
+  {
+    return !EventQueue.empty();
+  }
+  
+  virtual EventTime NextEventTime ( void )
+  {
+    return EventQueue.begin()->first;
+  }
+  
+  // ---------------------------------------------------------------------------
+  // Event dispatch
+  // ---------------------------------------------------------------------------
+  //    
+  // Time in a discrete event simulation advances from time tick to 
+  // time tick, where the time ticks are the points in time where one or
+  // more of the actors will have something to do. By definition, everything
+  // happening at the same time tick will happen in parallel. Therefore,
+  // all events registered with the same time will be dispatched at the 
+  // same time.
+
+  // Since a standard pair object is used the "first" field is the event
+  // time stamp and the "second" field is the enqueued event of the actor 
+  // invoked by this event.
+  
+  virtual void DispatchEvents ( void )
+  {
+		if ( !EventQueue.empty() ) 
+		{
+		  auto CurrentEvent = EventQueue.begin();
+		  
+		  // We only need to do something if the time of the current event
+		  // is larger than the current time, i.e. the event processing has
+		  // moved to the next time tick.
+		  
+		  if ( CurrentEvent->first >= CurrentTime )
+		  {
+		      // Update the wall clock to this new time tick time.
+		    
+		      CurrentTime = CurrentEvent->first;
+		      
+		      // Finally, we can ask the objects owning the events at this time 
+		      // to start processing by sending the event message.
+		      
+		      do
+		      {
+						Send( CurrentEvent->second.Message, 
+									CurrentEvent->second.EventReceiver );
+						++CurrentEvent;
+		      }
+		      while ( ( CurrentEvent != EventQueue.end() ) && 
+						      ( CurrentEvent->first == CurrentTime ) ); 
+		      
+		  };  
+		};
+  };
+
+  // ---------------------------------------------------------------------------
+  // Setting up events
+  // ---------------------------------------------------------------------------
+  //    
+  // An actor enqueues an event by sending the event message to this manager.
+  // The following handler receives the event message and enqueues it after 
+  // checking that it will not make time run backwards. If the event is equal 
+  // to the current time, it will immediately be dispatched.
     
-    // The events are held in a map structure where the sorting key is the 
-    // event time which then identifies which actor to call at that time.
+private:
+	
+  void EnqueueEvent ( const Event & TheEvent, 
+							        const Theron::Address RequestingActor )
+  {
+		if ( CurrentTime <= TheEvent.TimeOfEvent )
+		{
+			Address EventReceiver;
+			
+			if ( TheEvent.EventReceiver == Address::Null() )
+				EventReceiver = RequestingActor;
+			else
+				EventReceiver = TheEvent.EventReceiver;
+			
+		  EventQueue.emplace( TheEvent.TimeOfEvent, 
+													EnqueuedEvent( EventReceiver, TheEvent.TheMessage ) );
+			
+			if ( CurrentTime == TheEvent.TimeOfEvent )
+			  Send( TheEvent.TheMessage, EventReceiver );
+		}
+  };
 
-    typedef std::pair< EventTime, Theron::Address > Event;
+  // ---------------------------------------------------------------------------
+  // Deleting events
+  // ---------------------------------------------------------------------------
+  //    
+	// When an event is acknowledged as completed, the completed event method 
+	// will be called. It will identify the event among the events with the 
+	// current time that has the given receiving actor as destination, and then 
+	// erase that event. If there were several events being dispatched at they 
+	// same time, they will be acknowledged one by one and deleted one by one.
+	// This rule is respected even if multiple of the events at the same time are
+	// for the same actor - it must acknowledge their processing one by one.
+	//
+	// The outcome of the event processing received is currently just ignored, but
+	// failed events could be dispatched again.
+	//
+	// It should be noted that some external actor must tell the event queue when
+	// to start dispatching events. Starting automatically on the first event 
+	// received, may not be correct if other and earlier events were to be 
+	// received in the initiation phase. In a typical simulation one would 
+	// generate a set of initial events before starting dispatching and consuming
+	// the events that again generate new events. Instead of providing a special
+	// message and hander for this first time start, it is assumed that a first 
+	// acknowledgement is sent, either from a real actor or from a Null address. 
+	//
+	// The current time is initialised to zero. From the enqueue event handler 
+	// above it is clear that if one of the initial events occurs at time zero,
+	// it will immediately be dispatched, and when it it acknowledged, the events
+	// for the next time stamp will be dispatched. If the earliest time stamp of 
+	// the initial events occurs later than zero, a dedicated acknowledge must 
+	// be sent to start the event queue processing. 
+	
+protected:
+	
+	virtual void CompletedEvent( Address EventConsumer,  
+															 EventCompleted::Outcome Status )
+	{
+		std::pair< EventReference, EventReference > 
+			EventRange = EventQueue.equal_range( CurrentTime );
+			
+		for ( EventReference SearchedEvent  = EventRange.first;
+										     SearchedEvent != EventRange.second; ++SearchedEvent ) 
+			if( SearchedEvent->second.EventReceiver == EventConsumer )
+			{
+				EventQueue.erase( SearchedEvent );
+			  break;
+			}
+	}
 
-    // An interesting point in distributed computing is synchronisation. 
-    // The event will trigger the actor(s) receiving it, but other actors 
-    // might be triggered by messages these actors generate. Then they might
-    // want to know the current event time. Polling the time would not 
-    // necessarily be a good strategy, since it is better if they are able to
-    // subscribe to the current time. This is what the class Now offers. It is 
-    // an actor that can be instantiated in other actors (in their framework).
-    // The event handler maintains a list of the remote objects, and these
-    // will be updated when the next event is dispatched.
+  // ---------------------------------------------------------------------------
+  // Termination event
+  // ---------------------------------------------------------------------------
+  //    
+	// A fundamental issue in all simulations where actors are interacting and 
+	// setting events for each other is to determine when the game is over. The 
+	// main method has to wait for all events to be handled, or alternatively 
+	// until a specific time is reached. The first case correspond to the latter 
+	// if the specific time is infinitum. In other words, when there are no more 
+	// events to process, it is safe to terminate.
+	//
+	// This can therefore be solved by a standard receiver owning an event for the 
+	// specific time. However, what type of message will it receive? It is not 
+	// possible to define this without knowing the template parameter of the event
+	// queue manager.
+  // 
+  // The correct class definition is therefore made when the message type is 
+  // known
+	
+	class TerminationEventReceiver : public Receiver
+	{
+	private:
+		
+		void TerminationHandler( const EventMessage & FinalEvent,
+														 const Address TheEventDispatcher )
+		{	}
+		
+	public:
+		
+		TerminationEventReceiver( void ) : Receiver()
+		{
+			RegisterHandler( this, &TerminationEventReceiver::TerminationHandler );
+		}
+	};
 
-    class Now : public Theron::Receiver
-    {
-    private:
+	// Then there is a generator function for this receiver taking the time 
+	// to wait for as parameter, and returning a smart pointer to the 
+	// termination event receiver. A smart pointer is used so that the receiver 
+	// is properly destroyed when it goes out of scope. An event is set for this
+	// receiver at the time given as input using the default constructor for the 
+	// event message, which should exist.
+	
+public:
+	
+	std::shared_ptr< Receiver > GetTerminationObject( EventTime TimeToStop 
+																		 = std::numeric_limits< EventTime >::max() )
+	{
+		std::shared_ptr< Receiver > 
+			TheObject = std::make_shared< TerminationEventReceiver >();
+			
+		EventQueue.emplace( TimeToStop, 
+							 EnqueuedEvent( TheObject->GetAddress(), EventMessage() ) );
+		
+		return TheObject;
+	}
+	
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
+  //    
+  // The constructor register the message handler for queuing events.
+
+  DiscreteEventManager( Framework & TheFramework, 
+										    std::string name = std::string() ) 
+    : EventHandler( TheFramework, name ),
+      EventQueue()
+  {
+		RegisterHandler(this, &DiscreteEventManager< EventMessage >::EnqueueEvent );
+  };
+    
+  // The destructor simply clears whatever unhanded events there might
+  // be left in the queue, and forgets the time subscribers. It must be 
+  // virtual since the handler has virtual functions, and other classes 
+  // can derive from it.
+  
+  virtual ~DiscreteEventManager()
+  {
+    EventQueue.clear();
+  };
+};
+
+/*=============================================================================
+
+ Now - An object to provide the current event time
+
+=============================================================================*/
+
+// An interesting point in distributed computing is synchronisation. 
+// The event will trigger the actor(s) receiving it, but other actors 
+// might be triggered by messages these actors generate. Then they might
+// want to know the current event time. Polling the time would not 
+// necessarily be a good strategy, since it is better if they are able to
+// subscribe to the current time. This is what the class Now offers. It is 
+// an actor that can be instantiated in other actors (in their framework).
+// The event handler maintains a list of the remote objects, and these
+// will be updated when the next event is dispatched.
+//
+// Having this as a receiver has the added benefit that it is possible for an 
+// actor to wait for the next time step, if that would be needed.
+
+class Now : public Receiver
+{
+private:
 
 	// The time the class receives from the event handler
 
-	EventTime CurrentTime;
+	EventHandler::EventTime CurrentTime;
 
-	// A receiver is, well, a receiver so it is not supposed to send 
-	// anything. However, if a Now object goes out of scope and is 
-	// destroyed it must be able to tell the event handler that it no
-	// longer needs the clock updates. The Send function is only public
-	// on the framework, so therefore a pointer to the framework used
-	// to create the Now object is cached in order for the destructor to
-	// send the message to stop the clock subscription.
-
-	Theron::Framework * TheFramework;
-	
-	// The address of the event handler is cached in order to send a 
-	// message to the event handler when the object is created 
-	// (registration) and another message when the now object goes out of 
-	// scope.
-	
-	Theron::Address TheEventHandler;
-
-    protected:
-
-	// The function to receive the current time from the event handler
+	// The function to receive the current time from the event handler and 
+	// record it
 
 	void ReceiveTime ( const EventHandler::EventTime & TheTime,
-			   const Theron::Address TheEventQueue )
+									   const Theron::Address TheEventQueue )
 	{
-	    CurrentTime = TheTime;
+    CurrentTime = TheTime;
 	};
 
-    public:
+public:
 
-	// The constructor gets the framework from the actor using the
-	// Now object and registers a handler to receive the time update as
-	// well as register with the global event handler. The handler will
-	// immediately respond with the current time, and it is important to
-	// remember that the value should not be used before it has been 
-	// updated! The constructor will therefore wait until the first 
-	// message arrives, potentially pausing the thread.
+	// The constructor register the handler for the 
 
-	Now ( Theron::Framework & LocalFramework, 
-	      const Theron::Address & TheEventQueue 
-				      = Theron::Address("EventHandler") )
-	: Theron::Receiver(), TheEventHandler( TheEventQueue )
+	Now ( void ) 
+	: Receiver()
 	{
-	    RegisterHandler( this, &EventHandler::Now::ReceiveTime );
-	    LocalFramework.Send( GetAddress().AsString(), GetAddress(), 
-				 TheEventHandler );
-	    CurrentTime  = static_cast< EventHandler::EventTime >(0);
-	    TheFramework = &LocalFramework;
-	    Wait();
+	    RegisterHandler( this, &Now::ReceiveTime );
+	    CurrentTime  = EventHandler::RegisterTimeObject( GetAddress() );
 	};
 
 	// The current time can be read by using the object as a functor.
 
-	EventTime operator () (void)
+	EventHandler::EventTime operator () (void)
 	{
-	    return CurrentTime;
+    return CurrentTime;
 	};
 
 	// When the object is destroyed it will de-register with the global
@@ -122,269 +576,10 @@ public:
 
 	~Now ()
 	{
-	    TheFramework->Send( GetAddress().AsString(), GetAddress(), 
-				TheEventHandler );
+    EventHandler::DeRegisterTimeObject( GetAddress() );
 	};
 
-    }; // End of class Now
-
-private:
-
-    // All the subscribed Now objects are kept in a simple set since the 
-    // addresses have to be unique
-
-    std::set < Theron::Address > NowSubscribers;
-
-    // In order to prevent the time from running backwards by
-    // allowing events to be set in the past there currently largest event
-    // time will be stored between invocations.
-
-    EventTime CurrentEventTime;
-
-    // Then the structure holding the events
-
-    std::multimap < EventTime, Theron::Address > EventQueue;
-
-protected:
-  
-    // Derived classes will need to know if the queue is empty and the time  
-    // of the first event and the current time.
-  
-    inline bool PendingEvents ( void )
-    {
-      return !EventQueue.empty();
-    }
-    
-    inline EventTime FirstEventTime ( void )
-    {
-      return EventQueue.begin()->first;
-    }
-    
-    inline EventTime GetTime ( void )
-    {
-      return CurrentEventTime;
-    }
-    
-    // Time in a discrete event simulation advances from time tick to 
-    // time tick, where the time ticks are the points in time where one or
-    // more of the actors will have something to do. By definition, everything
-    // happening at the same time tick will happen in parallel. Therefore,
-    // all events registered with the same time will be dispatched at the 
-    // same time.
-  
-    // Since a standard pair object is used the "first" field is the event
-    // time stamp and the "second" field is the address of the actor 
-    // setting this event.
-    
-    virtual void DispatchEvent ( void )
-    {
-	if ( !EventQueue.empty() ) 
-	{
-	  auto CurrentEvent = EventQueue.begin();
-	  
-	  // We only need to do something if the time of the current event
-	  // is larger than the current time, i.e. the event processing has
-	  // moved to the next time tick.
-	  
-	  if ( CurrentEvent->first > CurrentEventTime )
-	  {
-	      // Update the wall clock to this new time tick time.
-	    
-	      CurrentEventTime = CurrentEvent->first;
-	      
-	      // Then update all the remote clock objects with the new time
-	      
-	      for ( Theron::Address Subscriber : NowSubscribers )
-		Send( CurrentEventTime, Subscriber );
-	      
-	      // Finally, we can ask the objects owning the events at this time 
-	      // to start processing by sending the time back to the objects.
-	      
-	      do
-	      {
-	      	Send( CurrentEventTime, CurrentEvent->second );
-		++CurrentEvent;
-	      }
-	      while ( ( CurrentEvent != EventQueue.end() ) && 
-		      ( CurrentEvent->first == CurrentEventTime ) ); 
-	      
-	  };  
-	};
-    };
-
-    // Any actor enqueues an event by sending a time to this queue, and 
-    // then it receives a message back with the time when the event is due.
-    // The following function receives the queuing event. If this was the 
-    // first event inserted, we immediately ask for it to be dispatched.
-    // It will not accept events to be set before the current time, 
-    // however clock synchronisation is difficult in a distributed system
-    // so if the event is requested in the past, the command is understood
-    // to be "as soon as possible" and the event is enqueued for the current
-    // time.
-    //
-    // If the event is enqueued for the current time, the requesting actor must
-    // be informed that the event is now, and we still have to enqueue it 
-    // because it should be taken out of the event queue when the requesting 
-    // actor acknowledges that the event handling has taken place.
-
-    virtual void EnqueueEvent ( const EventTime & TheTime, 
-			        const Theron::Address RequestingActor )
-    {
-	if ( CurrentEventTime < TheTime )
-	  EventQueue.insert( Event( TheTime, RequestingActor ) );
-	else
-	{
-	  EventQueue.insert( Event( CurrentEventTime, RequestingActor ) );
-	  Send( CurrentEventTime, RequestingActor );
-	}
-
-	// If this is the only event in the queue is should be immediately
-	// dispatched
-	
-	if ( EventQueue.size() == 1 )
-	    DispatchEvent();
-    };
-
-private:
-  
-    // There is a handler for receiving acknowledgements for 
-    // dispatched events. If the event is positively acknowledged it is 
-    // deleted, otherwise it is simply dispatched again. Since we could have
-    // dispatched many events at the same time, we have to search the events
-    // having the current time for the one belonging to the requesting actor.
-    //
-    // It is necessary to be robust and allow a remote actor to acknowledge 
-    // already acknowledged events. In other words, we can receive an 
-    // acknowledgement for an event which does no longer exist in the 
-    // event queue.
-
-    void HandleAcknowledgement ( const bool & Ack,
-				 const Theron::Address RequestingActor )
-    {
-	if ( Ack == true )
-	{
-	  auto CurrentEvent = EventQueue.begin();
-	  
-	  while ( ( CurrentEvent != EventQueue.end() ) &&
-		  ( CurrentEvent->first == CurrentEventTime ) )
-	    if ( CurrentEvent->second != RequestingActor )
-	    	++CurrentEvent;
-	    else
-	    {
-	      // We have found what we were looking for, so we delete this
-	      // element and then stop the search.
-	      
-	      EventQueue.erase( CurrentEvent );
-	      break;
-	    };
-	};
-	
-	DispatchEvent();
-    };
-
-    // The event handler can also receive requests from remote Now 
-    // objects to subscribe to changes in the event time. Since such objects
-    // can subscribe at any time this handler automatically responds back to 
-    // the subscribing object with the current time. It should be noted that
-    // the handler will delete the subscriber if it receives an address of
-    // a currently subscribed Now object. The second address is not needed
-    // here as it should be identical to the first address.
-
-    void NowObjectHandler( const std::string & RemoteNowID,
-			   const Theron::Address Subscriber   )
-    {
-	auto ExistingObject = NowSubscribers.find( Subscriber );
-
-	if ( ExistingObject == NowSubscribers.end() )
-	{
-	    NowSubscribers.insert( Subscriber );
-	    Send( CurrentEventTime, Subscriber );
-	}
-	else
-	    NowSubscribers.erase( ExistingObject );
-    };
-
-public:
-
-    // The constructor initiates the actor and registers the two message 
-    // handlers 
-
-    EventHandler ( Theron::Framework & TheFramework, 
-		   const char *const name = "EventHandler" ) 
-	    : Theron::Actor( TheFramework, name ),
-	      NowSubscribers(), EventQueue()
-    {
-	RegisterHandler(this, &EventHandler::EnqueueEvent );
-	RegisterHandler(this, &EventHandler::HandleAcknowledgement );
-	RegisterHandler(this, &EventHandler::NowObjectHandler );
-
-	CurrentEventTime = static_cast<EventHandler::EventTime>(0);
-    };
-    
-    // The destructor simply clears whatever unhanded events there might
-    // be left in the queue, and forgets the time subscribers. It must be 
-    // virtual since the handler has virtual functions, and other classes 
-    // can derive from it.
-    
-    virtual ~EventHandler()
-    {
-      EventQueue.clear();
-      NowSubscribers.clear();
-    };
-};
-
-/******************************************************************************
- 
- Termination Time
- 
- This is given a particular termination time and provides a Wait function 
- that will use a now object to block the current thread until the specified
- time is reached. It does this simply by setting the event time, and wait 
- for the event handler to send this time back when the event is due.
-   
- It is also possible to use the same mechanism to implement a termination
- when all the pending events scheduled by other actors have been serviced.
- This is achieved by setting the termination time to infinitum, since the 
- termination event will then be the very last event to execute. This is 
- actually the default behaviour, selected if no termination time is given.
-   
- WARNING: The termination object should not be created as the first event
- driven actor! This because if the event list is empty, the event handler will
- immediately dispatch the set event, so termination time is immediately 
- reached, and calling Wait() on this object will have no effect. Furthermore,
- to preserve causality, all events subsequently set will be flushed to this 
- stop time (it should however be harmless since if this Termination Time 
- object is used to block main() from terminating the program, it will not 
- block and the program will terminate before any actor gets any chance to do
- anything.)
- 
-*******************************************************************************/
-
-#include <limits>
-
-class TerminationTime : public Theron::Receiver
-{
-protected:
-  
-  void ReceiveTime ( const EventHandler::EventTime & Now,
-		     const Theron::Address TheEventHandler )
-  {
-    // We simply ignore the message
-  };
-  
-public:
-  
-    TerminationTime( Theron::Framework &     TheFramework,
-		     EventHandler::EventTime StopTime 
-		     = std::numeric_limits< EventHandler::EventTime >::max(),
-		     const Theron::Address & TheEventHandler 
-					     = Theron::Address("EventHandler") )
-    : Theron::Receiver()
-    {
-      RegisterHandler( this, &TerminationTime::ReceiveTime );
-      TheFramework.Send( StopTime, GetAddress(), TheEventHandler );
-    };
-};
+}; // End of class Now
 
 }       // End name space Theron
 #endif  // EVENT_HANDLER

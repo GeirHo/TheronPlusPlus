@@ -128,7 +128,7 @@ class PresentationLayer : public Actor
 public:
   
   // --------------------------------------------------------------------------
-  // Serialised message formats
+  // Serialised message format
   // --------------------------------------------------------------------------
   
   // The result of the serialisation and what is received from the remote actor
