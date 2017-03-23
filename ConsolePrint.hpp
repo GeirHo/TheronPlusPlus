@@ -16,7 +16,7 @@ with the manipulator "endl" or with a flush, each of which sends the stream
 to the print agent and clears the local buffer. Note that one of the two must
 be given for the formatted output to reach the console.
 
-Author: Geir Horn, 2013
+Author: Geir Horn, 2013-2016
 Lisence: LGPL 3.0
 
 Revisions:
@@ -30,13 +30,15 @@ Revisions:
 #ifndef CONSOLE_PRINT
 #define CONSOLE_PRINT
 
-#include <string>		// Standard strings
-#include <iostream>		// For doing the output and input
-#include <sstream>		// Formatted strings
-#include <memory>		// For shared pointers
-#include <type_traits>		// For compile time checks
+#include <string>														// Standard strings
+#include <iostream>													// For doing the output and input
+#include <sstream>													// Formatted strings
+#include <memory>														// For shared pointers
+#include <type_traits>											// For compile time checks
+#include <stdexcept>												// Standard exceptions
 
-#include <Theron/Theron.h>	// The Theron framework
+#include <Theron/Theron.h>									// The Theron framework
+#include "StandardFallbackHandler.hpp"			// Debugging and error handling
 
 #undef max
 #undef min
@@ -55,7 +57,8 @@ namespace Theron
 
 ******************************************************************************/
 
-class ConsolePrintServer : public Actor
+class ConsolePrintServer : public virtual Actor,
+													 public virtual StandardFallbackHandler
 {
   // Other actors in the system will need to know the address of the print 
   // server event without knowing where the print server is located. One could 
@@ -117,12 +120,12 @@ private:
   {
   private:
       void DrainQueueConfirmation ( const bool & Confirmation, 
-				    const Address TheServer )
+																    const Address TheServer )
       {};	// We simply ignore everything
   public:
       Terminator (void) : Receiver()
       {
-	  RegisterHandler( this, &Terminator::DrainQueueConfirmation );
+			  RegisterHandler( this, &Terminator::DrainQueueConfirmation );
       };
   };
 
@@ -145,7 +148,6 @@ private:
       *OutputStream << message << std::endl;
 
       if ( TerminationPhase )
-	if ( GetNumQueuedMessages() == 0 )
 	      Send( true, TerminationPhase->GetAddress() );
   };
 
@@ -159,12 +161,17 @@ public:
   // global server name is initialised from the actor's own address.
 
   ConsolePrintServer ( Theron::Framework & TheFramework, 
-		       std::ostream * Output = &std::cout,
-		       const std::string & TheName = std::string() )
+								       std::ostream * Output = &std::cout,
+								       const std::string & TheName = std::string() )
   : Actor( TheFramework, ( TheName.empty() ? nullptr : TheName.data() ) ),
+    StandardFallbackHandler( TheFramework, Actor::GetAddress().AsString() ),
     OutputStream( Output )
   {
-    ServerName = Actor::GetAddress().AsString();
+    if ( ServerName.empty() )
+	    ServerName = Actor::GetAddress().AsString();
+		else
+			throw std::logic_error( "Only one Console Print Server can be used" );
+		
     ExecutionFramework = &TheFramework;
     RegisterHandler(this, &ConsolePrintServer::PrintString );
   };
@@ -173,14 +180,12 @@ public:
   // the terminator receiver and wait for it to receive the information 
   // from the message handler that there are no more outstanding messages.
 
-  ~ConsolePrintServer( void )
+  virtual ~ConsolePrintServer( void )
   {
-    if ( GetNumQueuedMessages() > 0 )
-    {
-      TerminationPhase = std::make_shared< Terminator >();
-      
+	  TerminationPhase = std::make_shared< Terminator >();
+    
+		while ( GetNumQueuedMessages() > 0 )
       TerminationPhase->Wait();
-    }
     
     ExecutionFramework = nullptr;
     ServerName.clear();
@@ -205,7 +210,9 @@ we send the stream if its length is larger than zero.
 
 ******************************************************************************/
 
-class ConsolePrint : public std::ostringstream, public Actor
+class ConsolePrint : public virtual std::ostringstream, 
+										 public virtual Actor,
+										 public virtual StandardFallbackHandler
 {
 private:
 
@@ -221,10 +228,11 @@ public:
     // by the flush function or the destructor below.
 
     ConsolePrint (Theron::Framework & TheFramework 
-					  = ConsolePrintServer::GetFramework() ) 
-    : std::ostringstream(), Theron::Actor( TheFramework )
+																				  = ConsolePrintServer::GetFramework() ) 
+    : std::ostringstream(), Theron::Actor( TheFramework ),
+      StandardFallbackHandler( TheFramework, Actor::GetAddress().AsString() )
     { 	
-	TheConsole = ConsolePrintServer::GetAddress();
+			TheConsole = ConsolePrintServer::GetAddress();
     };
 
     // The flush method sends the content of the stream to the print 
@@ -233,26 +241,26 @@ public:
 
     std::ostringstream * flush( void )
     {
-	if ( str().length() > 0 )
-	{
-	  Send( std::string( str() ), TheConsole );
+			if ( str().length() > 0 )
+			{
+			  Send( std::string( str() ), TheConsole );
 
-	  // Clear the string
+			  // Clear the string
 
-	  clear();
-	  str("");
-	}
+			  clear();
+			  str("");
+			}
 	
-	return this;
+			return this;
     };
 	    
     // The destructor does the same thing, except that it will not need to 
     // clear he buffer as this is done when the ostringstream is destroyed
 
-    ~ConsolePrint ( void )
+    virtual ~ConsolePrint ( void )
     {
-	if ( str().length() > 0 )
-	  Send( std::string( str() ), TheConsole );
+			if ( str().length() > 0 )
+			  Send( std::string( str() ), TheConsole );
     };
 };
 

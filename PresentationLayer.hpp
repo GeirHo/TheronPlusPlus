@@ -109,6 +109,7 @@
 #include <mutex>
 
 #include <Theron/Theron.h>
+#include "StandardFallbackHandler.hpp"
 #include "NetworkEndPoint.hpp"
 
 // The Presentation Layer is defined to be a part of the Theron name space 
@@ -123,7 +124,8 @@ namespace Theron
 // The Presentation Layer is itself an actor that will exchange messages with 
 // other actors, and with the Session Layer server. 
   
-class PresentationLayer : public Actor
+class PresentationLayer : public virtual Actor,
+													public virtual StandardFallbackHandler
 {
 public:
   
@@ -146,7 +148,7 @@ public:
   public:
     
     SerialMessage( const Address & TheSender, const Address & TheReceiver, 
-		   const std::string & ThePayload )
+								   const std::string & ThePayload )
     : From( TheSender ), To( TheReceiver ), Payload( ThePayload )
     {};
     
@@ -251,7 +253,7 @@ private:
   // http://stackoverflow.com/questions/6771998/dynamic-cast-of-void
   
   void OutboundMessage( const void * TheMessage, uint32_t MessageSize,
-			const Address From, const Address To )
+												const Address From, const Address To )
   {
     const Serializeable * BinaryMessage = 
 			    static_cast< const Serializeable * >( TheMessage );
@@ -291,7 +293,7 @@ protected:
 			TheMessage.GetSender(),
 			TheMessage.GetReceiver() );
   }
-
+  
 public:
   
   // --------------------------------------------------------------------------
@@ -321,6 +323,7 @@ public:
   PresentationLayer( NetworkEndPoint * TheHost,
 		     std::string ServerName = "PresentationLayer"  ) 
   : Actor( TheHost->GetFramework() , ServerName.data() ),
+    StandardFallbackHandler( TheHost->GetFramework(), ServerName.data() ),
     SessionServer( Address( "SessionLayer" ) )
   {
     Pointer      = this;
@@ -351,7 +354,8 @@ public:
 // inheritance at the expense that each level of the heritage hierarchy has to 
 // explicitly call the the Actor's constructor.
 
-class DeserializingActor : virtual public Actor
+class DeserializingActor : virtual public Actor,
+													 virtual public StandardFallbackHandler
 {
 protected:
   
@@ -563,16 +567,21 @@ protected:
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
+
 public:
   
   // The constructor is simply registering this handler for the framework to 
   // be ready for use directly.
   
   DeserializingActor( Framework & TheFramework, 
-		      const char* const name = nullptr )
-  : Actor( TheFramework, name )
+								      const char* const name = nullptr )
+  : Actor( TheFramework, name ),
+    StandardFallbackHandler( TheFramework, name )
   {
-    RegisterHandler(this, &DeserializingActor::SerializedMessageHandler );
+    RegisterHandler(this, &DeserializingActor::SerializedMessageHandler );		
   }
   
   // And we need a virtual destructor to ensure that everything will be 

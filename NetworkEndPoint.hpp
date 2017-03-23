@@ -15,7 +15,7 @@
   ensure that they are confirming to the communication protocol of the 
   actor system.
 
-  Author: Geir Horn, University of Oslo, 2015
+  Author: Geir Horn, University of Oslo, 2015-2017
   Contact: Geir.Horn [at] mn.uio.no
   License: LGPL3.0
 =============================================================================*/
@@ -23,12 +23,14 @@
 #ifndef THERON_TRANSPARENT_COMMUNICATION
 #define THERON_TRANSPARENT_COMMUNICATION 
 
-#include <memory> 		// For shared pointers.
-#include <utility>		// For the forward template
-#include <map>			// For the managed actors
-#include <type_traits>		// For advanced meta-programming
+#include <memory> 					// For shared pointers.
+#include <utility>					// For the forward template
+#include <map>							// For the managed actors
+#include <set>							// For shut down management
+#include <type_traits>			// For advanced meta-programming
+#include <initializer_list> // For structured initialisation
 
-#include <iostream> //TEST
+#include <iostream> 				//TEST
 
 #include <Theron/Theron.h>	// The Theron actor framework
 
@@ -36,6 +38,10 @@ namespace Theron {
 
 class NetworkEndPoint : public EndPoint, public Framework
 {
+  // ---------------------------------------------------------------------------
+  // Domain framework
+  // ---------------------------------------------------------------------------
+
 private:
   
   // The parameters provided describing the location of this end point is 
@@ -58,6 +64,92 @@ public:
     return *this;
   }
   
+  // ---------------------------------------------------------------------------
+  // Framework parameters
+  // ---------------------------------------------------------------------------
+  // The Theron framework parameters is provided in a C-like fashion, and not
+  // changeable after the Framework creation - although there are functions to 
+  // express change goals. To improve the interface to these, there is a 
+  // static object that allows to set the framework parameters prior to the 
+  // creation of the Network End Point. The address of this class is passed 
+  // to the Framework's constructor
+  //
+  // Currently the end point parameters are empty, but included for future 
+  // expansion. 
+  
+  static class FrameworkParameters : protected EndPoint::Parameters,
+																		 protected Framework::Parameters
+  {
+	public:
+		
+		// Yield types are encapsulated to force them to be explicit. The 
+		// conditional strategy means that inactive threads are suspended making it
+		// somewhat slower to restart a worker thread, but at the benefit of not 
+		// consuming any power when the threads are mostly idle. The spin strategy 
+		// is probably better for real-time response systems since it keeps all 
+		// worker threads active at all times, even when they will not be used by
+		// any actor. The hybrid strategy is a compromise which tries to avoid the 
+		// rampant consumption of spare CPU cycles caused by busy-waiting, while 
+		// still avoiding condition variables, by yielding to other threads with a 
+		// time out after some period of spinning.
+		
+		enum class YieldType
+		{
+			Conditional = YIELD_STRATEGY_CONDITION,
+			Spin		    = YIELD_STRATEGY_SPIN,
+			Hybrid			= YIELD_STRATEGY_HYBRID
+		};
+		
+		// Thread related functions. The first sets the number of worker threads 
+		// to use to execute the actors of the framework. The second sets the 
+		// yield strategy. There is also a parameter for thread priority, but 
+		// the effect of this is undocumented and it is therefore not provided.
+		
+		inline void WorkerThreadCount( const uint32_t Count )
+		{
+			mThreadCount = Count;
+		}
+		
+		inline void Yield( const YieldType Strategy )
+		{
+			mYieldStrategy = static_cast< YieldStrategy >( Strategy );
+		}
+		
+		// Non-Uniform Memory Architecture (NUMA) is a cluster computer architecture
+		// where each node has its own set of processors and each node has its
+		// own memory, and each processor has its own cache. Thus one can gain 
+		// significant performance by allocating the worker threads to the same 
+		// nodes and the same processors. Theron provides experimental support for 
+		// such restrictions by masks for nodes and processors.
+		
+		inline void NUMANodeMask( const uint32_t Mask )
+		{
+			mNodeMask = Mask;
+		}
+		
+		inline void NUMAProcessorMask( const uint32_t Mask )
+		{
+			mProcessorMask = Mask;
+		}
+		
+		// The constructor is simply a place holder to ensure that the default 
+		// values are used for the endpoint and framework parameter classes.
+		
+		FrameworkParameters( void )
+		: EndPoint::Parameters(), Framework::Parameters()
+		{ }
+		
+		// In order to allow the constructor to pass the base classes to the 
+		// end point and the framework, access to the protected parameter classes
+		// must be allowed by the Network End Point constructor.
+		
+		friend class NetworkEndPoint;
+		
+	} Parameters;
+  
+  // ---------------------------------------------------------------------------
+  // Actors: Network Endpoint Layers
+  // ---------------------------------------------------------------------------
   // The core functionality is to encapsulate the necessary communication 
   // actors: The Network Layer server dealing with the physical link exchange 
   // and sockets; the Session Layer taking care of the the mapping of external
@@ -170,6 +262,154 @@ public:
 		   MessageQueue );
   }
   
+  // ---------------------------------------------------------------------------
+  // Shut down management
+  // ---------------------------------------------------------------------------
+  // A small problem in Theron is that there is no function to wait for 
+  // termination. Each actor is in principle a state machine that will run 
+  // forever exchanging messages. The thread that starts main and creates the 
+  // network endpoint and the actors should be suspended until the actor system 
+  // itself decides to terminate. The correct way to do this is to use a 
+  // Receiver object that will get a last message when all the key actors in 
+  // the system no longer have messages to process. Thus when this receiver 
+  // terminates its wait, the main() will probably terminate calling the 
+  // destroying the objects created within main(). 
+  //
+  // In larger systems there will be more actors than threads and, perhaps, more 
+  // threads than cores. The result is that some threads may be waiting for an 
+  // available core and some actors may be waiting for available threads. Thus,
+  // when the deciding actor has entered the finishing state, there may still 
+  // be unhanded messages for other actors, and some of these may be processed 
+  // in other threads while main() is destroying the actors almost guaranteeing 
+  // that the application will terminate with a segmentation fault. 
+  //
+  // Given that there is no active interface to the Theron scheduler, it is not
+  // possible to know when there are no pending messages. However, if the actors
+  // created in main() are known, then it is possible to verify that all their
+  // message queues are empty before terminating. 
+  //
+  // This idea is implemented with a Receiver that has a set of pointers to 
+  // actors to wait for. When it receives the shut down message it will loop 
+  // over the list of actors checking if they have pending messages, and if so
+  // it will suspend execution for one second. The handler will only terminate 
+  // when there are no pending messages for any of the guarded actors. 
+  // 
+  // There are two methods provided by the Network End Point to use this 
+  // Receiver: One Wait For Termination that creates the receiver and waits 
+  // for it to receive the shut down message, and one Shut Down method that 
+  // can be called by the main actor when the system is ready for shut down
+  // as the message exchange dries up.
+  
+public:
+	
+	class ShutDownMessage
+	{
+	private:
+		
+		std::string Description;
+		
+	public:
+		
+		ShutDownMessage( void )
+		{
+			Description = "Network End Point: Shut down message";
+		}
+		
+	};
+	
+  // The receiver object has a handler for this message
+	
+private:
+	
+	class TerminationReceiver : public Receiver
+	{
+	private:
+		
+		std::set< const Actor * > GuardedActors;
+		
+		// The termination message handler
+		
+		void StartTermination( const ShutDownMessage & TheRequest, 
+													 const Address Sender );
+		
+	public:
+		
+		// The constructor takes an initialisation list to ensure that all pointers
+		// are for actors.
+		
+		TerminationReceiver( 
+									const std::initializer_list< const Actor * > & ActorsToGuard )
+		: GuardedActors( ActorsToGuard )
+		{
+			RegisterHandler( this, &TerminationReceiver::StartTermination );
+		}
+		
+	};
+  
+	// There is a shared pointer for this termination receiver to ensure that it 
+	// is properly destroyed and so that it can be passed outside if someone 
+	// wants to manage the sending of the termination message directly.
+	
+	std::shared_ptr< TerminationReceiver > ShutDownReceiver;
+	
+	// There is a public interface function to send the shut down message to this
+	// receiver. It optionally takes the address of the calling actor and sends 
+	// the message as if it was from that actor. It throws if there is no shut 
+	// down receiver allocated.
+	
+public:
+	
+	void SendShutDownMessage( const Address & Sender );
+	
+	// There is also a variant that will send the message as if it is from the 
+	// network layer actor.
+	
+	void SendShutDownMessage( void )
+	{
+		SendShutDownMessage( GetAddress( Layer::Network ) );
+	}
+	
+	// One may get the address of the shut down receiver. This function will 
+	// also throw if the receiver does not exist.
+	
+	Address ShutDownAddress( void );
+	
+	// The shut down receiver and object is created and obtained by a creator 
+	// function that takes a list of actors that can be converted to actor 
+	// pointers and passed to the termination receiver. Note that it adds the 
+	// network layer servers to the set of actors to look after. 
+	// 
+	// Note: There is deliberately no Wait function as this has to be called 
+	// on the object returned by this function, i.e. by invoking the standard 
+	// wait function on the receiver.
+	//
+	// Implementation note: The initialiser list must be given as an initialiser 
+	// in stead of the constructor, and the compiler will call the correct 
+	// constructor. In other words, if the initialiser list constructor should 
+	// be called, one would need to say T{...} and not T({...}), and the 
+	// standard make shared will implicitly use the latter case. The alternative 
+	// could be to template the constructor, but then it would not be as easy to
+	// ensure that the types of the given arguments were really pointers to actors
+	
+	template< class... ActorTypes >
+	std::shared_ptr< TerminationReceiver > 
+	TerminationWatch( ActorTypes & ...TheActor )
+	{
+		ShutDownReceiver = std::shared_ptr< TerminationReceiver >(
+			new TerminationReceiver
+				  { CommunicationActor[ Layer::Network 			].get(), 
+						CommunicationActor[ Layer::Session 			].get(), 
+						CommunicationActor[ Layer::Presentation ].get(),
+						dynamic_cast< const Actor * >( &TheActor )...
+					}
+		);
+			
+		return ShutDownReceiver;
+	}
+	
+  // ---------------------------------------------------------------------------
+  // Constructor and Initialiser
+  // ---------------------------------------------------------------------------
   // The constructor simply stores the arguments and ensures consistency between
   // the endpoint and the framework. First the arguments for the end point are
   // given and then the arguments for the framework are accepted. It would be 
@@ -272,24 +512,6 @@ protected:
     
     virtual void BindServerActors ( void ) = 0;
 
-    // There is an option to define parameters to be used by the Theron 
-    // Endpoint. It returns the default parameters by default.
-    
-    virtual EndPoint::Parameters SetEndpointParameters( void ) const
-    {
-      return EndPoint::Parameters();
-    }
-    
-    // It is also possible to set parameters for the Theron Framework, and 
-    // again there is a function allowing derived initialisers to change these.
-    // In particular it could be useful to change the number of threads used 
-    // by Theron to execute actors.
-    
-    virtual Framework::Parameters SetFrameworkParameters( void ) const
-    {
-      return Framework::Parameters();
-    }
-
     // The constructor simply ensures that we capture a true base class pointer
     // when this initialiser is instantiated by the base class. If any of the 
     // virtual functions attempts to dynamically cast this pointer to anything
@@ -368,10 +590,9 @@ public:
  // and therefore the overhead should be negligible. 
   
  NetworkEndPoint( const std::string & Name, const std::string & Location,
-		  InitialiserType TheInitialiser )
-  : EndPoint( Name.data(), Location.data(), 
-	      TheInitialiser->SetEndpointParameters() ),
-    Framework( *this, Name.data(), TheInitialiser->SetFrameworkParameters() ),
+								  InitialiserType TheInitialiser )
+  : EndPoint( Name.data(), Location.data(), Parameters),
+    Framework( *this, Name.data(), Parameters ),
     Domain( Location ), CommunicationActor()
   {
     
@@ -388,5 +609,5 @@ public:
   { }
 };
   
-}  	// End namespace Theron
+}  			// End namespace Theron
 #endif  // THERON_TRANSPARENT_COMMUNICATION

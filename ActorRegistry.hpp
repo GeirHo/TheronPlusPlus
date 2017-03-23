@@ -21,7 +21,7 @@ involved with executing the agent framework. Each terminator will receive
 one and only one message from the ActorRegistry, sent when the the last actor
 unregister. 
 
-Authoor: Geir Horn, 2013
+Authoor: Geir Horn, 2013-2017
 Lisence: LGPL 3.0
 =============================================================================*/
 
@@ -29,9 +29,10 @@ Lisence: LGPL 3.0
 #define ACTOR_REGISTRY
 
 #include <set>
-#include <map>
 #include <string>
+#include <stdexcept>
 #include <Theron/Theron.h>
+#include "StandardFallbackHandler.hpp"
 
 /******************************************************************************
  The Actor Registry
@@ -40,148 +41,102 @@ Lisence: LGPL 3.0
 namespace Theron
 {
 
-class ActorRegistry : public Theron::Actor
+class ActorRegistry : public virtual Theron::Actor,
+											public virtual Theron::StandardFallbackHandler
 {
-public:
+private:
+	
+	// The name of the actor registry class is stored as a string accessible 
+	// for all, and since there can only be one actor registry the constructor 
+	// will throw if this string is not empty when the class is constructed.
+	
+	static std::string Name;
+	
+  // The commands that can be used to register and de-register actors
 
-  // The framework must be stored for the terminator objects, and 
-  // there is an alias for this unique identifier
-
-  typedef Theron::uint32_t FrameworkID;
-
-  // The commands that can be used to register and deregister actors
-
-  enum RegistryCommands
+  enum class RegistryCommands
   {
     RegisterActor,
     DeRegisterActor,
     RegisterTerminator
   };
 
-  // Terminators must be registered with their framework since a 
-  // terminator is a receiver by default and it does not have a framework
-  // so the framework part of its address is zero for all receivers, thus
-  // the terminator must explicitly be associated with a given framework.
-  // This field is ignored when an actor register. Note that the address is
-  // not stored here since it is explicitly provided in the "from" field
-  // when the registry receives the message.
-
-  class RegistrationData
-  {
-  public:
-    RegistryCommands Command;
-    FrameworkID		 TheFramework;
-
-    RegistrationData( RegistryCommands TheCommand, FrameworkID Framework )
-    {
-	    Command      = TheCommand;
-	    TheFramework = Framework;
-    };
-  };
-
-private:
-
-  // We also give a name to the actor set
-
-  typedef std::set< Theron::Address >  ActorSet;
-  
   // The structure to hold the addresses of the active actors
 
-  ActorSet ActiveActors;
+  std::set< Theron::Address > ActiveActors;
 
-  // A map is used to hold the terminators where the key field is the
-  // address of the terminator, and the second field is an ID for the 
-  // framework of the terminator. This to guarantee that the different
-  // addresses are unique so that a terminator does not register twice.
+  // The address of the terminators are remembered in a separate set to be 
+	// notified when the last actor de-register.
 
-  typedef std::pair< Theron::Address, FrameworkID > TerminatorID;
+  std::set< Theron::Address > Terminators;
 
-  std::map< Theron::Address, FrameworkID > Terminators;
-
-  // Then there is a handler for the registration and deregistration of
+  // Then there is a handler for the registration and de-registration of
   // actors and terminators - note that the command decides the type 
   // of object to register. 
-  //
-  // Note that the address itself cannot be sent between remote nodes,
-  // but in this case we simply register the sender address so we are 
-  // not dependent on serialising the actual address.
 
-  void CommandHandler ( const ActorRegistry::RegistrationData &
-							  TheRegistration,
-					    const Theron::Address TheActor )
+  void CommandHandler ( const RegistryCommands & Command,
+										    const Theron::Address TheActor )
   {
-    switch ( TheRegistration.Command )
+    switch ( Command )
     {
-    case RegisterActor:
-      ActiveActors.insert( TheActor );
-      break;
+			case RegistryCommands::RegisterActor:
+	      ActiveActors.insert( TheActor );
+	      break;
 
-    case DeRegisterActor:
-      {   // Addigional scoping is needed by VC++2010
-	  auto ActorPtr = ActiveActors.find( TheActor );
+			case RegistryCommands::DeRegisterActor:
+	      { 
+				  auto ActorPtr = ActiveActors.find( TheActor );
 
-	  if ( ActorPtr != ActiveActors.end() )
-		  ActiveActors.erase( ActorPtr );
+				  if ( ActorPtr != ActiveActors.end() )
+					  ActiveActors.erase( ActorPtr );
 
-	  // If this was the last active actor we inform all the 
-	  // terminators that the game is over. We send the message to
-	  // the terminator on the same framework as this registry as the
-	  // last terminator since this may potentially kill also the 
-	  // thread that runs this registry and preventing us from 
-	  // sending the termination message to all terminators.
+				  // If this was the last active actor we inform all the 
+				  // terminators that the game is over. 
 
-	  if ( ActiveActors.empty() )
-	  {
-	      auto ThisFramework  = GetAddress().GetFramework();
-	      Theron::Address ThisTerminator = Theron::Address().Null();
-
-	      // VC++ 2010 requires this to be written for each and the
-	      // extra scoping is around the "else" part is also needed
-	      // although the scoping does not harm for g++
-	      //for each ( TerminatorID TheTerminator in Terminators )
-
-	      for ( TerminatorID TheTerminator : Terminators )
-	      {
-		      if ( TheTerminator.second != ThisFramework )
-			      Send( true, TheTerminator.first );
-		      else
-			      ThisTerminator = TheTerminator.first;
+				  if ( ActiveActors.empty() )
+			      for ( Address TheTerminator : Terminators )
+				      Send( true, TheTerminator );
 	      }
+	      break;
 
-	      if ( ThisTerminator != Theron::Address().Null() )
-		      Send( true, ThisTerminator );
-	  };
-      }
-      break;
-
-    case RegisterTerminator:
-      // The Terminators have a handshake where the outcome of the
-      // registration is returned as a message. This is important since
-      // the terminator can in principle run on a remote node, and 
-      // throwing an exception here will not be catched where the 
-      // terminator is executing. The registration will fail if there 
-      // is already a Terminator present with the given address.
-      
-      auto InsertResult = Terminators.insert( 
-	      TerminatorID( TheActor, TheRegistration.TheFramework ) );	
-
-      Send( InsertResult.second, TheActor ); // Confirm the registration
-      break;
+			case RegistryCommands::RegisterTerminator:
+	      Terminators.insert( TheActor );	
+	      break;
     };
   };
-
+	
 public:
 
+	// ---------------------------------------------------------------------------
+  // Constructor and destructor 
+  // ---------------------------------------------------------------------------
   // The default constructor initialises the structures and registers the
   // message handler
 
-  ActorRegistry( Theron::Framework & LocalFramework ) 
-	  : Theron::Actor( LocalFramework, "ActorRegistry" ), 
+  ActorRegistry( Theron::Framework & LocalFramework, 
+								 const std::string & RegistryName = "ActorRegistry" ) 
+	  : Actor( LocalFramework, 
+						 RegistryName.empty() ? nullptr : RegistryName.data() ),
+	    StandardFallbackHandler( LocalFramework, GetAddress().AsString() ),
 	    ActiveActors(), Terminators()
   {
-	  RegisterHandler( this, &ActorRegistry::CommandHandler );
+		if ( Name.empty() )
+			Name = RegistryName;
+		else
+			throw std::logic_error( "There can be only one Actor Registry" );
+		
+	  RegisterHandler( this, &ActorRegistry::CommandHandler );		
   };
 
+	// The destructor is virtual to allow virtual base classes to close properly
+	
+	virtual ~ActorRegistry()
+	{}
+	
+	// ---------------------------------------------------------------------------
+  // Registration of actors 
+  // ---------------------------------------------------------------------------
+  //
   // When an actor wants to register it needs to send a message to the
   // Actor Registry. The following two functions provide the
   // way to do so for the actors without needing to know anything about 
@@ -201,87 +156,80 @@ public:
 
   static void Register ( Theron::Actor * TheActor )
   {
-    TheActor->GetFramework().Send( RegistrationData( 
-			    RegisterActor,
-			    TheActor->GetAddress().GetFramework() ),
-	    TheActor->GetAddress(), Theron::Address("ActorRegistry") );
+    TheActor->GetFramework().Send( RegistryCommands::RegisterActor,
+					    TheActor->GetAddress(), Theron::Address( Name.data() ) );
   };
 
-  // Deregistration is also stright forward. One could imagine that one
+  // De-registration is also straight forward. One could imagine that one
   // made a consistency test for an empty message queue for the calling
   // actor. However, after starting up an actor will only wake up to 
-  // handle messages, so the deregistration will happen from one of its
+  // handle messages, so the de-registration will happen from one of its
   // message handlers. The message queue is therefore not empty before 
-  // the message handler terminates, and testing here for an empty queueu
+  // the message handler terminates, and testing here for an empty queue
   // would be meaningless. It is up to the programmer to verify that all
   // invariants are met.
 
   static void Deregister ( Theron::Actor * TheActor )
   {
-    TheActor->GetFramework().Send( ActorRegistry::RegistrationData(
-			    DeRegisterActor,
-			    TheActor->GetAddress().GetFramework() ),
-	      TheActor->GetAddress(), Theron::Address("ActorRegistry") );
+    TheActor->GetFramework().Send( RegistryCommands::DeRegisterActor,
+	      TheActor->GetAddress(), Theron::Address( Name.data() ) );
   };
 
-};
-
-/******************************************************************************
- The Terminator class
-
- The idea is that the terminator is an object that can be used in the main
- function on a node to prevent the main function to terminate before all 
- actors have deregistered. This implies two constraints:
-
- 1) The ActorRegistry must be started before a Terminator is started
- 2) If a terminator runs at the same physical node as the ActorRegistry,
-    it should have the same framework identificator as the actor registry
-
- The last recuirement ensures that the registry will not call the local 
- terminate before all other Terminators have been terminated.
-
- The terminator is a simple receiver that register with the agent registry
- and then waits for the confirmation. After the successful registration, the 
- program may wait for the terminator to receive the final message from the 
- registry when the last agent deregister and the program may terminate. Its
- message handler simply tests the value of the received boolean, and throws
- an exception if it is false.
-
-******************************************************************************/
-
-class Terminator : public Theron::Receiver
-{
-protected:
-
-	// The message handler
-
-	void Handshake ( const bool & Status, 
-					 const Theron::Address Sender )
+	// ---------------------------------------------------------------------------
+  // Terminator 
+  // ---------------------------------------------------------------------------
+  //
+	// The idea is that the terminator is an object that can be used in the main
+  // function on a node to prevent the main function to terminate before all 
+  // actors have de-registered.
+	//
+	// The terminator class is a friend of the actor registry in order to access 
+	// the name of the registry actor.
+	
+	friend class Terminator;
+	
+  // The terminator is a simple receiver that register with the agent registry
+  // and then waits for the confirmation. After the successful registration, the 
+  // program may wait for the terminator to receive the final message from the 
+  // registry when the last agent de-register and the program may terminate. Its
+  // message handler simply tests the value of the received boolean, and throws
+  // an exception if it is false.
+	
+	class Terminator : public Theron::Receiver
 	{
-		if ( Status == false )
-			throw std::string("Terminator error message received");
-	};
+	protected:
 
-public:
+		// The message handler
 
-	// The constructor takes an agent as argument and "attaches" to the 
-	// famework of that agent. The reason for using an agent and not the
-	// framework is that the agent has a method to return the framework ID
-	// whereas the framework itsef has no such possibility.
+		void Handshake ( const bool & Status, 
+										 const Theron::Address Sender )
+		{
+			if ( Status == false )
+				throw std::logic_error( "Terminator error message received" );
+		};
 
-	Terminator ( Theron::Actor & PeerActor ) : Theron::Receiver()
-	{
-		RegisterHandler( this, &Terminator::Handshake );
-		PeerActor.GetFramework().Send( ActorRegistry::RegistrationData( 
-					ActorRegistry::RegisterTerminator,
-					PeerActor.GetAddress().GetFramework() ),
-			GetAddress(), Theron::Address("ActorRegistry")   );
+	public:
 
-		// We should now be able to wait for the reply from the registry
-		// that this command was successful.
+		// The constructor register this receiver as a terminator, and expect that 
+		// the wait function will be called explicitly on the terminator object 
+		// later. It takes the framework as a parameter in order to be able to send
+		// the registration message to the actor registry. The second parameter 
+		// should be used if the actor registry is running on a different endpoint 
+		// from where the terminator is running. In this case the static name will 
+		// not be initialised and the message would go nowhere and crash Theron with 
+		// unhanded message.
 
-		Wait();
+		Terminator ( Framework & TheFramework, 
+								 Address RegistryAddress = Address(ActorRegistry::Name.data())) 
+		: Receiver()
+		{
+			RegisterHandler( this, &Terminator::Handshake );
+			
+			TheFramework.Send( ActorRegistry::RegistryCommands::RegisterTerminator,
+												 GetAddress(), RegistryAddress );
+		}
 	};
 };
+
 }       // End namespace Theron
 #endif  // ACTOR_REGISTRY

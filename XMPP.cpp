@@ -243,7 +243,6 @@ void Link::ClientRegistered( JabberID ClientID,
 			     Swift::Payload::ref RegistrationResponse, 
 			     Swift::ErrorPayload::ref Error )
 {
-  std::cout << "Link::ClientRegistered called with JID = " << ClientID << std::endl;
   if ( Error == nullptr )
   {
     auto TheClientRecord = Clients.find( ClientID );
@@ -265,8 +264,6 @@ void Link::ClientRegistered( JabberID ClientID,
 
 void Link::ClientConnected( JabberID ClientID )
 {
-  std::cout << "Link::ClientConnected called with JID = " << ClientID << std::endl;
-  
   RosterRequest( ClientID, 
     [=](Swift::RosterPayload::ref TheRoster, Swift::ErrorPayload::ref Error)
        { InitialRoster( ClientID, TheRoster, Error ); }
@@ -315,31 +312,24 @@ void Link::SendPresence( JabberID FromClient,
 
 void Link::PresenceNotification( JabberID ClientID, 
 				 Swift::Presence::ref PresenceReceived )
-{
-  std::cout << ClientID << " received presence from " 
-	    << PresenceReceived->getFrom() << ": ";
-  
+{  
   switch ( PresenceReceived->getType() )
   {
     case Swift::Presence::Subscribe :
-      std::cout << "SUBSCRIBE" << std::endl;
       SendPresence( ClientID, Swift::Presence::Subscribed,
 		    PresenceReceived->getFrom() );
       SendPresence( ClientID, Swift::Presence::Subscribe, 
 		    PresenceReceived->getFrom() );
       break;
     case Swift::Presence::Subscribed :
-      std::cout << "SUBSCRIBED" << std::endl;
       SendPresence( ClientID, Swift::Presence::Available,
 		    PresenceReceived->getFrom() );
       break;
     case Swift::Presence::Unsubscribe :
-      std::cout << "UNSUBSCRIBE" << std::endl;
       SendPresence( ClientID, Swift::Presence::Unsubscribed,
 		    PresenceReceived->getFrom() );
       break;
     case Swift::Presence::Available :
-      std::cout << "AVAILABLE" << std::endl;
       // Every endpoint in the network has a resource called "endpoint" 
       // responsible for the first time connection to peers. This should not 
       // be registered as an addressable actor at the session layer since 
@@ -357,7 +347,6 @@ void Link::PresenceNotification( JabberID ClientID,
       NewPeer( ClientID, PresenceReceived->getFrom() );
       break;
     case Swift::Presence::Unavailable :
-      std::cout << "UNAVAILABLE" << std::endl;
       // Similar to the availability status, also unavailability statuses 
       // from endpoint resources should be ignored.
       if ( PresenceReceived->getFrom().getResource() != "endpoint" )
@@ -366,16 +355,12 @@ void Link::PresenceNotification( JabberID ClientID,
       RemovePeer( ClientID, PresenceReceived->getFrom() );
       break;
     case Swift::Presence::Error :
-      std::cout << "ERROR" << std::endl;
       break;
     case Swift::Presence::Probe :
-      std::cout << "PROBE" << std::endl;
       break;
     case Swift::Presence::Unsubscribed :
-      std::cout << "UNSUBSCRIBED" << std::endl;
       break;
     default:
-      std::cout << "*** UNKNOWN ***" << std::endl;
       // Still not doing anything!
       break;
   }
@@ -498,8 +483,6 @@ void Link::EndpointPresence( JabberID ClientID,
 
 void Link::CreateClient( const Link::NewClient & Request, const Address From )
 {
-  std::cout << "Link::CreateClient called with JID = " << Request.GetJID() << std::endl;
-  
   JabberID NewClientID( Request.GetJID() );
   
   if ( Clients.find( NewClientID ) == Clients.end() ) 
@@ -514,7 +497,7 @@ void Link::CreateClient( const Link::NewClient & Request, const Address From )
     
     TheClient->onPresenceReceived.connect( 
       [=] (Swift::Presence::ref PresenceMessage)->void {
-	  PresenceNotification( NewClientID, PresenceMessage );
+				  PresenceNotification( NewClientID, PresenceMessage );
       });
 
     // As this client serving a normal actor should just announce its 
@@ -525,7 +508,7 @@ void Link::CreateClient( const Link::NewClient & Request, const Address From )
     
     TheClient->onConnected.connect(
       [=] (void)->void { 
-	SendPresence( NewClientID, Swift::Presence::Available ); 
+					SendPresence( NewClientID, Swift::Presence::Available ); 
       });
 	
     // If the client has a resource field it is an actor with its own set of 
@@ -536,11 +519,11 @@ void Link::CreateClient( const Link::NewClient & Request, const Address From )
   
     TheClient->onMessageReceived.connect( 
       [=](Swift::Message::ref XMPPMessage)->void {
-	  ProcessMessage( 
-	    OutsideMessage( XMPPMessage->getFrom(), XMPPMessage->getTo(),
-                        XMPPMessage->getBody().value(), 
-                        XMPPMessage->getSubject()
-	    ));
+				  ProcessMessage( 
+				    OutsideMessage( XMPPMessage->getFrom(), XMPPMessage->getTo(),
+			                        XMPPMessage->getBody().value(), 
+			                        XMPPMessage->getSubject()
+				    ));
       });
          
     // All parts of the client record has now been initialised and it can be
@@ -678,7 +661,9 @@ Link::Link( NetworkEndPoint * Host,
 	    std::string ServerPassword,
 	    const JabberID & InitialRemoteEndpoint,
 	    std::string ServerName )
-: NetworkLayer< Theron::XMPP::OutsideMessage >( Host, ServerName ),
+: Actor( Host->GetFramework(), ServerName.data() ),
+  StandardFallbackHandler( Host->GetFramework(), ServerName ),
+  NetworkLayer< Theron::XMPP::OutsideMessage >( Host, ServerName ),
   EventManager(), NetworkManager( &EventManager ),
   CommunicationLink( &Swift::SimpleEventLoop::run, std::ref(EventManager) )
 {
@@ -814,7 +799,7 @@ void XMPPProtocolEngine::RemoveActor(
   const Address LocalActor )
 {
   JabberID ActorJID( ProtocolID.getNode(), ProtocolID.getDomain(), 
-		     LocalActor.AsString() );
+								     LocalActor.AsString() );
   
   Send( Link::DeleteClient( ActorJID ), GetNetworkLayerAddress() );
   
@@ -832,7 +817,7 @@ void XMPPProtocolEngine::RemoveActor(
 // actor function of the session layer 
 
 void XMPPProtocolEngine::RemotePeer( const Link::AvailabilityStatus & Peer, 
-				     const Address TheNetworkLayer )
+																     const Address TheNetworkLayer )
 {
   Theron::Address RemoteID;
   
@@ -862,13 +847,13 @@ void XMPPProtocolEngine::RemotePeer( const Link::AvailabilityStatus & Peer,
       auto OutResolver = OutboundResolutionActors.find( RemoteID );
 
       if ( OutResolver != OutboundResolutionActors.end() )
-	Send( Peer.GetJID(), OutResolver->second );
+				Send( Peer.GetJID(), OutResolver->second );
       else
-	StoreActorAddresses( RemoteID, Peer.GetJID() );
+				StoreActorAddresses( RemoteID, Peer.GetJID() );
     }
     else
       SessionLayer< OutsideMessage >::RemoveActor(
-	SessionLayerMessages::RemoveActorCommand(), RemoteID );
+											SessionLayerMessages::RemoveActorCommand(), RemoteID );
   }
 }
 
@@ -940,12 +925,12 @@ std::string XMPPProtocolEngine::DecodeMessage( const OutsideMessage & Datagram )
 // address of the XMPP session layer based on the user name given and the 
 // endpoint information.
 
-XMPPProtocolEngine::XMPPProtocolEngine(
-  NetworkEndPoint * HostPointer,
-  const std::string & Password,
-  const std::string & ServerName )
+XMPPProtocolEngine::XMPPProtocolEngine( NetworkEndPoint * HostPointer,
+																			  const std::string & Password,
+																			  const std::string & ServerName )
 : Actor( HostPointer->GetFramework(), ServerName.data() ),
-  SessionLayer< Theron::XMPP::OutsideMessage >( HostPointer, ServerName ),
+  StandardFallbackHandler( HostPointer->GetFramework(), ServerName ),
+  SessionLayer< OutsideMessage >( HostPointer, ServerName ),
   ProtocolID( HostPointer->EndPoint::GetName(), HostPointer->GetDomain() ),
   ServerPassword( Password )
 {

@@ -46,17 +46,18 @@
 
 // The standard library headers
 
-#include <string>		// Stings
-#include <memory> 		// For shared pointers
-#include <thread>		// For threads
-#include <unordered_map>	// Map of XMPP Clients
-#include <unordered_set>	// Ditto for available remote clients
-#include <functional> 		// For the hash functions
-#include <stdexcept>		// For standard exceptions
+#include <string>													// Strings
+#include <memory> 												// For shared pointers
+#include <thread>													// For threads
+#include <unordered_map>									// Map of XMPP Clients
+#include <unordered_set>									// Ditto for available remote clients
+#include <functional> 										// For the hash functions
+#include <stdexcept>											// For standard exceptions
 
 // Generic frameworks - Theron for actors and Swiften for XMPP
 
-#include <Theron/Theron.h>   	// Actors
+#include <Theron/Theron.h>   							// Actors
+#include "StandardFallbackHandler.hpp"
 
 // The generic frameworks used  - it should be noted that Swiften uses the 
 // Boost::signals. This is depreciated and replaced with Boost::signals2, but 
@@ -251,14 +252,16 @@ public:
   // the subject for this reason.
  
   virtual void operator() ( const std::string  & ThePayload, 
-			    const JabberID     & From,
-			    const JabberID     & To )
+												    const JabberID     & From,
+												    const JabberID     & To )
   {
     Payload = ThePayload;
     SenderAddress = From;
     ReceiverAddress = To;
   };
 
+	virtual ~OutsideMessage( void )
+	{ }
 };
   
 /*=============================================================================
@@ -282,7 +285,9 @@ public:
 // be an XMPP server running at "localhost", otherwise the connection will 
 // tacitly fail and not be connected. 
 
-class Link : public NetworkLayer< OutsideMessage >
+class Link : public virtual Actor,
+						 public virtual StandardFallbackHandler,
+						 public NetworkLayer< OutsideMessage >
 {
 private:
 
@@ -290,9 +295,9 @@ private:
   // link level XMPP events, and and a thread to run the event manager in the 
   // background.
   
-  Swift::SimpleEventLoop 	EventManager; 
+  Swift::SimpleEventLoop 				EventManager; 
   Swift::BoostNetworkFactories	NetworkManager;
-  std::thread 		 	CommunicationLink;
+  std::thread 		 							CommunicationLink;
 
   // ---------------------------------------------------------------------------
   // ACTOR CLIENT MANAGEMENT
@@ -407,8 +412,8 @@ protected:
   // triggered, that in turn will ask the client to connect to the server.
   
   virtual void ClientRegistered( JabberID 		  ClientID, 
-				 Swift::Payload::ref      RegistrationResponse,
-				 Swift::ErrorPayload::ref Error  );
+																 Swift::Payload::ref      RegistrationResponse,
+																 Swift::ErrorPayload::ref Error  );
   
   // XMPP client configuration and feedback sort of hard coded for this 
   // extension since it is assumed that the behaviour of each client will be 
@@ -421,22 +426,22 @@ protected:
   virtual void ClientConnected( JabberID  ClientID  );
   
   virtual void InitialRoster( JabberID ClientID, 
-			      Swift::RosterPayload::ref TheRoster,
-			      Swift::ErrorPayload::ref  Error      );
+												      Swift::RosterPayload::ref TheRoster,
+												      Swift::ErrorPayload::ref  Error      );
   
   // Presence handling is more elaborate as some presence information require
   // a double response, some a single response, and some no response at all. 
   
   virtual void PresenceNotification( JabberID ClientID, 
-				     Swift::Presence::ref PresenceReceived );
+																     Swift::Presence::ref PresenceReceived );
   
   // There is a simple function to create and send a single presence message.
   // Note that the destination address can be omitted for broadcast presence
   // messages.
  
   virtual void SendPresence( JabberID FromClient, 
-			     Swift::Presence::Type PresenceType,
-			     JabberID ToClient = JabberID() );
+												     Swift::Presence::Type PresenceType,
+												     JabberID ToClient = JabberID() );
       
   // The roster for a client can be requested by another actor at any time 
   // and there is therefore a special handler that gets the roster and 
@@ -444,8 +449,8 @@ protected:
   // the returned roster is a set of Jabber IDs.
   
   virtual void DispatchRoster( const Address WaitingActor,  
-			       Swift::RosterPayload::ref TheRoster,
-			       Swift::ErrorPayload::ref  Error      );
+												       Swift::RosterPayload::ref TheRoster,
+												       Swift::ErrorPayload::ref  Error      );
   
   // There are also options to be set for the clients. These are generally
   // set in the constructor, and will be used when creating the clients.
@@ -521,8 +526,8 @@ private:
   // step 5 of the actor discovery and send the subscribe messages.
   
   void DispatchKnownPeers( JabberID ThisEndpoint, JabberID NewEnbpoint, 
-			   Swift::RosterPayload::ref TheRoster,
-			   Swift::ErrorPayload::ref  Error      );
+												   Swift::RosterPayload::ref TheRoster,
+												   Swift::ErrorPayload::ref  Error      );
   
   // The received messages will be captured by the new endpoint and it will 
   // immediately subscribe to the given Jabber ID if the subject of the 
@@ -530,7 +535,7 @@ private:
   // invalid argument exception.
   
   void SubscribeKnownPeers( JabberID NewEndpoint,
-			    Swift::Message::ref XMPPMessage );
+												    Swift::Message::ref XMPPMessage );
   
   // There is a special presence handler handling first time availability. This
   // will ignore presence messages from resources on the local address, and 
@@ -538,7 +543,7 @@ private:
   // to that endpoint.
   
   void EndpointPresence( JabberID ClientID, 
-			 Swift::Presence::ref PresenceReceived );
+												 Swift::Presence::ref PresenceReceived );
   
 public:
 
@@ -546,10 +551,9 @@ public:
   // CONSTRUCTOR & DESTRUCTOR
   // ---------------------------------------------------------------------------
   
-  Link( NetworkEndPoint * Host,
-	std::string ServerPassword,
-	const JabberID & InitialRemoteEndpoint = JabberID(),
-	std::string ServerName = "XMPPLink"  );
+  Link( NetworkEndPoint * Host, std::string ServerPassword,
+				const JabberID & InitialRemoteEndpoint = JabberID(),
+				std::string ServerName = "XMPPLink"  );
   
   virtual ~Link();
 
@@ -744,8 +748,9 @@ public:
 // different concept. 
 
 class XMPPProtocolEngine 
-: virtual public Theron::Actor, 
-  public Theron::SessionLayer< OutsideMessage >
+: public virtual Actor, 
+  public virtual StandardFallbackHandler,
+  public virtual SessionLayer< OutsideMessage >
 {
   // --------------------------------------------------------------------------
   // Address management
@@ -848,9 +853,9 @@ protected:
   // the function will therefore just throw a standard logic_error exception 
   
   virtual Address CreateInboundResolver( 
-	const ExternalAddress & UnknownActorAddress,
-	const Address & PresentationLayerActor,
-	const Address & SessionLayerActor )
+																		const ExternalAddress & UnknownActorAddress,
+																		const Address & PresentationLayerActor,
+																		const Address & SessionLayerActor )
   {
     throw std::logic_error("XMPP Inbound resolver should not be needed!");
   }
@@ -865,8 +870,8 @@ protected:
 public:
   
   XMPPProtocolEngine( NetworkEndPoint * HostPointer, 
-		      const std::string & Password, 
-		      const std::string & ServerName = "SessionLayer" );
+								      const std::string & Password, 
+								      const std::string & ServerName = "SessionLayer" );
   
   virtual ~XMPPProtocolEngine()
   {
@@ -944,7 +949,7 @@ public:
   // constructor is called.
   
   Manager( const std::string & Name, const std::string & Location,
-	   Theron::NetworkEndPoint::InitialiserType & TheInitialiser )
+				   Theron::NetworkEndPoint::InitialiserType & TheInitialiser )
   : Theron::NetworkEndPoint(Name, Location, TheInitialiser )
   { }
   
@@ -953,7 +958,7 @@ public:
   virtual ~Manager(void)
   { }
   
-}; // End XMPP::NetworkEndpoint
+}; 		 // End XMPP::NetworkEndpoint
 
 }      // End namespace XMPP
 }      // End namespace Theron

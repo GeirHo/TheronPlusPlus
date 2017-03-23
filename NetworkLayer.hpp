@@ -32,19 +32,23 @@
 
 #include <string>
 #include <type_traits>
+#include <stdexcept>
+#include <ostream>
+
 #include <Theron/Theron.h>
+#include "StandardFallbackHandler.hpp"
 
 #include "NetworkEndPoint.hpp"
 #include "LinkMessage.hpp"
 
-#include <ostream>  // TEST for debugging information
 #include <iostream> // TEST for debugging information
 
 namespace Theron
 {
 
 template< class ExternalMessage >
-class NetworkLayer : public Actor
+class NetworkLayer : virtual public Actor,
+										 virtual public StandardFallbackHandler
 {
 public: 
   
@@ -54,10 +58,10 @@ public:
   // to the LinkMessage interface, but it is a requirement for the protocol 
   // engine, hence the condition is enforced also here.
   
-    static_assert( std::is_base_of< 
-    LinkMessage< typename ExternalMessage::AddressType >, 
-    ExternalMessage >::value,
-    "NetworkLayer: External message must be derived from LinkMessage" );
+  static_assert( std::is_base_of< 
+				  LinkMessage< typename ExternalMessage::AddressType >, 
+				  ExternalMessage >::value,
+				  "NetworkLayer: External message must be derived from LinkMessage" );
   
 protected:
   
@@ -86,6 +90,8 @@ public:
     SessionServer = SessionLayerActor;
   } 
 
+protected:
+	
   // Outgoing messages will be sent using a function receiving the addresses
   // of the two parties of the communication and the message datagram
   // containing the protocol embedded payload.
@@ -97,11 +103,6 @@ public:
 			    
   void ProcessMessage( const ExternalMessage & TheMessage )
   {
-    std::cout << "Message received from " << TheMessage.GetSender()
-		 << " to " << TheMessage.GetRecipient() << " with subject = ["
-		 << TheMessage.GetSubject() << "] and body = ["
-		 << TheMessage.GetPayload() << "]" << std::endl;
-    
     Send( TheMessage, SessionServer );
   }
   
@@ -114,18 +115,25 @@ public:
     SendMessage( TheMessage );
   }
     
+	// ---------------------------------------------------------------------------
+	// Constructor and destructor
+	// ---------------------------------------------------------------------------
+
   // The constructor initialises the actor making sure that it has the right
   // name, and registers the handler for messages received from the protocol
   // engine. The address for the session layer server is initialised with the 
   // default session layer address. This is possible since Theron Address 
   // will not check if the object exists if initialised with a string. 
-  
+
+public:
+    
   NetworkLayer( NetworkEndPoint * Host,
 	        std::string ServerName = "NetworkLayer"  ) 
   : Actor( Host->GetFramework(), ServerName.data() ),
+    StandardFallbackHandler( Host->GetFramework(), ServerName ),
     SessionServer( Address( "SessionLayer" ) )
   {
-    RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );
+    RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );		
   }
   
   // Finally there is a virtual destructor 

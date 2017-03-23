@@ -4,7 +4,7 @@
   The console print class defines some static variables, and this file is 
   basically a placeholder for these variables.
        
-  Author: Geir Horn, University of Oslo, 2016
+  Author: Geir Horn, University of Oslo, 2016-2017
   Contact: Geir.Horn [at] mn.uio.no
   License: LGPL3.0
 =============================================================================*/

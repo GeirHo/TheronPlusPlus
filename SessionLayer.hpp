@@ -46,7 +46,7 @@
   we need to resolve the real ID of a remote actor sending a message to an
   actor on this endpoint on the first message received from that actor.
   
-  Author: Geir Horn, University of Oslo, 2015
+  Author: Geir Horn, University of Oslo, 2015-2017
   Contact: Geir.Horn [at] mn.uio.no
   License: LGPL3.0
 =============================================================================*/
@@ -62,6 +62,8 @@
 #include <utility>
 #include <queue>
 #include <type_traits>
+#include <stdexcept>
+#include <sstream>
 
 #include <boost/bimap/bimap.hpp>
 #include <boost/bimap/set_of.hpp>
@@ -69,11 +71,14 @@
 #include <boost/bimap/tags/tagged.hpp>
 
 #include <Theron/Theron.h>
+#include "StandardFallbackHandler.hpp"
 
 #include "LinkMessage.hpp"
 #include "NetworkEndPoint.hpp"
 #include "PresentationLayer.hpp"
 #include "NetworkLayer.hpp"
+
+#include <iostream>
 
 // The Session Layer is a part of the communication extensions for Theron 
 // and is therefore defined to belong to the Theron name space
@@ -105,22 +110,67 @@ public:
   // copy of this address. 
 
   class RegisterActorCommand
-  { };
+  { 
+	private:
+		
+		std::string Description;
+		
+	public:
+		
+		RegisterActorCommand( void )
+		{
+			Description = "Session Layer: Register Actor Command";
+		}
+		
+	};
   
   class RemoveActorCommand
-  { };
+  {
+	private:
+		
+		std::string Description;
+		
+	public:
+		
+		RemoveActorCommand( void )
+		{
+			Description = "Session Layer: Remove Actor Command";
+		}
+	};
   
   // Actors may need to know their possible peer actors, and can subscribe 
   // to a notification when a new peer is discovered by sending a subscription
   // request to the Session Layer. 
 
   class NewPeerSubscription
-  { };
+  { 
+	private:
+		
+		std::string Description;
+		
+	public:
+		
+		NewPeerSubscription( void )
+		{
+			Description = "Session Layer: New Peer Subscription";
+		}
+	};
 
   // Unsubscribe requests simply removes the peer from the subscriber set 
   
   class NewPeerUnsubscription
-  { };
+  { 
+	private:
+		
+		std::string Description;
+		
+	public:
+		
+		NewPeerUnsubscription( void )
+		{
+			Description = "Session Layer: New Peer UnSubscription"; 
+		}
+	};
    
   // ---------------------------------------------------------------------------
   // Messages FROM the Session Layer
@@ -184,7 +234,9 @@ public:
 // for this type of message.
   
 template < class ExternalMessage >
-class SessionLayer : public virtual Actor, public SessionLayerMessages
+class SessionLayer : public virtual Actor, 
+										 public virtual StandardFallbackHandler,
+										 public SessionLayerMessages
 {
 public:
   
@@ -193,7 +245,7 @@ public:
   // a string, but it could be an integer or any other binary form.
   // The address type is defined so that it can be used externally
   
-  typedef typename ExternalMessage::AddressType ExternalAddress;
+  using ExternalAddress = typename ExternalMessage::AddressType;
   
   // The main functionality of the Session Layer is to encode an external 
   // message that can be sent to the Network Layer for external transmission; or 
@@ -323,8 +375,8 @@ private:
     NewPeerAdded ExistingPeers;
 
     for ( auto Peer  = KnownActors.right.begin();
-	       Peer != KnownActors.right.end(); ++Peer )
-	  ExistingPeers.insert( Peer->first );
+				       Peer != KnownActors.right.end(); ++Peer )
+		  ExistingPeers.insert( Peer->first );
 	 
     Send( ExistingPeers, RequestingActor );
   }
@@ -418,7 +470,7 @@ protected:
   // (strange situation, but could happen)
 				   
   void StoreActorAddresses ( const Address & TheActorID, 
-			     const ExternalAddress & ExAddress )
+												     const ExternalAddress & ExAddress )
   {
     // The addresses are first checked for validity and if they can be 
     // constructed based on the given functionality. We have to start with 
@@ -442,7 +494,7 @@ protected:
     
     bool ActorIDchanged = true;
     auto Result         = KnownActors.insert( 
-		          ActorRecord( NewExternalAddress, NewActorID ) );
+								          ActorRecord( NewExternalAddress, NewActorID ) );
     
     // If the insert failed, it could be because the full actor record exist 
     // already, i.e. both the external address and the actor ID is know before,
@@ -463,103 +515,103 @@ protected:
       // pair for this session layer
       
       if ( (NewRecord->first  == NewExternalAddress) && 
-	   (NewRecord->second == NewActorID) )
-	ActorIDchanged = false;
+				   (NewRecord->second == NewActorID) )
+				ActorIDchanged = false;
       else
       {
-	// We can now have one of the following situations:
-	// 1) The external address exist before, but is associated with a 
-	//    different actor ID. The given actor ID does not exist before
-	//    and we should therefore update the actor ID.
-	// 2) The given actor ID exists before, but the external address does
-	//    not exist before. We should in this case update the external 
-	//    address for the given actor ID.
-	// 3) Both the external address and the actor ID exists before, but 
-	//    we know already that they are not on the same record. Hence, 
-	//    this update should replace the two records already in the map,
-	//    and a new record should be created.
-	// To detect these situations, we look up the address and the ID 
-	// independently.
-	
-	auto ByAddress = KnownActors.left.find(  NewExternalAddress  );
-	auto ByID      = KnownActors.right.find( NewActorID );
-	
-	// The first situation is handled first
-	
-	if ( (ByAddress != KnownActors.left.end()) &&  
-	     (ByID      == KnownActors.right.end()) )
-	{
-	  NewActorID = ResolveActorID( ByAddress->first,
-				       ByAddress->second, NewActorID );
-	  
-	  // The actor ID is different from the existing ID, the subscribers 
-	  // must first be notified that this ID has been removed, and then 
-	  // later notified about the new ID (before returning from this 
-	  // function
-	  
-	  if ( NewActorID != ByAddress->second )
-	  {
-	    for ( Address Subscriber : NewPeerSubscribers )
-	      Send( PeerRemoved( ByAddress->second ), Subscriber );
-	    
-	    KnownActors.left.replace_data( ByAddress, NewActorID );
-	  }
-	  else
-	    ActorIDchanged = false;
+				// We can now have one of the following situations:
+				// 1) The external address exist before, but is associated with a 
+				//    different actor ID. The given actor ID does not exist before
+				//    and we should therefore update the actor ID.
+				// 2) The given actor ID exists before, but the external address does
+				//    not exist before. We should in this case update the external 
+				//    address for the given actor ID.
+				// 3) Both the external address and the actor ID exists before, but 
+				//    we know already that they are not on the same record. Hence, 
+				//    this update should replace the two records already in the map,
+				//    and a new record should be created.
+				// To detect these situations, we look up the address and the ID 
+				// independently.
+				
+				auto ByAddress = KnownActors.left.find(  NewExternalAddress  );
+				auto ByID      = KnownActors.right.find( NewActorID );
+				
+				// The first situation is handled first
+				
+				if ( (ByAddress != KnownActors.left.end()) &&  
+				     (ByID      == KnownActors.right.end()) )
+				{
+				  NewActorID = ResolveActorID( ByAddress->first,
+							       ByAddress->second, NewActorID );
+				  
+				  // The actor ID is different from the existing ID, the subscribers 
+				  // must first be notified that this ID has been removed, and then 
+				  // later notified about the new ID (before returning from this 
+				  // function
+				  
+				  if ( NewActorID != ByAddress->second )
+				  {
+				    for ( Address Subscriber : NewPeerSubscribers )
+				      Send( PeerRemoved( ByAddress->second ), Subscriber );
+				    
+				    KnownActors.left.replace_data( ByAddress, NewActorID );
+				  }
+				  else
+				    ActorIDchanged = false;
 
-	}
-	else if ( (ByID      != KnownActors.right.end()) && 
-		  (ByAddress == KnownActors.left.end() ) )
-	{
-	  // The ID exist, but the external address does not, and we can simply
-	  // replace the data part of the ByID iterator with the new external
-	  // address provided it should change, and note that no new actor ID 
-	  // has been seen.
-	  
-	  NewExternalAddress = ResolveExternalAddress(
-	    ByID->first, ByID->second, NewExternalAddress );
-	  
-	  if ( NewExternalAddress != ByID->second )
-	    KnownActors.right.replace_data( ByID, NewExternalAddress );
-	  
-	  ActorIDchanged = false;
-	}
-	else
-	{
-	  // Both the address and the actor ID exist, but obviously not as a 
-	  // pair. This may invalidate both records
-	  
-	  NewActorID = ResolveActorID( ByAddress->first,
-				       ByAddress->second, NewActorID );
-	  
-	  NewExternalAddress = ResolveExternalAddress(
-	    ByID->first, ByID->second, NewExternalAddress );
-	  
-	  // If the ID for the found external address should change, we must
-	  // tell the subscribers that the Actor ID associated with the external
-	  // address will be removed. and then remove the record
-	  
-	  if ( NewActorID != ByAddress->second )
-	  {
-	    for ( Address Subscriber : NewPeerSubscribers )
-	      Send( PeerRemoved( ByAddress->second ), Subscriber );
-	    
-	    ActorIDchanged = true;
-	  }
-	  else
-	    ActorIDchanged = false;
+				}
+				else if ( (ByID      != KnownActors.right.end()) && 
+					  (ByAddress == KnownActors.left.end() ) )
+				{
+				  // The ID exist, but the external address does not, and we can simply
+				  // replace the data part of the ByID iterator with the new external
+				  // address provided it should change, and note that no new actor ID 
+				  // has been seen.
+				  
+				  NewExternalAddress = ResolveExternalAddress(
+				    ByID->first, ByID->second, NewExternalAddress );
+				  
+				  if ( NewExternalAddress != ByID->second )
+				    KnownActors.right.replace_data( ByID, NewExternalAddress );
+				  
+				  ActorIDchanged = false;
+				}
+				else
+				{
+				  // Both the address and the actor ID exist, but obviously not as a 
+				  // pair. This may invalidate both records
+				  
+				  NewActorID = ResolveActorID( ByAddress->first,
+							       ByAddress->second, NewActorID );
+				  
+				  NewExternalAddress = ResolveExternalAddress(
+				    ByID->first, ByID->second, NewExternalAddress );
+				  
+				  // If the ID for the found external address should change, we must
+				  // tell the subscribers that the Actor ID associated with the external
+				  // address will be removed. and then remove the record
+				  
+				  if ( NewActorID != ByAddress->second )
+				  {
+				    for ( Address Subscriber : NewPeerSubscribers )
+				      Send( PeerRemoved( ByAddress->second ), Subscriber );
+				    
+				    ActorIDchanged = true;
+				  }
+				  else
+				    ActorIDchanged = false;
 
-	  // Then we remove the two records
-	  
-	  KnownActors.left.erase(  ByAddress );
-	  KnownActors.right.erase( ByID      );
-	  
-	  // And a new record is created binding the external address to the
-	  // given actor ID based on the outcome of the resolution functions 
-	  // above.
-	  
-	  KnownActors.insert( ActorRecord( NewExternalAddress, NewActorID ) );
-	}
+				  // Then we remove the two records
+				  
+				  KnownActors.left.erase(  ByAddress );
+				  KnownActors.right.erase( ByID      );
+				  
+				  // And a new record is created binding the external address to the
+				  // given actor ID based on the outcome of the resolution functions 
+				  // above.
+				  
+				  KnownActors.insert( ActorRecord( NewExternalAddress, NewActorID ) );
+				}
       }
     }
     
@@ -567,7 +619,7 @@ protected:
     
     if ( ActorIDchanged && (! NewPeerSubscribers.empty() ) )
       for ( Address Subscriber : NewPeerSubscribers )
-	Send( NewPeerAdded( NewActorID ), Subscriber );
+				Send( NewPeerAdded( NewActorID ), Subscriber );
   }
 
 public:
@@ -580,8 +632,8 @@ public:
   // address to an external address.
   
   virtual void RegisterActor( 
-	       const SessionLayerMessages::RegisterActorCommand & Command, 
-	       const Address LocalActor ) = 0;
+	        const SessionLayerMessages::RegisterActorCommand & Command, 
+	        const Address LocalActor ) = 0;
   
   // In the same way there is a command handler for removing the external 
   // address of an actor (local or external). There can also be protocol 
@@ -591,17 +643,17 @@ public:
   // passed back to all subscribers of peer actor information.
 
   virtual void RemoveActor( 
-	       const SessionLayerMessages::RemoveActorCommand & Command,
-	       const Address ActorAddress )
+	        const SessionLayerMessages::RemoveActorCommand & Command,
+	        const Address ActorAddress )
   {
     auto AddressRecord = KnownActors.right.find( ActorAddress );
-    
-    if (AddressRecord != KnownActors.right.end() )
+
+		if (AddressRecord != KnownActors.right.end() )
     {
       KnownActors.right.erase( AddressRecord );
-      
+ 			
       for ( Address Subscriber : NewPeerSubscribers )
-	Send( PeerRemoved( ActorAddress ), Subscriber );
+				Send( PeerRemoved( ActorAddress ), Subscriber );
     }
   }
   
@@ -715,8 +767,8 @@ private:
     {
       while ( !PendingMessages.empty() )
       {
-	SendCachedMessage( PendingMessages.front() );
-	PendingMessages.pop();
+				SendCachedMessage( PendingMessages.front() );
+				PendingMessages.pop();
       }
     }
     
@@ -822,8 +874,8 @@ public:
       auto InResolver = InboundResolutionActors.find( ResolvedAddress.second );
       
       if ( ( InResolver != InboundResolutionActors.end() ) &&
-	   ( InResolver->second != From ) )
-	InboundResolutionActors.erase( InResolver );
+				   ( InResolver->second != From ) )
+				InboundResolutionActors.erase( InResolver );
     }
   };
 
@@ -867,8 +919,8 @@ protected:
     
     void SendCachedMessage( ExternalMessage & TheMessage )
     {
-	TheMessage.SetRecipient( ResolverType::RemoteAddress );
-	Send( TheMessage, NetworkServer );
+			TheMessage.SetRecipient( ResolverType::RemoteAddress );
+			Send( TheMessage, NetworkServer );
     }
     
     // There is a handler for the external address to be used for this remote
@@ -1002,13 +1054,12 @@ public:
       
       if ( ExistingResolver == OutboundResolutionActors.end() )
       {
-	auto CreationResult = OutboundResolutionActors.emplace( 
-	TheMessage.GetReceiver(), 
-	CreateOutboundResolver( TheMessage.GetReceiver(), NetworkServer, 
-				GetAddress() ) 
-	);
-	
-	ExistingResolver = CreationResult.first;
+				auto CreationResult = OutboundResolutionActors.emplace( 
+					TheMessage.GetReceiver(), 
+					CreateOutboundResolver( TheMessage.GetReceiver(), NetworkServer, 
+																	GetAddress() ) );
+		
+				ExistingResolver = CreationResult.first;
       }
       
       // Then we can forward the message to the resolver actor for this 
@@ -1056,8 +1107,11 @@ protected:
     
     void SendCachedMessage( PresentationLayer::SerialMessage & TheMessage )
     {
-	TheMessage.From = ResolverType::RemoteActorID;
-	Actor::Send( TheMessage, PresentationServer );
+			PresentationLayer::SerialMessage 
+			ForwardMessage( ResolverType::RemoteActorID, TheMessage.GetReceiver(),
+										  TheMessage.GetPayload()		);
+			
+			Actor::Send( ForwardMessage, PresentationServer );
     }
 
     // There is a handler to update the actor ID of the remote actor and 
@@ -1080,11 +1134,11 @@ protected:
     // register the resolved ID handler.
     
     InboundIDResolver( Framework & HostingFramework, 
-		       const ExternalAddress & TheRemoteActorAddress,
-		       const Address & PresentationLayerActor = 
-				       Address("PresentationLayer"),
-		       const Address & SessionLayerActor = 
-				       Address("SessionLayer")    )
+								       const ExternalAddress & TheRemoteActorAddress,
+								       const Address & PresentationLayerActor = 
+											       Address("PresentationLayer"),
+								       const Address & SessionLayerActor = 
+											       Address("SessionLayer")    )
     : Actor( HostingFramework ),
       ResolverType( HostingFramework, 
 		    Theron::Address::Null(),  TheRemoteActorAddress ), 
@@ -1092,7 +1146,7 @@ protected:
       SessionServer( SessionLayerActor )
     {
       RegisterHandler(this, 
-	& SessionLayer<ExternalMessage>::InboundIDResolver::ResolvedID
+					& SessionLayer<ExternalMessage>::InboundIDResolver::ResolvedID
       );
     }
   };
@@ -1145,33 +1199,33 @@ public:
       // message for de-serialisation.
       
       if ( RemoteID != KnownActors.left.end() )
-	Send( PresentationLayer::SerialMessage( 
-	      RemoteID->second, ReceiverActor, Payload ), PresentationServer );
+				Send( PresentationLayer::SerialMessage( 
+				      RemoteID->second, ReceiverActor, Payload ), PresentationServer );
       else
       {
-	// The remote ID is either under resolution or has to be resolved. 
-	// In either case the message can only be queued with the resolver, 
-	// which will take care of forwarding the message to the Presentation 
-	// Layer server once the remote ID is known.
-	
-	auto ExistingResolver = 
-			InboundResolutionActors.find( TheMessage.GetSender() );
-	
-	if ( ExistingResolver == InboundResolutionActors.end() )
-	{
-	  auto CreationResult = InboundResolutionActors.emplace(
-	    TheMessage.GetSender(), 
-	    CreateInboundResolver( TheMessage.GetSender(),
-				   PresentationServer, GetAddress() ) 
-	  );
-	  
-	  ExistingResolver = CreationResult.first;
-	}
-	
-	// Now a resolver actor exist so we can enqueue the message with this 
-	// resolver.
-	
-	Send( TheMessage, ExistingResolver->second );
+				// The remote ID is either under resolution or has to be resolved. 
+				// In either case the message can only be queued with the resolver, 
+				// which will take care of forwarding the message to the Presentation 
+				// Layer server once the remote ID is known.
+				
+				auto ExistingResolver = 
+						InboundResolutionActors.find( TheMessage.GetSender() );
+				
+				if ( ExistingResolver == InboundResolutionActors.end() )
+				{
+				  auto CreationResult = InboundResolutionActors.emplace(
+				    TheMessage.GetSender(), 
+				    CreateInboundResolver( TheMessage.GetSender(),
+							   PresentationServer, GetAddress() ) 
+				  );
+				  
+				  ExistingResolver = CreationResult.first;
+				}
+				
+				// Now a resolver actor exist so we can enqueue the message with this 
+				// resolver.
+				
+				Send( TheMessage, ExistingResolver->second );
       }
     }
   }
@@ -1210,8 +1264,10 @@ public:
   // of their addresses is not necessary.
   
   SessionLayer( NetworkEndPoint * HostPointer,
-		const std::string & ServerName = "SessionLayer"  )
-  : Actor( Host->GetFramework(), ServerName.data() ), 
+								const std::string & ServerName = "SessionLayer"  )
+  : Actor( HostPointer->GetFramework(), ServerName.data() ), 
+    StandardFallbackHandler( HostPointer->GetFramework(), ServerName ),
+    SessionLayerMessages(), 
     KnownActors(), 
     PresentationServer( Address("PresentationLayer") ), 
     NetworkServer( Address("NetworkLayer") ),
