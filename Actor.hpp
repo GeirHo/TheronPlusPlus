@@ -23,6 +23,14 @@ measure, and if the execution environment cannot cope with this policy a
 thread pool and a scheduling policy can be implemented, although it currently 
 contradicts the second design principle.
 
+TODO:The current implementation is not able to intercept messages to actors on 
+remote nodes, and more thinking is needed on how to do this in a consistent way
+to ensure complete transparency for the involved actors. Including a "To" field
+in the message would allow it to be intercepted if there is no local actor,
+but the address is now linked to active local actors. Sending by name raises 
+a secondary issue on how to distinguish between endpoint external actors and 
+actors that have closed.
+
 Author and Copyright: Geir Horn, 2017
 License: LGPL 3.0
 =============================================================================*/
@@ -38,6 +46,7 @@ License: LGPL 3.0
 #include <set>							  // To keep track of actor addresses
 #include <functional>					// For defining handler functions
 #include <thread>						  // To execute actors
+#include <atomic>							// Thread protected variables
 #include <stdexcept>				  // To throw standard exceptions
 #include <sstream>						// To provide nice exception messages
 
@@ -64,8 +73,13 @@ private:
 // of how many actors that are created and destroyed over the lifetime of the 
 // application. A special object is charged with obtaining the numerical ID and 
 // store the name and the registration of the actor during the actor's lifetime
-
-class ActorIdentification
+//	
+// There are fundamentally two types of actors: Those running on this network 
+// endpoint, and those on remote endpoints. Those on remote endpoints are 
+// identified only by their actor name. Hence, there is a basic identification
+// class holding the name and its numerical ID. 
+	
+class Identification
 {
 public:
 	
@@ -73,26 +87,53 @@ public:
 	// actors created during the application's lifetime. 
 	
 	using IDType = unsigned long;
+
+		// It also maintains the actor name and the actual ID assigned to this 
+	// actor. Note that these have to be constant for the full duration of the 
+	// actor's lifetime
+
+	const IDType NumericalID;
+	const std::string Name;
 	
 private:
-	
+
 	// It maintains a global counter which should be long enough to ensure that 
 	// there are enough IDs for actors. This is incremented by each actor to 
 	// avoid that any actor ever gets the same ID
 	
-	static IDType TotalActorsCreated;
+	static std::atomic< IDType > TotalActorsCreated;
 	
-	// The main address of an actor is its physical memory location. It may be 
+	// There is a small function to increment the total number of actors and 
+	// return that id
+	
+	inline static IDType GetNewID( void )
+	{
+		return ++TotalActorsCreated;
+	}
+	
+	// There is a pointer to the actor for which this is the ID. This 
+	// will be the real actor on this endpoint, and for actors on remote 
+	// endpoints, it will be the Session Layer actor which is responsible for 
+	// the serialisation and forwarding of the message to the remote actor. 
+
+	Actor * ActorPointer; 
+
+	// It will also keep track of the known actors, both by name and by ID.
+	// All actors must have an identification, locally or remotely. It may be 
 	// necessary to look up actors based on their name, and the best way
 	// to do this is using an unordered map since a lookup should be O(1). 
+	// These maps are protected since it is the responsibility of the derived
+	// identity classes to ensure that the name and ID is correctly stored.
 
-	static std::unordered_map< std::string, Actor * > ActorsByName;
+protected:
+	
+	static std::unordered_map< std::string, Identification * > ActorsByName;
 	
 	// In the same way there is a lookup map to find the pointer based on the 
 	// actor's ID. This could have been a vector, but it would have been ever 
 	// growing. Having a map allows the storage of only active actors.
 	
-	static std::unordered_map< IDType, Actor * > ActorsByID;
+	static std::unordered_map< IDType, Identification * > ActorsByID;
 	
 	// Since these three elements are shared among all actors, and actors can 
 	// be created by other actors in the message handlers or otherwise, the
@@ -100,21 +141,15 @@ private:
 	// necessary to ensure sequential access by locking a mutex.
 	
 	static std::mutex InformationAccess;
-	
-	// There is a small function to increment the total number of actors and 
-	// return that id
-	
-	inline static IDType GetNewID( void )
-	{
-		std::lock_guard< std::mutex > Lock( InformationAccess );
-		return ++TotalActorsCreated;
-	}
-	
-	// The pointer to this actor is stored locally for quick reference.
-	
-	Actor * ActorPointer; 
-	
+		
 public:	
+
+	// There are static functions to obtain an address by name or by numerical 
+	// ID. They are not defined in-line since they return an address class which 
+	// is only forward declared..
+	
+	static Address Lookup( const std::string ActorName );
+	static Address Lookup( const IDType TheID );
 	
 	// Other actors may need to obtain a pointer to this actor, and this can 
 	// only be done through a legal address object. It is not declared in-line 
@@ -123,13 +158,43 @@ public:
 	
 	static Actor * GetActor( Address & ActorAddress );
 		
-	// It also maintains the actor name and the actual ID assigned to this 
-	// actor. Note that these have to be constant for the full duration of the 
-	// actor's lifetime
+	// When an address is created, it needs to register with the identification 
+	// object representing the actor. A local actor on this endpoint will 
+	// remember registrations and make sure that they are invalidated when the 
+	// actor is destroyed. A remote address will simply record the number of 
+	// references and since it is dynamically allocated, remove the ID when 
+	// the last address is removed.
+	
+	virtual void Register(   Address * NewAddress ) = 0;
+	virtual void DeRegister( Address * OldAddress ) = 0;
+	
+	// The constructor is protected since it can only be used by derived classes,
+	// and it only assigns the ID and the name. If the name string is not given
+  // a default name "ActorNN" will be assigned where the NN is the number of
+	// the actor. It is the responsibility of the derived class to ensure that 
+	// the provided name is unique, and to update the maps to return the actor 
+	// pointer by name or ID.
+	
+	Identification( Actor * TheActor, 
+								  const std::string & ActorName = std::string() )
+	: NumericalID( GetNewID() ),  Name( ActorName.empty() ? 
+		  "Actor" + std::to_string( NumericalID ) : ActorName ),
+    ActorPointer( TheActor )
+	{ }
 
-	const IDType NumericalID;
-	const std::string Name;
+	virtual ~Identification( void )
+	{ }
+	
+};
 
+// Each actor has an identification derived from the basic identification. It
+// will ensure that the name given to the actor is unique, and if it is not 
+// unique, it will throw an invalid argument exception from the constructor. 
+
+class EndpointIdentity : public Identification
+{
+private:
+	
 	// The second part of the identification management is to keep track of 
 	// external addresses referring to this actor. One potential issue with 
 	// Theron is that an address can outlive the object it is an implicit 
@@ -143,28 +208,24 @@ private:
 	
 	std::set< Address * > Addresses;
 	
+	// Theoretically addresses can be copied or deleted in different threads so
+	// access to the address set must be protected by a mutex. It must be 
+	// recursive because when the Endpoint Identity closes it will call the 
+	// invalidate function on each of its addresses, and hence it needs to lock 
+	// the access to the address set. However as the addresses are invalidated, 
+	// they will de-register which implies that the lock will be acquired also 
+	// in the de-registration function. It will  be from the same thread, but it 
+	// will block unless the mutex accepts multiple (recursive) locks.
+	
+	std::recursive_mutex AddressAccess;
+	
 	// And there are two functions to register and de-register an address object
 	
 public:
 	
-	inline void Register( Address * NewAddress )
-	{
-		Addresses.insert( NewAddress );
-	}
+	virtual void Register(   Address * NewAddress );
+	virtual void DeRegister( Address * OldAddress );
 	
-	inline void DeRegister( Address * OldAddress )
-	{
-		Addresses.erase( OldAddress );
-	}
-	
-	// There are static functions to obtain an address by name or by numerical 
-	// ID. They are not defined in-line since they return an address class which 
-	// is not yet fully specified.
-	
-	static Address Lookup( const std::string ActorName );
-	
-	static Address Lookup( const IDType TheID );
-
 	// Constructor and destructor
 	//	
 	// In order to fully register the actor, a pointer to the actor is needed.
@@ -175,38 +236,70 @@ public:
 	// give a warning. If no name is given to the actor, it will be given the 
 	// name "ActorNN" where NN is the numerical ID of the actor.
 
-	ActorIdentification( Actor * TheActor, 
-											 const std::string & ActorName = std::string() )
-	: ActorPointer( TheActor ), NumericalID( GetNewID() ),
-	  Name( ActorName.empty() ? 
-				  "Actor" + std::to_string( NumericalID ) : ActorName ),
-	  Addresses()
-	{
-		std::lock_guard< std::mutex > Lock( InformationAccess );
-		
-		auto Outcome = ActorsByName.emplace( Name, TheActor );
-		
-		if ( Outcome.second != true )
-		{
-			std::ostringstream ErrorMessage;
-			
-			ErrorMessage << "An actor with the name " << Name 
-									 << " does already exist!";
-			
-			throw std::invalid_argument( ErrorMessage.str() );
-		}
-		
-		ActorsByID.emplace( NumericalID, TheActor );
-	}
-
+	EndpointIdentity( Actor * TheActor, 
+											 const std::string & ActorName = std::string() );
+	
 	// The destructor method cannot be defined in-line since it will call 
 	// methods on the addresses to invalidate them and the address class is 
 	// not yet fully specified.
 	
-	~ActorIdentification( void );
+	virtual ~EndpointIdentity( void );
 	
 } ActorID;
+
+// The remote identity of an actor is basically a string, and the actor pointer
+// is set to the local actor that has registered as the Session Layer. The 
+// session layer is responsible for serialising and de-serialising message that
+// can then be transmitted as text strings to remote network endpoints. 
+// 
+// This implies that remote identities are created from a string setting the 
+// name of the remote actor. This name is registered in the name database 
+// because no local actor with the same name should be created. The Remote 
+// identity class is responsible for forwarding the messages to the session 
+// layer, and trying to create a remote identity before the session layer 
+// server has been set will result in a standard logic error exception.
+
+class RemoteIdentity : public Identification
+{
+private:
 	
+	static Actor * TheSessionLayerServer;
+	
+public:
+	
+	static void  SetSessionLayerServer( Actor * TheSever );
+	
+	// The identity will always be dynamically allocated. However, since addresses
+	// can be copied, new copies will just inherit the pointer to the 
+	// identification, and this identification should not be deallocated before 
+	// the last address using it de-registers. it is therefore a private counter
+	// that counts the number of addresses referencing this identity.
+	
+private:
+	
+	unsigned int NumberOfAddresses;
+	
+	// This counter is increased when the address register, and decreased when 
+	// the actor de-register. If the de-registration leads to the counter 
+	// reaching zero, this ID will be destructed.
+	
+public:
+	
+	virtual void Register(   Address * NewAddress );
+	virtual void DeRegister( Address * OldAddress );
+	
+	// If the session layer exist, then the the remote actor is registered in the 
+	// map of known addresses if it does not already exist. If there are no 
+	// session layer, external communication is not possible and a standard 
+	// logic error exception is thrown.
+		
+	RemoteIdentity( const std::string & ActorName );
+	
+	// The destructor does nothing but is needed for completeness
+	
+	virtual ~RemoteIdentity( void )
+	{ }
+};
 		
 /*=============================================================================
 
@@ -225,7 +318,7 @@ class Address
 {
 private:
 	
-	ActorIdentification * TheActor;
+	Identification * TheActor;
 	
 	// The address can be invalidated only by the actor identification class 
 	// when the actor is destructed.
@@ -239,10 +332,12 @@ private:
 		}
 	}
 	
-	// and the Actor Identification class is a friend that is allowed to use 
-	// this method.
-	
-	friend class ActorIdentification;
+	// The identity class is allowed to read the actor pointer, and the endpoint
+	// identity is allowed to invalidate a reference if the endpoint actor is 
+	// closing.
+
+	friend class Identification;	
+	friend class EndpointIdentity;
 	
 public:
 	
@@ -250,7 +345,7 @@ public:
 	// the actor this address refers to, and then register with this actor 
 	// if the pointer given is not Null.
 	
-	inline Address( ActorIdentification * ReferencedActor = nullptr )
+	inline Address( Identification * ReferencedActor = nullptr )
 	: TheActor( ReferencedActor )
 	{ 
 		if ( TheActor != nullptr )
@@ -280,14 +375,20 @@ public:
 	// lookup and then delegate to the above constructors.
 	
 	inline Address( const std::string & Name )
-	: Address( ActorIdentification::Lookup( Name ) )
-	{	}
+	: Address( Identification::Lookup( Name ) )
+	{
+		// The actor name is unknown, an empty address will be returned and a new
+		// remote identity must be created for this name.
+		
+		if ( TheActor == nullptr )
+			TheActor = new RemoteIdentity( Name );
+	}
 	
 	// Oddly enough, but Theron has no constructor to get an address by the 
 	// numerical ID of the actor, so a similar one is provided now.
 	
-	inline Address( const ActorIdentification::IDType & ID )
-	: Address( ActorIdentification::Lookup( ID ) )
+	inline Address( const Identification::IDType & ID )
+	: Address( Identification::Lookup( ID ) )
 	{	}	
 
 	// It should have a static function Null to allow test addresses
@@ -313,12 +414,12 @@ public:
 		return TheActor->Name;
 	}
 	
-	inline ActorIdentification::IDType AsInteger( void ) const
+	inline Identification::IDType AsInteger( void ) const
 	{
 		return TheActor->NumericalID;
 	}
 	
-	inline ActorIdentification::IDType AsUInt64( void ) const
+	inline Identification::IDType AsUInt64( void ) const
 	{
 		return AsInteger();
 	}
@@ -370,16 +471,19 @@ private:
 //
 // The message stores the address of the sending actor, and has a method to 
 // be used by the queue handler when checking if it can be forwarded to the 
-// registered message handlers.
+// registered message handlers. The To address is not needed for messages sent
+// to local actors, although it can be useful for debugging purposes. The To
+// address is sent with the message for remote communication so that the 
+// remote endpoint can deliver the message to the right actor.
 	
 class GenericMessage
 {
 public:
 	
-	const Address From;
+	const Address To, From;
 	
-	GenericMessage( const Address & Sender )
-	: From( Sender )
+	inline GenericMessage( const Address & Receiver, const Address & Sender )
+	: To( Receiver ), From( Sender )
 	{ }
 };
 
@@ -394,8 +498,9 @@ public:
 	
 	const std::shared_ptr< MessageType > TheMessage;
 
-	Message( std::shared_ptr< MessageType > & MessageCopy, const Address & From )
-	: GenericMessage( From ), TheMessage( MessageCopy )
+	Message( const std::shared_ptr< MessageType > & MessageCopy, 
+					 const Address & From, const Address & To )
+	: GenericMessage( To, From ), TheMessage( MessageCopy )
 	{ }
 	
 	virtual ~Message( void )
