@@ -45,6 +45,8 @@ License: LGPL 3.0
 #include <unordered_map>			// To map actor names to actors
 #include <set>							  // To keep track of actor addresses
 #include <functional>					// For defining handler functions
+#include <list>								// The list of message handlers
+#include <algorithm>					// Various container related utilities
 #include <thread>						  // To execute actors
 #include <atomic>							// Thread protected variables
 #include <stdexcept>				  // To throw standard exceptions
@@ -69,6 +71,10 @@ class Address;
 
 private: 
 
+// -----------------------------------------------------------------------------
+// Generic identification
+// -----------------------------------------------------------------------------
+//
 // An actor has a name and a numerical ID. The latter must be unique independent
 // of how many actors that are created and destroyed over the lifetime of the 
 // application. A special object is charged with obtaining the numerical ID and 
@@ -156,7 +162,7 @@ public:
 	// since it uses the internals of the actor definition. This function will 
 	// throw invalid_argument if the address is not for a valid and running actor.
 	
-	static Actor * GetActor( Address & ActorAddress );
+	static Actor * GetActor( const Address & ActorAddress );
 		
 	// When an address is created, it needs to register with the identification 
 	// object representing the actor. A local actor on this endpoint will 
@@ -187,6 +193,10 @@ public:
 	
 };
 
+// -----------------------------------------------------------------------------
+// Endpoint identity
+// -----------------------------------------------------------------------------
+//
 // Each actor has an identification derived from the basic identification. It
 // will ensure that the name given to the actor is unique, and if it is not 
 // unique, it will throw an invalid argument exception from the constructor. 
@@ -247,27 +257,31 @@ public:
 	
 } ActorID;
 
+// -----------------------------------------------------------------------------
+// Remote identity
+// -----------------------------------------------------------------------------
+//
 // The remote identity of an actor is basically a string, and the actor pointer
-// is set to the local actor that has registered as the Session Layer. The 
-// session layer is responsible for serialising and de-serialising message that
-// can then be transmitted as text strings to remote network endpoints. 
+// is set to the local actor that has registered as the Presentation Layer. The 
+// presentation layer is responsible for serialising and de-serialising message 
+// that can then be transmitted as text strings to remote network endpoints. 
 // 
 // This implies that remote identities are created from a string setting the 
 // name of the remote actor. This name is registered in the name database 
 // because no local actor with the same name should be created. The Remote 
-// identity class is responsible for forwarding the messages to the session 
-// layer, and trying to create a remote identity before the session layer 
+// identity class is responsible for forwarding the messages to the presentation 
+// layer, and trying to create a remote identity before the presentation layer 
 // server has been set will result in a standard logic error exception.
 
 class RemoteIdentity : public Identification
 {
 private:
 	
-	static Actor * TheSessionLayerServer;
+	static Actor * ThePresentationLayerServer;
 	
 public:
 	
-	static void  SetSessionLayerServer( Actor * TheSever );
+	static void  SetPresentationLayerServer( Actor * TheSever );
 	
 	// The identity will always be dynamically allocated. However, since addresses
 	// can be copied, new copies will just inherit the pointer to the 
@@ -393,7 +407,7 @@ public:
 
 	// It should have a static function Null to allow test addresses
 	
-	static Address Null( void )
+	static Address Null( void ) const
 	{
 		return Address();
 	}
@@ -401,7 +415,7 @@ public:
 	// There is an implicit conversion to a boolean to check if the address is 
 	// valid or not.
 	
-	operator bool (void )
+	operator bool (void ) const
 	{
 		return TheActor != nullptr;
 	}
@@ -462,28 +476,24 @@ inline Address GetAddress( void )
 // the message queue of the receiving actor. Thus, the message is created once, 
 // and deleted when it has been consumed. C++ and RTTI will have to take care 
 // of the polymorphic messages.
-
-private:
-	
-// -----------------------------------------------------------------------------
-// Messages 
-// -----------------------------------------------------------------------------
-//
+//	
 // The message stores the address of the sending actor, and has a method to 
 // be used by the queue handler when checking if it can be forwarded to the 
 // registered message handlers. The To address is not needed for messages sent
 // to local actors, although it can be useful for debugging purposes. The To
 // address is sent with the message for remote communication so that the 
 // remote endpoint can deliver the message to the right actor.
+
+private:
 	
 class GenericMessage
 {
 public:
 	
-	const Address To, From;
+	const Address From, To;
 	
-	inline GenericMessage( const Address & Receiver, const Address & Sender )
-	: To( Receiver ), From( Sender )
+	inline GenericMessage( const Address & Sender, const Address & Receiver )
+	: From( Sender ), To( Receiver )
 	{ }
 };
 
@@ -500,7 +510,7 @@ public:
 
 	Message( const std::shared_ptr< MessageType > & MessageCopy, 
 					 const Address & From, const Address & To )
-	: GenericMessage( To, From ), TheMessage( MessageCopy )
+	: GenericMessage( From, To ), TheMessage( MessageCopy )
 	{ }
 	
 	virtual ~Message( void )
@@ -511,7 +521,7 @@ public:
 // consume from the front of the queue. It can therefore be implemented as a 
 // standard queue.
 
-std::queue< std::shared_ptr< GenericMessage > > IncomingMessages;
+std::queue< std::shared_ptr< GenericMessage > > Mailbox;
 
 // Since this queue will be written to by the sending actors and processed 
 // by this actor, there may be several threads trying to operate on the queue 
@@ -520,18 +530,57 @@ std::queue< std::shared_ptr< GenericMessage > > IncomingMessages;
 std::mutex QueueGuard;
 
 // Messages are queued a dedicated function that obtains a unique lock on the 
-// queue guard before adding the message.
+// queue guard before adding the message. The return type could be used to 
+// indicate issues with the queuing, but the function should really throw
+// an exception in case of serious errors.
 
-void EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage );
+bool EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage );
 
 // -----------------------------------------------------------------------------
-// Handlers 
+// Sending messages
 // -----------------------------------------------------------------------------
 //
+// The main send function allocates a new message of the provided type and 
+// enqueues this with the receiving actor. This is the version of the send 
+// function found in the Framework in Theron.
+
+public:
+
+template< class MessageType >
+inline bool Send( const MessageType & TheMessage, 
+								  const Address & Sender, const Address & Receiver )
+{
+	Actor * ReceivingActor = Identification::GetActor( Receiver );
+	auto    MessageCopy    = std::make_shared< MessageType >( TheMessage );
+	
+	return	
+	ReceivingActor->EnqueueMessage( std::make_shared< Message< MessageType> >(	
+																	MessageCopy, Sender, Receiver	));
+}
+
+// Theron's actor has a simplified version of the send function basically just 
+// inserting its own address for the sender's address.
+
+protected:
+
+template< class MessageType >
+inline bool Send( const MessageType & TheMessage, const Address & Receiver )
+{
+	return Send( TheMessage, GetAddress(), Receiver );
+}
+
+/*=============================================================================
+
+ Handlers
+
+=============================================================================*/
+
 // The Generic Message class is only supposed to be a polymorphic place holder
 // for the type specific messages constructed by the send function. It provides
 // an interface for a generic message handler, and will call this if its pointer
 // can be cast into the type specific handler class (see below). 
+
+private:
 
 class GenericHandler
 {
@@ -544,22 +593,28 @@ public:
 	{ }
 };
 
-// The actual type specific handler is a template on the message type executing 
-// the handler function
+// The actual type specific handler is a template on the message type handled  
+// by the function. It remembers the handler function and tries to convert the 
+// message to the right type. If this is possible, it will invoke the handler
+// function.
 
-template< class MessageType >
+template< class ActorType, class MessageType >
 class Handler : public GenericHandler
 {
-private:
+public:
 	
 	// The handler must store the function to process the message. This has the 
 	// same signature as the actual handler, and it is specified to call the 
 	// function on the actor having this handler.
 	
-	std::function< void( const MessageType &, const Address ) > HandlerFunction;
+	const 
+	void (ActorType::*HandlerFunction)( const MessageType &, const Address );
 	
-public:
+	// The pointer to the actor having this handler function is also stored 
+	// since it is the easiest way to make sure it is the right actor type.
 	
+	const ActorType * TheActor;
+		
 	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
 	{
 		std::shared_ptr< Message< MessageType > > TypedMessage = 
@@ -567,7 +622,12 @@ public:
 		
 		if ( TypedMessage )
 		{
-			HandlerFunction( *(TypedMessage->TheMessage), TypedMessage->From );
+			// The message could be converted to this message type, and then the 
+			// handler can be invoked through the handler pointer on the stored 
+			// actor. 
+			
+			(TheActor.*HandlerFunction)( *(TypedMessage->TheMessage), 
+																	   TypedMessage->From );
 			return true;
 		}
 		else 
@@ -576,14 +636,252 @@ public:
 	
 	// The constructor stores the handler function.
 	
-	Handler( const std::function< void( const MessageType &, const Address ) > 
-						& GivenHandler )
-	: GenericHandler(), HandlerFunction( GivenHandler )
+	Handler( ActorType * HandlingActor,
+	const void (ActorType::*GivenHandler)( const MessageType &, const Address ))
+	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
 	{ }
 	
 	virtual ~Handler( void )
 	{ }
 };
+
+// The list of handlers registered for this actor is kept in a simple list, and
+// The transposition rule suggested by Ronald Rivest (1976): "On self-organizing 
+// sequential search heuristics", Communications of the ACM, Vol. 19, No. 2, 
+// pp. 63-67 is used to promote message handlers that receive the more messages. 
+// Here a successful message handler will be swapped with the element 
+// immediately in front unless the element is the handler at the start of the 
+// list, and new handlers are added to the end of this list.
+// The default handler treats the message as a gen
+
+std::list< std::shared_ptr< GenericHandler > > MessageHandlers;
+
+// -----------------------------------------------------------------------------
+// Normal handler registration
+// -----------------------------------------------------------------------------
+//
+// Registration of handlers is a matter of adding the function call to the 
+// list of handlers for the given actor. Essentially the actor pointer is 
+// not necessary because the handler should be registered for this actor. 
+// However, it seems necessary in order to ensure that the pointer to the 
+// handler function is a pointer to a function on the actor it will actually
+// be called for. Note also that the same handler can be registered multiple 
+// times, and many handlers can be registered for the same message.
+
+protected:
+
+template< class ActorType, class MessageType >
+inline bool RegisterHandler( ActorType  * const TheActor, 
+							 void ( ActorType::* TheHandler)(	const MessageType & TheMessage, 
+																								const Address From ) )
+{
+	TheActor->MessageHandlers.push_back( 
+		std::make_shared< Handler< ActorType, MessageType > >( TheHandler ) );
+}
+
+// -----------------------------------------------------------------------------
+// Normal handler de-registration
+// -----------------------------------------------------------------------------
+//
+// Since there are no checks that a function is only registered as a hander 
+// only once, the full list of handlers must be processed and all handlers 
+// whose pair of handling actor and handler function match the registered 
+// handler.
+
+template< class ActorType, class MessageType >
+inline bool DeregisterHandler( ActorType  * const HandlingActor, 
+							    void (ActorType::* TheHandler)(const MessageType & TheMessage, 
+																								 const Address From ) )
+{
+	// To compare the actor and the handler function pointer, it is necessary to
+	// know that that the handler is of the right type, and RTTI is used for 
+	// this by trying to cast dynamically the handler to a pointer to the 
+	// a message handler for the actor and message type. This is done by a 
+	// comparator function.
+	
+	auto ToBeRemoved = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
+	->bool{
+		std::shared_ptr< Handler< ActorType, MessageType > > TypedHandler =
+		 std::dynamic_pointer_cast< Handler< ActorType, MessageType > >(AnyHandler);
+			
+		if (  TypedHandler && 
+			  ( TypedHandler->TheActor == HandlingActor ) &&
+				( TypedHandler->HandlerFunction == TheHandler ) )
+			return true;
+		else
+			return false;
+	};
+	
+	// In order to return an indication whether something was removed or not,
+	// the size of the handler list must be checked before and after the 
+	// removal.
+	
+	auto InitialHandlerCount = MessageHandlers.size();
+	
+	// With the comparator it is easy to remove the handlers of this type
+	
+	MessageHandlers.remove_if( ToBeRemoved );
+	
+	// Then a meaningful feedback can be given
+	
+	if ( InitialHandlerCount == MessageHandlers.size() )
+		return false;
+	else
+		return true;
+}
+
+// -----------------------------------------------------------------------------
+// Checking registration
+// -----------------------------------------------------------------------------
+//
+// The very same mechanism of the method to de-register a message handler can 
+// be used to test if a particular handler is already registered, and it is 
+// almost an exact copy of the previous method.
+
+template< class ActorType, class MessageType >
+inline bool IsHandlerRegistered ( ActorType  * const HandlingActor, 
+							    void (ActorType::* TheHandler)(const MessageType & TheMessage, 
+																								 const Address From ) )
+{
+	// To compare the actor and the handler function pointer, it is necessary to
+	// know that that the handler is of the right type, and RTTI is used for 
+	// this by trying to cast dynamically the handler to a pointer to the 
+	// a message handler for the actor and message type. This is done by a 
+	// comparator function.
+	
+	auto IsHandler = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
+	->bool{
+		std::shared_ptr< Handler< ActorType, MessageType > > TypedHandler =
+		 std::dynamic_pointer_cast< Handler< ActorType, MessageType > >(AnyHandler);
+			
+		if (  TypedHandler && 
+			  ( TypedHandler->TheActor == HandlingActor ) &&
+				( TypedHandler->HandlerFunction == TheHandler ) )
+			return true;
+		else
+			return false;
+	};
+
+	// Then the standard search algorithm can be used to find an occurrence of 
+	// the given actor and handler function.
+	
+	return 
+	std::any_of( MessageHandlers.begin(), MessageHandlers.end(), IsHandler );
+}
+
+// -----------------------------------------------------------------------------
+// Default handler registration
+// -----------------------------------------------------------------------------
+//
+// The default handler treats the message as a generic object, and it supports
+// both variants of the default handler type.
+
+private:
+
+std::shared_ptr< GenericHandler > DefaultHandler;
+
+// There are two versions of the default handler, one that only takes the 
+// address of the actor sending the message.
+
+template< class ActorType >
+class DefaultHandlerFrom : public GenericHandler
+{
+private:
+	
+	void (ActorType::*HandlerFunction)( const Address );
+	ActorType * TheActor;
+	
+public:
+	
+	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
+	{
+		(TheActor.* HandlerFunction)( TheMessage->From );
+		return true;
+	}
+	
+	inline DefaultHandlerFrom( ActorType * HandlingActor, 
+											const void (ActorType::*GivenHandler)( const Address ) )
+	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
+	{ }
+	
+	virtual ~DefaultHandlerFrom( void )
+	{ }
+};
+
+// And the function to register the handler
+
+protected:
+
+template< class ActorType >
+inline bool SetDefaultHandler( ActorType  *const TheActor, 
+											  void ( ActorType::*TheHandler )( const Address From ))
+{
+	DefaultHandler = std::make_shared< DefaultHandlerFrom< ActorType> >( 
+									 TheActor, TheHandler );
+}
+
+// The alternative callback function takes a void data pointer, its size and 
+// the from actor. This allows us to try to identify the type of the message 
+// by sending the type name of the message to the handler as a string. Hence,
+// the void pointer can safely be recast into a standard string pointer. 
+
+private: 
+	
+template< class ActorType >
+class DefaultHandlerData : public GenericHandler
+{
+private:
+	
+	void (ActorType::*HandlerFunction) ( const void *const, const uint32_t, 
+																			 const Address );
+	ActorType * TheActor;
+											 
+public:
+	
+	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
+	{
+		std::ostringstream ErrorMessage;
+		
+		ErrorMessage << "Message type is " << typeid( *TheMessage ).name();
+		
+		std::string Description( ErrorMessage.str() );
+		
+		(TheActor.*HandlerFunction)( &Description, sizeof( Description ), 
+																 TheMessage->From );
+		
+		return true;
+	}
+	
+	inline DefaultHandlerData( ActorType * HandlingActor, 
+				 void (ActorType::*GivenHandler) ( 
+				 const void *const, const uint32_t, const Address )  )
+	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
+	{	}
+	
+	virtual ~DefaultHandlerData( void )
+	{ }
+};
+
+// And the function to set this kind of handler.
+
+protected:
+
+template <class ActorType>
+inline bool SetDefaultHandler( ActorType *const TheActor,
+	     void (ActorType::*TheHandler)( const void *const Data, 
+																			const uint32_t Size, const Address From ))
+{
+	DefaultHandler = std::make_shared< DefaultHandlerData< ActorType > >(
+								   TheActor, TheHandler );
+}
+
+/*=============================================================================
+
+ Execution control
+
+=============================================================================*/
+
+
 
 };			// Class Actor
 }				// Name space Theron

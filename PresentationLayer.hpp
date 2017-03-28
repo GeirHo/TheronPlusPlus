@@ -539,16 +539,16 @@ protected:
     for ( ; Message != AvailableMessages->end(); ++Message )
       if ( (*Message)( this, Payload, Sender ) )
       { 
-	// Optimise the list pushing this message type forward one position if 
-	// this is not already the most popular message type.
-	
-	if ( Message != AvailableMessages->begin() )
-	  std::iter_swap( Message, std::prev(Message) );
-	
-	// The Payload should correspond to one message type only, so there is 
-	// no reason to continue testing more messages and we can safely return.
-	
-	return;
+				// Optimise the list pushing this message type forward one position if 
+				// this is not already the most popular message type.
+				
+				if ( Message != AvailableMessages->begin() )
+				  std::iter_swap( Message, std::prev(Message) );
+				
+				// The Payload should correspond to one message type only, so there is 
+				// no reason to continue testing more messages and we can safely return.
+				
+				return;
       }
       
     // If the search terminated with no message type found that corresponds to
@@ -561,7 +561,7 @@ protected:
       
       Error << "Agent " << GetAddress().AsString() << " has received payload \""
             << Payload << "\" from agent " << Sender.AsString() 
-	    << " not corresponding to any message type";
+				    << " not corresponding to any message type";
 	    
       throw std::runtime_error( Error.str() );
     }

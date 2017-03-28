@@ -27,6 +27,9 @@ std::unordered_map< Theron::Actor::Identification::IDType,
 
 std::mutex Theron::Actor::Identification::InformationAccess;
 
+Theron::Actor * 
+Theron::Actor::RemoteIdentity::ThePresentationLayerServer = nullptr;
+
 // -----------------------------------------------------------------------------
 // Static functions 
 // -----------------------------------------------------------------------------
@@ -35,7 +38,7 @@ std::mutex Theron::Actor::Identification::InformationAccess;
 // throw an invalid argument if the given address is Null
 
 Theron::Actor * Theron::Actor::Identification::GetActor( 
-																			  Theron::Actor::Address & ActorAddress )
+																	 const Theron::Actor::Address & ActorAddress )
 {
 	if ( ActorAddress )
 		return ActorAddress.TheActor->ActorPointer;
@@ -81,7 +84,7 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 // is not null, i.e. that this is invoked by an actor currently acting as the 
 // session layer, but about to close.
 
-void Theron::Actor::RemoteIdentity::SetSessionLayerServer( 
+void Theron::Actor::RemoteIdentity::SetPresentationLayerServer( 
 																											Theron::Actor * TheSever )
 {
   if ( TheSever == nullptr )
@@ -91,14 +94,14 @@ void Theron::Actor::RemoteIdentity::SetSessionLayerServer(
 		// it is not possible to communicate externally and the external references
 		// should be invalidated.
 	}
-	else if ( TheSessionLayerServer == nullptr  )
-		TheSessionLayerServer = TheSever;
+	else if ( ThePresentationLayerServer == nullptr  )
+		ThePresentationLayerServer = TheSever;
 	else 
 	{
 		std::ostringstream ErrorMessage;
 		 
 		ErrorMessage << "The session layer server is already set to actor "
-								 << TheSessionLayerServer->ActorID.Name;
+								 << ThePresentationLayerServer->ActorID.Name;
 								 
 	  throw std::logic_error( ErrorMessage.str() );
 	}
@@ -205,10 +208,10 @@ Theron::Actor::EndpointIdentity::~EndpointIdentity()
 // will check the availability of the Session Server as a pre-requisite.
 
 Theron::Actor::RemoteIdentity::RemoteIdentity( const std::string & ActorName )
-: Identification( TheSessionLayerServer, ActorName )
+: Identification( ThePresentationLayerServer, ActorName )
 {
 
-	if ( TheSessionLayerServer != nullptr )
+	if ( ThePresentationLayerServer != nullptr )
   {
 		std::lock_guard< std::mutex > Lock( InformationAccess );
 		
