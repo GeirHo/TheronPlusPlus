@@ -584,10 +584,41 @@ private:
 
 class GenericHandler
 {
-public: 
+public:
+	
+	enum class State
+	{
+		Normal,
+		Executing,
+		Deleted
+	};
+	
+protected:
+	
+	State CurrentStatus;
+	
+public:
+	
+	// A function to get the handler state.
+	
+	inline State GetStatus( void )
+	{	return CurrentStatus;	}
+	
+	// And another one to set the status that is only used from the de-registration
+	// function if this this handler should be deleted.
+	
+	inline void SetStatus( const State NewState )
+	{ CurrentStatus = NewState; }
+	
+	// There is a function to execute the handler on a given message
 	
 	virtual bool ProcessMessage( 
 													std::shared_ptr< GenericMessage > & TheMessage ) = 0;
+	
+	// The constructor simply sets the status to normal
+	
+	GenericHandler( void )
+	{ CurrentStatus = State::Normal; }
 	
 	virtual ~GenericHandler( void )
 	{ }
@@ -622,9 +653,8 @@ public:
 		
 		if ( TypedMessage )
 		{
-			// The message could be converted to this message type, and then the 
-			// handler can be invoked through the handler pointer on the stored 
-			// actor. 
+			// The message could be converted to this message type, and the handler 
+			// can be invoked through the handler pointer on the stored actor
 			
 			(TheActor.*HandlerFunction)( *(TypedMessage->TheMessage), 
 																	   TypedMessage->From );
@@ -652,7 +682,13 @@ public:
 // Here a successful message handler will be swapped with the element 
 // immediately in front unless the element is the handler at the start of the 
 // list, and new handlers are added to the end of this list.
-// The default handler treats the message as a gen
+// The default handler treats the message as a generic handler.
+//
+// It should be remarked that there is no mutex to protect this list since 
+// it is use to execute the message handlers, and typically additional handlers
+// or deletions of handlers will take place from within the one executing 
+// handler, which is running in the same thread as the Dispatch Messages 
+// function
 
 std::list< std::shared_ptr< GenericHandler > > MessageHandlers;
 
@@ -698,6 +734,11 @@ inline bool DeregisterHandler( ActorType  * const HandlingActor,
 	// this by trying to cast dynamically the handler to a pointer to the 
 	// a message handler for the actor and message type. This is done by a 
 	// comparator function.
+	//
+	// A subtle point is that even if the handler should be removed, it cannot 
+	// be removed if it is the currently running handler. In this case, its state
+	// will be set to deleted, but the comparator will (wrongly!) return false 
+	// to prevent the removal of that particular handler before it has terminated.
 	
 	auto ToBeRemoved = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
 	->bool{
@@ -707,7 +748,16 @@ inline bool DeregisterHandler( ActorType  * const HandlingActor,
 		if (  TypedHandler && 
 			  ( TypedHandler->TheActor == HandlingActor ) &&
 				( TypedHandler->HandlerFunction == TheHandler ) )
-			return true;
+		{
+			// The handler is identical and can be removed unless it is executing
+			if ( AnyHandler->GetStatus() == GenericHandler::State::Executing )
+		  {
+				AnyHandler->SetStatus( GenericHandler::State::Deleted );
+				return false;
+			}
+			else 
+				return true;
+		}
 		else
 			return false;
 	};
@@ -881,7 +931,34 @@ inline bool SetDefaultHandler( ActorType *const TheActor,
 
 =============================================================================*/
 
+// Execution of the handlers for queued messages will take place in a dedicated
+// thread that will be started from the method to enqueue messages if the 
+// arriving message is the first message in the queue.
 
+private: 
+	
+std::thread Postman;
+
+// This thread will execute the following function that will take out the 
+// first message from the queue and call the handler for this message. If 
+// none of the registered handlers are able to process the message, then the 
+// message will be delivered to the default handler. If no default handler 
+// exists, then a logical error is thrown.
+
+void DispatchMessages( void );
+
+// There is a potential issue if a message given to an actor that has no 
+// registered handler for the type of message. There are then two options: 
+// the dispatch function can throw an exception indicating the type of the 
+// message, or it may simply tacitly ignore the message entirely if the 
+// application is able to manage this. Different actors are allowed to 
+// apply different policies.
+
+enum class MessageError
+{
+	Throw,
+	Ignore
+} MessageErrorPolicy;
 
 };			// Class Actor
 }				// Name space Theron
