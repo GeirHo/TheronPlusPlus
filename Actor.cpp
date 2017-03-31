@@ -129,9 +129,28 @@ void Theron::Actor::RemoteIdentity::Register( Address * NewAddress )
 	++NumberOfAddresses;
 }
 
+// The remote identity is created whenever an actor refers to an address by 
+// name only and this address cannot be found on the current endpoint. It will 
+// count how many addresses that refer to this remote actor, and if there are 
+// no more addresses then the entry can be removed from the registry. Since 
+// the identity was dynamically allocated it will also be deleted to ensure 
+// that there are no memory leaks.
+//
+// Note that this strategy may allow other actors to be constructed locally with
+// the same name as the remote actor was known to have, and local actors will 
+// prevent the creation of references to remote actors with the same name.
+
 void Theron::Actor::RemoteIdentity::DeRegister( Address * OldAddress )
 {
-	if ( NumberOfAddresses > 0 )
+	if ( NumberOfAddresses == 0 )
+  {
+		InformationAccess.lock();
+		ActorsByName.erase( Name        );
+		ActorsByID.erase  ( NumericalID );
+		InformationAccess.unlock();
+		delete this;
+	}
+	else	
 		--NumberOfAddresses;
 }
 
@@ -231,6 +250,7 @@ Theron::Actor::RemoteIdentity::RemoteIdentity( const std::string & ActorName )
 		throw std::logic_error("Remote actor IDs requires a Session Layer Server");
 }
 
+
 /*=============================================================================
 
  Message handling
@@ -261,6 +281,8 @@ bool Theron::Actor::EnqueueMessage(
 	
 	if ( ! Postman.joinable() )
 		Postman = std::thread( &Actor::DispatchMessages, this );
+	
+	return true;
 }
 
 /*=============================================================================
@@ -292,14 +314,58 @@ void Theron::Actor::DispatchMessages( void )
 		auto CurrentHandler = MessageHandlers.begin();
 		bool MessageServed  = false;
 		
-		// ...and then use this to loop over all handlers.
+		// If one or more Wait functions have been called, this message should not 
+		// be processed before they all have acknowledged the notification about 
+		// the new message arrival.
+		
+		if ( WaiterCount > 0 )
+		{
+			// It is necessary to lock to guard so that no other thread will try to 
+			// set the two flag variables at the same time. 
+			
+			std::unique_lock< std::mutex > Lock( WaitGuard );
+			
+			// The flag indicating that a new message has arrived should be set so 
+			// Wait functions know why they are notified. The counter for 
+			// acknowledgements is also reset to count only real, new acknowledgements
+			
+			NewMessage 					 = true;
+			AcknowledgementCount = 0;
+			
+			// Then all the Wait functions can be notified. A subtle point is that 
+			// if one of the Wait functions finishes the wait by this message, it will 
+			// reduce the count of waiters, so the number of received acknowledgements
+			// will be higher than the Waiter Count. It is therefore necessary to 
+			// remember how many Wait functions that were notified, and only continue 
+			// processing when this number of acknowledgements has been received.
+			
+			unsigned int NotifiedWaiters = WaiterCount;
+			
+			OneMessageArrived.notify_all();
+			
+			// Then the dispatcher will wait until all the Wait functions have seen 
+			// and acknowledged this notification.
+			
+			ContinueMessageProcessing.wait( Lock, 
+				  [&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; }  );
+			
+			// The New Message flag is then cleared. Note that the lock was released 
+			// by the condition variable wait, and re-locked when the wait ends, and 
+			// it will be unlocked permanently when the unique lock object is 
+			// destroyed at the end of this code block.
+			
+			NewMessage = false;
+		}
+		
+		// ...and then loop over all handlers to allow them to manage the message 
+		// if they are able to.
 		
 		while ( CurrentHandler != MessageHandlers.end() )
 		{
 			// There is a minor problem related to the handler call since invoking the 
 			// message handler may create or destroy handlers. A mutex cannot help 
-			// since the handler is executing in this thread, and even on the same 
-			// stack which means that all operations implicitly made by the handler
+			// since the handler is executing in this thread, and since it runs on 
+			// the same stack all operations implicitly made by the handler
 			// on the handler list will have terminated when control is returned to 
 			// this method. Insertions are not problematic since they will appear at 
 			// the end of the list, and will just be included in the continued 
@@ -316,7 +382,7 @@ void Theron::Actor::DispatchMessages( void )
 			(*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
 			
 			// Then the handler can process the message, and if this results in the 
-			// handler de-registering this handler, it will end with the deleted 
+			// handler de-registering this handler, it will return with the deleted 
 			// state.
 						
 			if( (*CurrentHandler)->ProcessMessage( Mailbox.front() ) )
@@ -348,7 +414,8 @@ void Theron::Actor::DispatchMessages( void )
 		}
 		
 		// If the message is not served at this point, it should be delivered to 
-		// the fall back handler. 
+		// the fall back handler. If that handler does not exist it should either 
+		// be ignored or an error message will be thrown.
 		
 		if ( ! MessageServed )
 		{
@@ -375,3 +442,97 @@ void Theron::Actor::DispatchMessages( void )
 	}
 }
 
+// The wait function will mirror the waiting behaviour of the message dispatcher
+// function in that it will lock the mutex and then set the flags. It will also
+// count the number of messages processed and return when the requested number 
+// has been received.
+
+Theron::Actor::MessageCount Theron::Actor::Wait( 
+																							const MessageCount MessageLimit )
+{
+	// Counting the received messages
+	
+	MessageCount Counter = 0;
+	
+	// Then acquiring the lock to be released when the conditional wait starts,
+	// or when the lock object is destroyed. 
+	
+	std::unique_lock< std::mutex > Lock( WaitGuard );
+	
+	// There is now one more Wait function in effect.
+	
+	WaiterCount++;
+	
+	// Message are accounted for and acknowledged one by one until the message 
+	// limit is reached
+	
+	while ( !AbortWait && (Counter < MessageLimit) )
+  {
+		// It is just to wait for the next message to arrive. This will release the 
+		// lock while waiting.
+		
+		OneMessageArrived.wait( Lock, [&](void)->bool{ return NewMessage; } );
+		
+		// After this thread has been notified by the Postman about the new message
+		// available, the lock is again set and it is just to increase the message
+		// count, add one acknowledgement for this Wait function and notify the 
+		// Postman.
+
+		Counter++;
+		AcknowledgementCount++;		
+		ContinueMessageProcessing.notify_one();		
+	}
+	
+	// Then this Wait function is done with its wait and can de-register
+	
+	WaiterCount--;
+	
+	// For the sake of compatibility the number of messages handled will be 
+	// returned to the calling thread. If the abort wait is set, then the it was
+	// counted as a message and it should be subtracted from the count of real 
+	// messages before the value is returned.
+	
+	if ( AbortWait )
+		return --Counter;
+	else
+		return Counter;
+}
+
+/*=============================================================================
+
+ Destructor
+
+=============================================================================*/
+
+Theron::Actor::~Actor()
+{
+	// The lock on the wait guard is then taken to prevent any Wait functions 
+	// from starting and 
+	
+	std::unique_lock< std::mutex > TerminationLock( WaitGuard );
+
+	// If there is an active wait, the flag indicating a wait after message 
+	// processing is set, and this is used as an indicator that the blocking 
+	// flags should be reset and the Postman should be allowed to process messages
+	// at full speed.
+	
+	if ( WaiterCount > 0 )
+  {
+		AbortWait	 					 = true;
+		NewMessage 				   = true;
+		AcknowledgementCount = 0;
+		
+		unsigned int NotifiedWaiters = WaiterCount;
+		
+		OneMessageArrived.notify_all();
+		
+		ContinueMessageProcessing.wait( TerminationLock, 
+						[&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; });
+	}
+	
+	// This should allow the Postman to empty the message queue, and so it is 
+	// just to wait for this to happen if the Postman is still working.
+	
+	if ( Postman.joinable() )
+		Postman.join();	
+}

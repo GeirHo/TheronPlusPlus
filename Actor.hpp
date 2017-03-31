@@ -48,12 +48,42 @@ License: LGPL 3.0
 #include <list>								// The list of message handlers
 #include <algorithm>					// Various container related utilities
 #include <thread>						  // To execute actors
+#include <condition_variable> // To synchronise threads
 #include <atomic>							// Thread protected variables
 #include <stdexcept>				  // To throw standard exceptions
 #include <sstream>						// To provide nice exception messages
 
 
 namespace Theron {
+	
+// For compatibility reasons there must be a class called Framework and an actor
+// has a method that returns a pointer to it. Basically the actor is fully 
+// replacing the framework. All compatibility classes are defined at the end.
+
+using Framework = class Actor;
+
+// There are enumerations for a yield strategy, and since the scheduling is 
+// left for the operating system, these strategies will have no effect.
+
+enum class YieldStrategy 
+{
+  YIELD_STRATEGY_CONDITION = 0,
+  YIELD_STRATEGY_HYBRID,
+  YIELD_STRATEGY_SPIN,
+  YIELD_STRATEGY_BLOCKING = 0,
+  YIELD_STRATEGY_POLITE = 0,
+  YIELD_STRATEGY_STRONG = 1,
+  YIELD_STRATEGY_AGGRESSIVE = 2
+};
+
+// The EndPoint is forward declared because it is used as an argument to one of
+// the Framework constructors.
+
+class EndPoint;
+
+// In this implementation everything is an actor as there is no compelling 
+// reason for the other Theron classes. 
+
 class Actor
 {
 /*=============================================================================
@@ -188,9 +218,12 @@ public:
     ActorPointer( TheActor )
 	{ }
 
+	// The destructor removes the named actor and the ID from the registries, 
+	// and since it implies a structural change of the maps, the lock must be 
+	// acquired. It is automatically released when the destructor terminates.
+	
 	virtual ~Identification( void )
 	{ }
-	
 };
 
 // -----------------------------------------------------------------------------
@@ -247,7 +280,7 @@ public:
 	// name "ActorNN" where NN is the numerical ID of the actor.
 
 	EndpointIdentity( Actor * TheActor, 
-											 const std::string & ActorName = std::string() );
+									  const std::string & ActorName = std::string() );
 	
 	// The destructor method cannot be defined in-line since it will call 
 	// methods on the addresses to invalidate them and the address class is 
@@ -312,7 +345,7 @@ public:
 	// The destructor does nothing but is needed for completeness
 	
 	virtual ~RemoteIdentity( void )
-	{ }
+  { }
 };
 		
 /*=============================================================================
@@ -405,37 +438,77 @@ public:
 	: Address( Identification::Lookup( ID ) )
 	{	}	
 
+	// There is an assignment operator that basically makes a copy of the 
+	// other Address. However, since it is called on an already existing 
+	// address it must de-register the address if it is a proper address.
+	
+	inline Address & operator= ( const Address & OtherAddress )
+	{
+		if ( TheActor != nullptr ) TheActor->DeRegister( this );
+		
+		TheActor = OtherAddress.TheActor;
+		
+		if ( TheActor != nullptr ) TheActor->Register( this );
+	}
+	
 	// It should have a static function Null to allow test addresses
 	
-	static Address Null( void ) const
-	{
-		return Address();
-	}
+	static const Address Null( void )
+	{	return Address();	}
 	
 	// There is an implicit conversion to a boolean to check if the address is 
 	// valid or not.
 	
 	operator bool (void ) const
-	{
-		return TheActor != nullptr;
-	}
+	{	return TheActor != nullptr;	}
 	
+	// There are comparison operators to allow the address to be used in standard
+	// containers.
+	
+	bool operator == ( const Address & OtherAddress ) const
+	{ return TheActor == OtherAddress.TheActor; }
+	
+	bool operator != ( const Address & OtherAddress ) const
+	{ return TheActor != OtherAddress.TheActor; } 
+
+	// The less-than operator is more interesting since the address could be 
+	// Null and how does that compare with other addresses? It is here defined 
+	// that a Null address will be larger than any other address since it is 
+	// assumed that this operator defines sorting order in containers and then 
+	// it makes sense if the Null operator comes last.
+	
+	bool operator < ( const Address & OtherAddress ) const
+	{
+		if ( TheActor == nullptr )
+			return true;
+		else 
+			if ( OtherAddress.TheActor == nullptr ) return true;
+		  else 
+				return TheActor->NumericalID < OtherAddress.TheActor->NumericalID;
+	}
+		
 	// Then it must provide access to the actor's name and ID that can be 
 	// taken from the actor's stored information.
 	
 	inline std::string AsString( void ) const
-	{
-		return TheActor->Name;
-	}
+	{	return TheActor->Name;	}
 	
 	inline Identification::IDType AsInteger( void ) const
-	{
-		return TheActor->NumericalID;
-	}
+	{	return TheActor->NumericalID;	}
 	
 	inline Identification::IDType AsUInt64( void ) const
+	{	return AsInteger();	}
+	
+	// There is a legacy function to obtain the numerical ID of the framework, 
+	// which is here taken identical to the actor pointed to by this address. 
+	// It will throw a logic error if it is a null address.
+	
+	inline Identification::IDType GetFramework( void ) const
 	{
-		return AsInteger();
+		if ( TheActor == nullptr )
+			throw std::logic_error( "Null address has no framework!" );
+		
+	  return TheActor->NumericalID;
 	}
 	
 	// The destructor simply invalidates the object
@@ -453,10 +526,8 @@ public:
 // address pointer.
 
 inline Address GetAddress( void )
-{
-	return Address( &ActorID );
-}
-
+{	return Address( &ActorID ); }
+	
 /*=============================================================================
 
  Messages
@@ -484,7 +555,7 @@ inline Address GetAddress( void )
 // address is sent with the message for remote communication so that the 
 // remote endpoint can deliver the message to the right actor.
 
-private:
+protected:
 	
 class GenericMessage
 {
@@ -497,10 +568,23 @@ public:
 	{ }
 };
 
+// Each actor has a queue of messages and add new messages to the end and 
+// consume from the front of the queue. It can therefore be implemented as a 
+// standard queue.
+
+using MessageQueue = std::queue< std::shared_ptr< GenericMessage > >;
+
+// The size type is defined as it is convenient to use for anything that has 
+// to do with the message queue
+
+using MessageCount = MessageQueue::size_type;
+
 // The type specific message will define the function to process the message 
 // by first trying to cast the handler to the handler templated for the 
 // actual message type, and if successful, it will invoke the handler function.
 
+private:
+	
 template< class MessageType >
 class Message : public GenericMessage
 {
@@ -517,11 +601,9 @@ public:
 	{ }
 };
 
-// Each actor has a queue of messages and add new messages to the end and 
-// consume from the front of the queue. It can therefore be implemented as a 
-// standard queue.
+// Each actor has a message queue 
 
-std::queue< std::shared_ptr< GenericMessage > > Mailbox;
+MessageQueue Mailbox;
 
 // Since this queue will be written to by the sending actors and processed 
 // by this actor, there may be several threads trying to operate on the queue 
@@ -534,7 +616,19 @@ std::mutex QueueGuard;
 // indicate issues with the queuing, but the function should really throw
 // an exception in case of serious errors.
 
-bool EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage );
+protected: 
+	
+virtual bool EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage );
+
+// Theron provides a function to check the number of queued messages, which 
+// essentially only returns the current queue size, including the message 
+// being handled. There is no need to acquire a lock because the function only
+// reads the value and makes no structural changes to the queue. 
+
+public:
+
+inline MessageCount GetNumQueuedMessages( void ) const
+{ return Mailbox.size(); }
 
 // -----------------------------------------------------------------------------
 // Sending messages
@@ -562,7 +656,7 @@ inline bool Send( const MessageType & TheMessage,
 // inserting its own address for the sender's address.
 
 protected:
-
+	
 template< class MessageType >
 inline bool Send( const MessageType & TheMessage, const Address & Receiver )
 {
@@ -954,12 +1048,418 @@ void DispatchMessages( void );
 // application is able to manage this. Different actors are allowed to 
 // apply different policies.
 
+protected:
+	
 enum class MessageError
 {
 	Throw,
 	Ignore
 } MessageErrorPolicy;
 
+// There is a small helper function that waits for the Postman to complete the 
+// delivery of messages, i.e. wait for the mailbox to drain. Essentially, it 
+// just joins the work of the Postman.
+
+inline void DrainMailbox( void )
+{
+	if ( Postman.joinable() )
+		Postman.join();
+}
+
+// -----------------------------------------------------------------------------
+// Synchronisation
+// -----------------------------------------------------------------------------
+//
+// In Theron there is a dedicated Receiver object which is here merged with 
+// the actor since it is useful that also actors are able to wait for the 
+// condition that one or more messages arrives. 
+// 
+// One should observe that even though the Wait function will be defined on 
+// one actor, it can be called from many different actors running in multiple 
+// threads. The Wait function should block until the given number of messages 
+// has been received by the actor, and different invocations of the Wait 
+// function may wait for different number of messages.
+// 
+// Thus the only central coordination point is the Postman, which may not even 
+// be started when a Wait function is called, and the Postman may stop if there
+// are no more messages to process. 
+//
+// It is a matter of definition whether the Receiver behaviour should be 
+// replicated or not. A Receiver will not process any messages before the Wait
+// function is called, while the natural behaviour is that message processing 
+// would run continuously until the first Wait function is called, and then 
+// message by message until the Wait has received the desired count of messages
+// before the remaining messages are continuously processed again. The latter 
+// functionality is implemented here: Only messages to be processed after the 
+// wait function is triggered will be blocked. 
+//
+// The basic principle for the synchronisation is a variable to count the 
+// number of Wait functions. If this counter is zero, the Postman will just 
+// process messages. If this counter is larger than zero, the postman will 
+// switch into message-by-message processing mode until this counter reaches 
+// zero again.
+
+private:
+	
+unsigned int WaiterCount;
+
+// The question is whether the Postman should halt processing before the new 
+// message is processed or after the message has been processed, or both. 
+// Theron's documentation say: "a call to Wait will return immediately if the 
+// call can be satisfied by an unconsumed message that has already arrived. 
+// This means that a caller wishing to synchronize with the arrival of an 
+// expected message can safely call Wait, irrespective of whether some or all 
+// of a number of expected messages may have already arrived. If one or more 
+// messages have arrived the call simply returns immediately without blocking, 
+// consuming all arrived messages up to the specified maximum. Otherwise it 
+// blocks until a message arrives, whereupon the thread is woken and returns."
+// In other words, the postman should halt when the message arrives, notify 
+// all Wait threads, and then continue with the processing of the message.
+// 
+// This requires one condition variable for the Wait threads to use when waiting
+// for the next message, and one mutex that can be used to set up the wait or
+// notify the waiting Wait functions. Note that the mutex must also be used to
+// protect updates to the count of the Wait functions above.
+
+std::condition_variable OneMessageArrived;
+std::mutex 							WaitGuard;
+
+// It is best practice to ensure that the condition variable is not triggered 
+// by some other reason that the arrival of a new message, and therefore 
+// there is a flag indicating that a message really has arrived. It should be 
+// changed only by the Postman when holding the guard locked.
+
+bool NewMessage;
+
+// Since each Wait function runs in a different thread, which is again different
+// from the Postman's thread, it could be that the postman would have handled
+// the message and move on to the next message before all the Waiting threads 
+// have had the opportunity to process the notification of the previous message.
+// An acknowledgement protocol is therefore implemented, where each Wait will 
+// increase the acknowledgement count, and notify the Postman. When the 
+// acknowledgement count equals the number of wait functions, the Postman will 
+// proceed to dispatch the message to the right handler(s).
+
+unsigned int 						AcknowledgementCount;
+std::condition_variable ContinueMessageProcessing;
+
+// It could be that a wait is still active when the actor terminates. The wait 
+// must then be aborted, and there is specific flag for this that is checked 
+// by the Wait method when it regains control. 
+
+bool AbortWait;
+
+// The wait function is defined as it is for Theron, with an optional number 
+// of messages to wait for. Note that in contrast with the receiver, an actor 
+// will quietly process messages until this function is called, and it will 
+// continue to process messages after the Wait terminates. 
+
+public:
+	
+MessageCount Wait( const MessageCount MessageLimit = 1 );
+
+/*=============================================================================
+
+ Constructors and destructor
+
+=============================================================================*/
+
+// The actor allows the a user defined name to be given, and if it is omitted 
+// it will be assigned by default as "ActorNN" where NN is the numerical ID of 
+// the actor.
+
+inline Actor( const std::string & ActorName = std::string() )
+: ActorID( this, ActorName ), 
+  Mailbox(), QueueGuard(), 
+  MessageHandlers(), DefaultHandler(), Postman(), 
+  WaiterCount(0), OneMessageArrived(), WaitGuard(), 
+  AcknowledgementCount(0), ContinueMessageProcessing()
+{
+	// The flags for message processing is set by default to false as there is no
+	// message that has arrived yet
+	
+	NewMessage = false;
+	
+	// The default error handling policy is to throw on unhanded messages
+	
+	MessageErrorPolicy = MessageError::Throw;
+}
+
+// The destructor needs to consider the situation where the actor is destroyed 
+// while there is an active wait for more messages. It must also wait until 
+// the processing of all messages has taken place by the Postman.
+
+virtual ~Actor( void );
+
+/*=============================================================================
+
+ Compatibility Framework
+
+=============================================================================*/
+
+// The Framework has a set of parameters mainly concerned with the the 
+// scheduling of actors, which is here left for the operating system entirely
+
+class Parameters
+{
+public:
+	
+	unsigned int  mThreadCount, 
+							  mNodeMask,
+							  mProcessorMask;
+  YieldStrategy mYieldStrategy;
+	float         mThreadPriority;
+
+	Parameters( const uint32_t threadCount = 16, const uint32_t nodeMask = 0x1, 
+							const uint32_t processorMask = 0xFFFFFFFF, 
+						  const YieldStrategy yieldStrategy 
+																	  = YieldStrategy::YIELD_STRATEGY_CONDITION, 
+						 const float priority=0.0f )
+	: mThreadCount( threadCount ), mNodeMask( nodeMask ), 
+	  mProcessorMask( processorMask ), mYieldStrategy( yieldStrategy ),
+	  mThreadPriority( priority )
+	{ }
+};
+
+// The function returning the framework will therefore really only return this 
+// actor.
+
+inline Framework & GetFramework( void )
+{ return *this; }
+
+// The following set of parameter related functions have absolutely no effect
+// since the framework does nothing
+
+inline void SetMaxThreads(const unsigned int count)
+{ }
+
+inline void SetMinThreads(const unsigned int count)
+{ }
+
+inline unsigned int GetMaxThreads( void ) const
+{ return 1; }
+
+inline unsigned int GetMinThreads( void ) const 
+{ return 1; }
+
+inline unsigned int GetNumThreads( void ) const 
+{ return 1; }
+
+inline unsigned int GetPeakThreads( void ) const 
+{ return 1; }
+
+inline unsigned int GetNumCounters( void ) const
+{ return 0; }
+
+inline void ResetCounters( void )
+{ }
+
+// The framework constructors mainly delegates to the Actor constructor to 
+// do the work. When no name is passed, the actor is called "Framework", which 
+// should prevent the construction of two actors with the same name.
+
+Actor( const unsigned int ThreadCount )
+: Actor( "Framework" )
+{ }
+
+Actor( const Parameters & params = Parameters() )
+: Actor( "Framework" )
+{ }
+
+Actor( EndPoint & endPoint, const char *const name = 0, 
+			 const Parameters & params = Parameters() )
+: Actor( std::string( name ).empty() ? "Framework" : name )
+{ }
+
 };			// Class Actor
+
+/*=============================================================================
+
+ Compatibility definitions
+
+=============================================================================*/
+
+// The addresses in Theron are top level objects, although this is conceptually
+// wrong as an address cannot exist without the actors. However, in order to 
+// satisfy legacy references to Theron address they are re-defined as own 
+// objects.
+
+using Address = Actor::Address;
+
+// The Endpoint class really only stores the name of this endpoint
+
+class Endpoint
+{
+public:
+	
+	// Empty parameters as they are in Theron
+	
+	struct Parameters
+	{ };
+	
+private:
+	
+	std::string EndPointName, EndPointLocation;
+	
+public:
+	
+	// The only public method is the one to obtain the name of the endpoint
+	
+	inline std::string GetName( void )
+	{ return EndPointName; }
+
+	// There is also a connect function, but this is anyway deferred to the 
+	// Network endpoint (see that class file)
+		
+	Endpoint( const char * const Name, const char * const Location, 
+						const Parameters params=Parameters() )
+	: EndPointName( Name ), EndPointLocation( Location )
+	{ }
+	
+	~Endpoint( void )
+	{ }
+};
+
+// -----------------------------------------------------------------------------
+// Receiver
+// -----------------------------------------------------------------------------
+//
+// The receiver should essentially be unnecessary, however the functionality is 
+// slightly different from an actor the way it is described in Theron where it 
+// seems to put all received messages on hold and consume them with either the 
+// consume message or the wait message. It is therefore implemented similarly 
+// here with a separate message queue.
+
+class Receiver : public Actor
+{
+private:
+	
+	// Buffered messages are kept in a message queue, and there is a mutex to 
+	// protect access to this queue.
+	
+	MessageQueue MessageBuffer;
+	std::mutex   BufferGuard;
+	
+	// There is a waiting flag which is true if the wait function is invoked and 
+	// there are not sufficient messages buffered. In this case, the enqueue 
+	// method should not buffer incoming messages but let them through to the 
+	// actor for immediate processing.
+	
+	bool Waiting;
+	
+protected:
+	
+	// The Actor's enqueue is captured and the delivered message is just put in 
+	// the message buffer to be processed by the Wait or the Consume methods.
+	
+	virtual bool EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage )
+	{
+		std::lock_guard< std::mutex > Lock( BufferGuard );
+		
+		if ( Waiting )
+			Actor::EnqueueMessage( TheMessage );
+		else
+			MessageBuffer.push( TheMessage );
+		
+		return true;
+	}
+
+public:
+	
+	// The Consume function takes a number of messages up to the message limit 
+	// or to the end of the buffer and hands these over to the Actor's enqueue 
+	// function for processing. After passing on the messages it will wait for 
+	// the Postman to complete the processing of these messages before terminating
+	// with the number of messages that could be processed.
+	
+	MessageCount Consume( MessageCount MessageLimit )
+	{
+		std::lock_guard< std::mutex > Lock( BufferGuard );
+		
+		MessageCount TheCount  = std::min( MessageBuffer.size(), MessageLimit ),
+								 Served = 0;
+		
+		while ( TheCount > 0 )
+		{
+			Actor::EnqueueMessage( MessageBuffer.front() );
+			MessageBuffer.pop();
+			TheCount--;
+			Served++;
+		}
+
+		// In order to ensure ordered delivery of messages, the processing of the 
+		// buffered messages must complete before it is possible to terminate. 
+				
+		DrainMailbox();
+		
+		return Served;
+	}
+	
+	// The Count function simply returns the number of messages in the buffer.
+	// This read operation should not necessitate a lock.
+	
+	inline MessageCount Count( void )
+	{ return MessageBuffer.size(); }
+	
+	// The reset function just clears the message buffer. However since the queue
+	// has no clear function, the elements must be popped one by one off the queue
+	
+	inline void Reset( void )
+	{
+		std::lock_guard< std::mutex > Lock( BufferGuard );
+		
+		while ( ! MessageBuffer.empty() )
+			MessageBuffer.pop();
+	}
+	
+	// The wait function is a dual interface: It will first consume the number 
+	// of messages in the buffer up to the minimum value of the given limit and 
+	// the buffer size. Then it will wait for the remaining messages using the 
+	// Actor's wait function.
+	
+	inline MessageCount Wait( MessageCount MessageLimit = 1 )
+	{
+		MessageCount MessagesToConsume = std::min( Count(), MessageLimit );
+		
+		if ( MessageLimit - MessagesToConsume > 0 )
+		{
+			// There are more messages to be awaited than currently in the buffer, 
+			// and it is necessary to instruct the Enqueue Message function to deliver 
+			// messages directly to the mailbox to be immediately processed and 
+			// counted by the actor's wait function.   
+			
+			Waiting = true;									
+			
+			Consume( MessagesToConsume );
+		
+			MessageCount AwaitedMessages =
+															 Actor::Wait( MessageLimit - MessagesToConsume );
+		  Waiting = false;
+			return MessagesToConsume + AwaitedMessages;
+		}
+		else
+		{
+			// It is not possible to Consume the messages before the If-block because
+			// the wait flag should be set before the consumption of buffered 
+			// messages if a wait on new arriving messages is necessary. 
+			
+			Consume( MessagesToConsume );
+			return MessagesToConsume;
+		}
+	}
+	
+	// The receiver has two constructors, one without argument that will give 
+	// the receiver a default ActorNN name, and one for which a name can be 
+	// given, but also an endpoint reference is needed. 
+	
+	Receiver( void )
+	: Actor( std::string() ), MessageBuffer(), BufferGuard()
+	{ }
+	
+	Receiver( EndPoint & endPoint, const char *const name = 0 )
+	: Actor( std::string( name ) ), MessageBuffer(), BufferGuard()
+	{ }
+};
+
 }				// Name space Theron
 #endif  // THERON_REPLACEMENT_ACTOR
