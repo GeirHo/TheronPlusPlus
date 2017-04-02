@@ -30,6 +30,10 @@ std::mutex Theron::Actor::Identification::InformationAccess;
 Theron::Actor * 
 Theron::Actor::RemoteIdentity::ThePresentationLayerServer = nullptr;
 
+// For compatibility reasons there is a global framework pointer
+
+Theron::Framework * Theron::Actor::GlobalFramework = nullptr;
+
 // -----------------------------------------------------------------------------
 // Static functions 
 // -----------------------------------------------------------------------------
@@ -167,7 +171,7 @@ Theron::Actor::EndpointIdentity::EndpointIdentity(
 {
 	std::lock_guard< std::mutex > Lock( InformationAccess );
 	
-	auto Outcome = ActorsByName.emplace( Name, TheActor );
+	auto Outcome = ActorsByName.emplace( Name, &(TheActor->ActorID) );
 	
 	if ( Outcome.second != true )
 	{
@@ -179,7 +183,7 @@ Theron::Actor::EndpointIdentity::EndpointIdentity(
 		throw std::invalid_argument( ErrorMessage.str() );
 	}
 	
-	ActorsByID.emplace( NumericalID, TheActor );
+	ActorsByID.emplace( NumericalID, &(TheActor->ActorID) );
 }
 
 // The destructor first invalidates all addresses that references this actor,
@@ -267,7 +271,7 @@ Theron::Actor::RemoteIdentity::RemoteIdentity( const std::string & ActorName )
 // to the right handler.
 
 bool Theron::Actor::EnqueueMessage( 
-																std::shared_ptr< GenericMessage > & TheMessage )
+													const	std::shared_ptr< GenericMessage > & TheMessage )
 {
 	// Enqueue the message 
 	
@@ -313,50 +317,7 @@ void Theron::Actor::DispatchMessages( void )
 		
 		auto CurrentHandler = MessageHandlers.begin();
 		bool MessageServed  = false;
-		
-		// If one or more Wait functions have been called, this message should not 
-		// be processed before they all have acknowledged the notification about 
-		// the new message arrival.
-		
-		if ( WaiterCount > 0 )
-		{
-			// It is necessary to lock to guard so that no other thread will try to 
-			// set the two flag variables at the same time. 
-			
-			std::unique_lock< std::mutex > Lock( WaitGuard );
-			
-			// The flag indicating that a new message has arrived should be set so 
-			// Wait functions know why they are notified. The counter for 
-			// acknowledgements is also reset to count only real, new acknowledgements
-			
-			NewMessage 					 = true;
-			AcknowledgementCount = 0;
-			
-			// Then all the Wait functions can be notified. A subtle point is that 
-			// if one of the Wait functions finishes the wait by this message, it will 
-			// reduce the count of waiters, so the number of received acknowledgements
-			// will be higher than the Waiter Count. It is therefore necessary to 
-			// remember how many Wait functions that were notified, and only continue 
-			// processing when this number of acknowledgements has been received.
-			
-			unsigned int NotifiedWaiters = WaiterCount;
-			
-			OneMessageArrived.notify_all();
-			
-			// Then the dispatcher will wait until all the Wait functions have seen 
-			// and acknowledged this notification.
-			
-			ContinueMessageProcessing.wait( Lock, 
-				  [&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; }  );
-			
-			// The New Message flag is then cleared. Note that the lock was released 
-			// by the condition variable wait, and re-locked when the wait ends, and 
-			// it will be unlocked permanently when the unique lock object is 
-			// destroyed at the end of this code block.
-			
-			NewMessage = false;
-		}
-		
+				
 		// ...and then loop over all handlers to allow them to manage the message 
 		// if they are able to.
 		
@@ -424,9 +385,10 @@ void Theron::Actor::DispatchMessages( void )
 			else if ( MessageErrorPolicy == MessageError::Throw )
 		  {
 				std::ostringstream ErrorMessage;
+				auto RawMessagePointer = *(Mailbox.front());
 				
 				ErrorMessage << "No message handler for the message " 
-										 << typeid( *(Mailbox.front()) ).name() 
+										 << typeid( RawMessagePointer ).name() 
 										 << " and no default message handler!";
 										 
 			  throw std::logic_error( ErrorMessage.str() );
@@ -439,6 +401,49 @@ void Theron::Actor::DispatchMessages( void )
 		QueueGuard.lock();
 		Mailbox.pop();
 		QueueGuard.unlock();
+		
+		// If one or more Wait functions have been called, next message should not 
+		// be processed before they all have acknowledged the notification about 
+		// the the arrival of this message.
+		
+		if ( WaiterCount > 0 )
+		{
+			// It is necessary to lock to guard so that no other thread will try to 
+			// set the two flag variables at the same time. 
+			
+			std::unique_lock< std::mutex > Lock( WaitGuard );
+			
+			// The flag indicating that a new message has arrived should be set so 
+			// Wait functions know why they are notified. The counter for 
+			// acknowledgements is also reset to count only real, new acknowledgements
+			
+			NewMessage 					 = true;
+			AcknowledgementCount = 0;
+			
+			// Then all the Wait functions can be notified. A subtle point is that 
+			// if one of the Wait functions finishes the wait by this message, it will 
+			// reduce the count of waiters, so the number of received acknowledgements
+			// will be higher than the Waiter Count. It is therefore necessary to 
+			// remember how many Wait functions that were notified, and only continue 
+			// processing when this number of acknowledgements has been received.
+			
+			unsigned int NotifiedWaiters = WaiterCount;
+			
+			OneMessageArrived.notify_all();
+			
+			// Then the dispatcher will wait until all the Wait functions have seen 
+			// and acknowledged this notification.
+			
+			ContinueMessageProcessing.wait( Lock, 
+				  [&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; }  );
+			
+			// The New Message flag is then cleared. Note that the lock was released 
+			// by the condition variable wait, and re-locked when the wait ends, and 
+			// it will be unlocked permanently when the unique lock object is 
+			// destroyed at the end of this code block.
+			
+			NewMessage = false;
+		}
 	}
 }
 

@@ -27,7 +27,7 @@ PresentationLayer * PresentationLayer::Pointer;
   last files seen, we hope that it will be used instead of the library defined
   function (so we do not have to temper with the library implementation).
 ******************************************************************************/
-
+/*
 bool EndPoint::RequestSend( Detail::IMessage *const message, 
 			    const Detail::String &name)
 {
@@ -55,5 +55,5 @@ bool EndPoint::RequestSend( Detail::IMessage *const message,
     return true;
   }
 }
-
+*/
 } // End namespace Theron

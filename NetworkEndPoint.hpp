@@ -255,13 +255,14 @@ public:
   // endpoint (node), but it is simply ignored since the actor presence is 
   // indicated by the boolean return value of the lookup function.
   
+/*
   bool IsLocalActor( const Address & RequestedActorID )
   {
     Detail::Index MessageQueue;
     return Lookup( Detail::String( RequestedActorID.AsString() ), 
-		   MessageQueue );
+								   MessageQueue );		
   }
-  
+*/  
   // ---------------------------------------------------------------------------
   // Shut down management
   // ---------------------------------------------------------------------------

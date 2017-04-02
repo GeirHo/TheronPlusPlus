@@ -23,14 +23,6 @@ measure, and if the execution environment cannot cope with this policy a
 thread pool and a scheduling policy can be implemented, although it currently 
 contradicts the second design principle.
 
-TODO:The current implementation is not able to intercept messages to actors on 
-remote nodes, and more thinking is needed on how to do this in a consistent way
-to ensure complete transparency for the involved actors. Including a "To" field
-in the message would allow it to be intercepted if there is no local actor,
-but the address is now linked to active local actors. Sending by name raises 
-a secondary issue on how to distinguish between endpoint external actors and 
-actors that have closed.
-
 Author and Copyright: Geir Horn, 2017
 License: LGPL 3.0
 =============================================================================*/
@@ -42,6 +34,7 @@ License: LGPL 3.0
 #include <memory>							// Smart pointers
 #include <queue>							// For the queue of messages
 #include <mutex>						  // To protect the queue
+#include <utility>						// Pairs
 #include <unordered_map>			// To map actor names to actors
 #include <set>							  // To keep track of actor addresses
 #include <functional>					// For defining handler functions
@@ -60,12 +53,12 @@ namespace Theron {
 // has a method that returns a pointer to it. Basically the actor is fully 
 // replacing the framework. All compatibility classes are defined at the end.
 
-using Framework = class Actor;
+class Framework;
 
 // There are enumerations for a yield strategy, and since the scheduling is 
 // left for the operating system, these strategies will have no effect.
 
-enum class YieldStrategy 
+enum YieldStrategy 
 {
   YIELD_STRATEGY_CONDITION = 0,
   YIELD_STRATEGY_HYBRID,
@@ -193,7 +186,7 @@ public:
 	// throw invalid_argument if the address is not for a valid and running actor.
 	
 	static Actor * GetActor( const Address & ActorAddress );
-		
+	
 	// When an address is created, it needs to register with the identification 
 	// object representing the actor. A local actor on this endpoint will 
 	// remember registrations and make sure that they are invalidated when the 
@@ -381,11 +374,12 @@ private:
 	
 	// The identity class is allowed to read the actor pointer, and the endpoint
 	// identity is allowed to invalidate a reference if the endpoint actor is 
-	// closing.
-
+	// closing. The Actor class is also allowed to access this pointer
+	
+  friend class Actor;
 	friend class Identification;	
 	friend class EndpointIdentity;
-	
+		
 public:
 	
 	// The constructor takes the pointer to the actor identification class of 
@@ -449,6 +443,8 @@ public:
 		TheActor = OtherAddress.TheActor;
 		
 		if ( TheActor != nullptr ) TheActor->Register( this );
+		
+		return *this;
 	}
 	
 	// It should have a static function Null to allow test addresses
@@ -525,8 +521,26 @@ public:
 // being able to access and potentially change the actor's state through this
 // address pointer.
 
-inline Address GetAddress( void )
-{	return Address( &ActorID ); }
+inline Address GetAddress( void ) const
+{	
+	return Identification::Lookup( ActorID.NumericalID ); 
+}
+
+// There is another function to check if a given address is a local actor. 
+// Again RTTI is used when trying to cast the identification pointer to a local
+// address and if this is successful the actor is taken to be local.
+
+inline bool IsLocalActor( const Address & RequestedActorID ) const
+{
+	Identification   * TheActorID      = RequestedActorID.TheActor;
+	EndpointIdentity * VerifiedPointer = 
+															  dynamic_cast< EndpointIdentity *>( TheActorID );
+  
+  if ( VerifiedPointer == nullptr )
+		return false;
+	else
+		return true;
+}
 	
 /*=============================================================================
 
@@ -565,6 +579,13 @@ public:
 	
 	inline GenericMessage( const Address & Sender, const Address & Receiver )
 	: From( Sender ), To( Receiver )
+	{ }
+	
+	// It is important to make this class polymorphic by having at least one 
+	// virtual method, and it must in order to ensure proper destruction of the 
+	// derived messages.
+	
+	virtual ~GenericMessage( void )
 	{ }
 };
 
@@ -618,7 +639,8 @@ std::mutex QueueGuard;
 
 protected: 
 	
-virtual bool EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage );
+virtual 
+bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage );
 
 // Theron provides a function to check the number of queued messages, which 
 // essentially only returns the current queue size, including the message 
@@ -732,13 +754,12 @@ public:
 	// same signature as the actual handler, and it is specified to call the 
 	// function on the actor having this handler.
 	
-	const 
 	void (ActorType::*HandlerFunction)( const MessageType &, const Address );
 	
 	// The pointer to the actor having this handler function is also stored 
 	// since it is the easiest way to make sure it is the right actor type.
 	
-	const ActorType * TheActor;
+	ActorType * const TheActor;
 		
 	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
 	{
@@ -750,8 +771,8 @@ public:
 			// The message could be converted to this message type, and the handler 
 			// can be invoked through the handler pointer on the stored actor
 			
-			(TheActor.*HandlerFunction)( *(TypedMessage->TheMessage), 
-																	   TypedMessage->From );
+			(TheActor->*HandlerFunction)( *(TypedMessage->TheMessage), 
+																	    TypedMessage->From );
 			return true;
 		}
 		else 
@@ -761,8 +782,16 @@ public:
 	// The constructor stores the handler function.
 	
 	Handler( ActorType * HandlingActor,
-	const void (ActorType::*GivenHandler)( const MessageType &, const Address ))
+     void (ActorType::*GivenHandler)( const MessageType &, const Address ))
 	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
+	{ }
+	
+	// There is a copy constructor to allow this to be used with standard 
+	// containers
+	
+	Handler( const Handler<ActorType, MessageType> & OtherHandler )
+	: GenericHandler(), HandlerFunction( OtherHandler.HandlerFunction ),
+	  TheActor( OtherHandler.TheActor )
 	{ }
 	
 	virtual ~Handler( void )
@@ -806,7 +835,9 @@ inline bool RegisterHandler( ActorType  * const TheActor,
 																								const Address From ) )
 {
 	TheActor->MessageHandlers.push_back( 
-		std::make_shared< Handler< ActorType, MessageType > >( TheHandler ) );
+	std::make_shared< Handler< ActorType, MessageType > >(TheActor, TheHandler) );
+	
+	return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -860,15 +891,15 @@ inline bool DeregisterHandler( ActorType  * const HandlingActor,
 	// the size of the handler list must be checked before and after the 
 	// removal.
 	
-	auto InitialHandlerCount = MessageHandlers.size();
+	auto InitialHandlerCount = HandlingActor->MessageHandlers.size();
 	
 	// With the comparator it is easy to remove the handlers of this type
 	
-	MessageHandlers.remove_if( ToBeRemoved );
+	HandlingActor->MessageHandlers.remove_if( ToBeRemoved );
 	
 	// Then a meaningful feedback can be given
 	
-	if ( InitialHandlerCount == MessageHandlers.size() )
+	if ( InitialHandlerCount == HandlingActor->MessageHandlers.size() )
 		return false;
 	else
 		return true;
@@ -910,7 +941,8 @@ inline bool IsHandlerRegistered ( ActorType  * const HandlingActor,
 	// the given actor and handler function.
 	
 	return 
-	std::any_of( MessageHandlers.begin(), MessageHandlers.end(), IsHandler );
+	std::any_of( HandlingActor->MessageHandlers.begin(), 
+							 HandlingActor->MessageHandlers.end(), IsHandler );
 }
 
 // -----------------------------------------------------------------------------
@@ -939,7 +971,7 @@ public:
 	
 	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
 	{
-		(TheActor.* HandlerFunction)( TheMessage->From );
+		(TheActor->* HandlerFunction)( TheMessage->From );
 		return true;
 	}
 	
@@ -960,8 +992,10 @@ template< class ActorType >
 inline bool SetDefaultHandler( ActorType  *const TheActor, 
 											  void ( ActorType::*TheHandler )( const Address From ))
 {
-	DefaultHandler = std::make_shared< DefaultHandlerFrom< ActorType> >( 
-									 TheActor, TheHandler );
+	TheActor->DefaultHandler = std::make_shared< DefaultHandlerFrom< ActorType> >( 
+														 TheActor, TheHandler );
+	
+	return true;
 }
 
 // The alternative callback function takes a void data pointer, its size and 
@@ -986,12 +1020,12 @@ public:
 	{
 		std::ostringstream ErrorMessage;
 		
-		ErrorMessage << "Message type is " << typeid( *TheMessage ).name();
+		ErrorMessage << "Message type is " << typeid( TheMessage ).name();
 		
 		std::string Description( ErrorMessage.str() );
 		
-		(TheActor.*HandlerFunction)( &Description, sizeof( Description ), 
-																 TheMessage->From );
+		(TheActor->*HandlerFunction)( &Description, sizeof( Description ), 
+																  TheMessage->From );
 		
 		return true;
 	}
@@ -1010,13 +1044,14 @@ public:
 
 protected:
 
-template <class ActorType>
+template< class ActorType >
 inline bool SetDefaultHandler( ActorType *const TheActor,
 	     void (ActorType::*TheHandler)( const void *const Data, 
 																			const uint32_t Size, const Address From ))
 {
-	DefaultHandler = std::make_shared< DefaultHandlerData< ActorType > >(
-								   TheActor, TheHandler );
+ 	TheActor->DefaultHandler = std::make_shared< DefaultHandlerData< ActorType > >(
+													   TheActor, TheHandler );
+	return true;
 }
 
 /*=============================================================================
@@ -1114,7 +1149,16 @@ unsigned int WaiterCount;
 // consuming all arrived messages up to the specified maximum. Otherwise it 
 // blocks until a message arrives, whereupon the thread is woken and returns."
 // In other words, the postman should halt when the message arrives, notify 
-// all Wait threads, and then continue with the processing of the message.
+// all Wait threads, and then continue with the processing of the message. 
+// However, this does not correspond to the Consume function, and it is 
+// illogical since the waiting thread could start processing before the 
+// receiving agent has processed the incoming message and thereby the agent 
+// waited for may have the same state as before the wait started. A further 
+// complication is if the agent is serving multiple messages - in this case 
+// it is necessary to check that the right message has arrived, and then the 
+// message must be processed when wait returns. In conclusion: The notification
+// to the threads waiting for a message will happen AFTER the message has been 
+// consumed by the actor.
 // 
 // This requires one condition variable for the Wait threads to use when waiting
 // for the next message, and one mutex that can be used to set up the wait or
@@ -1197,79 +1241,33 @@ virtual ~Actor( void );
 
 =============================================================================*/
 
-// The Framework has a set of parameters mainly concerned with the the 
-// scheduling of actors, which is here left for the operating system entirely
+// One constructor to use with the framework, which has no effect here
 
-class Parameters
-{
-public:
-	
-	unsigned int  mThreadCount, 
-							  mNodeMask,
-							  mProcessorMask;
-  YieldStrategy mYieldStrategy;
-	float         mThreadPriority;
+Actor( Framework & TheFramework, std::string TheName = std::string() )
+: Actor( TheName )
+{ }
 
-	Parameters( const uint32_t threadCount = 16, const uint32_t nodeMask = 0x1, 
-							const uint32_t processorMask = 0xFFFFFFFF, 
-						  const YieldStrategy yieldStrategy 
-																	  = YieldStrategy::YIELD_STRATEGY_CONDITION, 
-						 const float priority=0.0f )
-	: mThreadCount( threadCount ), mNodeMask( nodeMask ), 
-	  mProcessorMask( processorMask ), mYieldStrategy( yieldStrategy ),
-	  mThreadPriority( priority )
-	{ }
-};
+// It is currently impossible to exclude the framework completely and so there 
+// most be a framework somewhere, and in order to know where, the address of 
+// this specific actor is stored with all actors as a static variable.
+
+private:
+
+static Framework * GlobalFramework;
+
+// The Framework must also be a friend to be allowed to set this pointer when 
+// it is created.
+
+friend class Framework;
 
 // The function returning the framework will therefore really only return this 
-// actor.
+// pointer de-referenced.
 
-inline Framework & GetFramework( void )
-{ return *this; }
+public: 
+	
+inline Framework & GetFramework( void ) const
+{ return *GlobalFramework; }
 
-// The following set of parameter related functions have absolutely no effect
-// since the framework does nothing
-
-inline void SetMaxThreads(const unsigned int count)
-{ }
-
-inline void SetMinThreads(const unsigned int count)
-{ }
-
-inline unsigned int GetMaxThreads( void ) const
-{ return 1; }
-
-inline unsigned int GetMinThreads( void ) const 
-{ return 1; }
-
-inline unsigned int GetNumThreads( void ) const 
-{ return 1; }
-
-inline unsigned int GetPeakThreads( void ) const 
-{ return 1; }
-
-inline unsigned int GetNumCounters( void ) const
-{ return 0; }
-
-inline void ResetCounters( void )
-{ }
-
-// The framework constructors mainly delegates to the Actor constructor to 
-// do the work. When no name is passed, the actor is called "Framework", which 
-// should prevent the construction of two actors with the same name.
-
-Actor( const unsigned int ThreadCount )
-: Actor( "Framework" )
-{ }
-
-Actor( const Parameters & params = Parameters() )
-: Actor( "Framework" )
-{ }
-
-Actor( EndPoint & endPoint, const char *const name = 0, 
-			 const Parameters & params = Parameters() )
-: Actor( std::string( name ).empty() ? "Framework" : name )
-{ }
 
 };			// Class Actor
 
@@ -1288,14 +1286,19 @@ using Address = Actor::Address;
 
 // The Endpoint class really only stores the name of this endpoint
 
-class Endpoint
+class EndPoint
 {
 public:
 	
 	// Empty parameters as they are in Theron
 	
-	struct Parameters
-	{ };
+  class Parameters
+	{ 
+	public:
+		
+		Parameters( void )
+		{ }
+	};
 	
 private:
 	
@@ -1311,15 +1314,113 @@ public:
 	// There is also a connect function, but this is anyway deferred to the 
 	// Network endpoint (see that class file)
 		
-	Endpoint( const char * const Name, const char * const Location, 
-						const Parameters params=Parameters() )
+	EndPoint( const char * const Name, const char * const Location, 
+						const Parameters params = Parameters() )
 	: EndPointName( Name ), EndPointLocation( Location )
 	{ }
 	
-	~Endpoint( void )
+	~EndPoint( void )
 	{ }
 };
 
+// The Framework has a set of parameters mainly concerned with the the 
+// scheduling of actors, which is here left for the operating system entirely
+
+class Framework : public Actor
+{
+public: 
+	
+	class Parameters
+	{
+	public:
+		
+		unsigned int  mThreadCount, 
+								  mNodeMask,
+								  mProcessorMask;
+	  YieldStrategy mYieldStrategy;
+		float         mThreadPriority;
+
+		Parameters( const uint32_t threadCount = 16, const uint32_t nodeMask = 0x1, 
+								const uint32_t processorMask = 0xFFFFFFFF, 
+							  const YieldStrategy yieldStrategy 
+																		  = YieldStrategy::YIELD_STRATEGY_CONDITION, 
+							 const float priority=0.0f )
+		: mThreadCount( threadCount ), mNodeMask( nodeMask ), 
+		  mProcessorMask( processorMask ), mYieldStrategy( yieldStrategy ),
+		  mThreadPriority( priority )
+		{ }
+	};
+
+	// The following set of parameter related functions have absolutely no effect
+	// since the framework does nothing
+
+	inline void SetMaxThreads(const unsigned int count)
+	{ }
+
+	inline void SetMinThreads(const unsigned int count)
+	{ }
+
+	inline unsigned int GetMaxThreads( void ) const
+	{ return 1; }
+
+	inline unsigned int GetMinThreads( void ) const 
+	{ return 1; }
+
+	inline unsigned int GetNumThreads( void ) const 
+	{ return 1; }
+
+	inline unsigned int GetPeakThreads( void ) const 
+	{ return 1; }
+
+	inline unsigned int GetNumCounters( void ) const
+	{ return 0; }
+
+	inline void ResetCounters( void )
+	{ }
+
+	// The Theron Framework has a method to set the fall back handler with respect 
+	// to an actor. However, this is no different from the actors default hander, 
+	// and it is therefore defined as a implicit call on those functions. It must 
+	// be defined for both version of the fall back handler arguments. 
+
+	template< class ActorType >
+	inline bool SetFallbackHandler( ActorType  *const TheActor, 
+												  void ( ActorType::*TheHandler )( const Address From ))
+	{
+		return Actor::SetDefaultHandler( TheActor, TheHandler );
+	}
+
+	template <class ActorType>
+	inline bool SetFallbackHandler( ActorType *const TheActor,
+   void (ActorType::*TheHandler)( const void *const Data, 
+																	const uint32_t Size, const Address From ))
+	{
+		return Actor::SetDefaultHandler( TheActor, TheHandler );
+	}
+
+	// The framework constructors mainly delegates to the Actor constructor to 
+	// do the work. When no name is passed, the actor is called "Framework", which 
+	// should prevent the construction of two actors with the same name.
+
+	Framework( const unsigned int ThreadCount )
+	: Actor( "Framework" )
+	{ 
+		Actor::GlobalFramework = this;
+	}
+
+	Framework( const Parameters & params )
+	: Actor( "Framework" )
+	{
+		Actor::GlobalFramework = this;
+	}
+
+	Framework( EndPoint & endPoint, const char *const name = 0, 
+						 const Parameters & params = Parameters() )
+	: Actor( std::string( name ).empty() ? "Framework" : name )
+	{ 
+		Actor::GlobalFramework = this;
+	}
+};
 // -----------------------------------------------------------------------------
 // Receiver
 // -----------------------------------------------------------------------------
@@ -1352,7 +1453,8 @@ protected:
 	// The Actor's enqueue is captured and the delivered message is just put in 
 	// the message buffer to be processed by the Wait or the Consume methods.
 	
-	virtual bool EnqueueMessage( std::shared_ptr< GenericMessage > & TheMessage )
+	virtual 
+	bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage )
 	{
 		std::lock_guard< std::mutex > Lock( BufferGuard );
 		
@@ -1453,11 +1555,11 @@ public:
 	// given, but also an endpoint reference is needed. 
 	
 	Receiver( void )
-	: Actor( std::string() ), MessageBuffer(), BufferGuard()
+	: Actor(), MessageBuffer(), BufferGuard()
 	{ }
 	
 	Receiver( EndPoint & endPoint, const char *const name = 0 )
-	: Actor( std::string( name ) ), MessageBuffer(), BufferGuard()
+	: Actor( name ), MessageBuffer(), BufferGuard()
 	{ }
 };
 

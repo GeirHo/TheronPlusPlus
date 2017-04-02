@@ -549,7 +549,7 @@ private:
 	// order, meaning that the value of the counter will be set before any of the 
 	// acknowledgements will be processed.
 	
-	class TimeDistribution : protected Receiver
+	class TimeDistribution : public Receiver
 	{
 	private:
 		

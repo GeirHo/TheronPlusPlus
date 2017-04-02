@@ -49,8 +49,8 @@ private:
 	// explanation.
 	
 	void FallbackHandler( const void *const Data, 
-												const Theron::uint32_t Size, 
-												const Theron::Address From )
+												const uint32_t Size, 
+												const Address From )
 	{
 		std::ostringstream ErrorMessage;
 		const char * ByteString = reinterpret_cast< const char * >( Data );
@@ -59,7 +59,7 @@ private:
 								 << " to " << GetAddress().AsString()
 								 << " from " << From.AsString() << " with data ";
 								 
-		for ( Theron::uint32_t i=0; i < Size; i++ )
+		for ( unsigned int i=0; i < Size; i++ )
 			ErrorMessage << ByteString[i] << " ";
 		
 		//throw std::runtime_error( ErrorMessage.str() );

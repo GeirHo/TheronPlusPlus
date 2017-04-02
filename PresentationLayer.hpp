@@ -577,9 +577,9 @@ public:
   // be ready for use directly.
   
   DeserializingActor( Framework & TheFramework, 
-								      const char* const name = nullptr )
-  : Actor( TheFramework, name ),
-    StandardFallbackHandler( TheFramework, name )
+								      const std::string name = std::string() )
+  : Actor( TheFramework, name.empty() ? nullptr : name.data() ),
+    StandardFallbackHandler( TheFramework, GetAddress().AsString() )
   {
     RegisterHandler(this, &DeserializingActor::SerializedMessageHandler );		
   }
