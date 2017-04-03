@@ -83,10 +83,10 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 		return Theron::Actor::Address( TheActor->second );
 }
 
-// The function setting the session layer will throw a logic error if another 
-// actor already has claimed the role of a session layer, and the given pointer
-// is not null, i.e. that this is invoked by an actor currently acting as the 
-// session layer, but about to close.
+// The function setting the presentation layer will throw a logic error if 
+// another actor already has claimed the role of a presentation layer, and the 
+// given pointer is not null, i.e. that this is invoked by an actor currently 
+// acting as the presentation layer, but about to close.
 
 void Theron::Actor::RemoteIdentity::SetPresentationLayerServer( 
 																											Theron::Actor * TheSever )
@@ -97,6 +97,7 @@ void Theron::Actor::RemoteIdentity::SetPresentationLayerServer(
 		// session layer server should be removed - with no session layer server
 		// it is not possible to communicate externally and the external references
 		// should be invalidated.
+		// TODO: Implement this functionality
 	}
 	else if ( ThePresentationLayerServer == nullptr  )
 		ThePresentationLayerServer = TheSever;
@@ -104,7 +105,7 @@ void Theron::Actor::RemoteIdentity::SetPresentationLayerServer(
 	{
 		std::ostringstream ErrorMessage;
 		 
-		ErrorMessage << "The session layer server is already set to actor "
+		ErrorMessage << "The presentation layer server is already set to actor "
 								 << ThePresentationLayerServer->ActorID.Name;
 								 
 	  throw std::logic_error( ErrorMessage.str() );
@@ -178,7 +179,8 @@ Theron::Actor::EndpointIdentity::EndpointIdentity(
 		std::ostringstream ErrorMessage;
 		
 		ErrorMessage << "An actor with the name " << Name 
-								 << " does already exist!";
+								 << " does already exist! This ID = " << NumericalID
+								 << " other ID = " << Outcome.first->second->NumericalID;
 		
 		throw std::invalid_argument( ErrorMessage.str() );
 	}
@@ -281,9 +283,12 @@ bool Theron::Actor::EnqueueMessage(
 	
 	// If the postman is not working, then it will be started. A small detail
 	// is that the 'this' pointer must be explicitly passed in order to use 
-	// a class member function for a thread.
+	// a class member function for a thread. It is also an issue that the thread
+	// is not joinable before it is started, so if the messages are delivered 
+	// too quickly there can be a race condition on the thread. The mailbox 
+	// size check is hopefully preventing this problem.
 	
-	if ( ! Postman.joinable() )
+	if ( (Mailbox.size() == 1) && (! Postman.joinable()) )
 		Postman = std::thread( &Actor::DispatchMessages, this );
 	
 	return true;
@@ -317,7 +322,12 @@ void Theron::Actor::DispatchMessages( void )
 		
 		auto CurrentHandler = MessageHandlers.begin();
 		bool MessageServed  = false;
-				
+		
+		// It is an overhead to call Mailbox front for each handler as the first 
+		// message in the queue can be cached
+		
+		auto TheMessage = Mailbox.front();
+		
 		// ...and then loop over all handlers to allow them to manage the message 
 		// if they are able to.
 		
@@ -346,7 +356,7 @@ void Theron::Actor::DispatchMessages( void )
 			// handler de-registering this handler, it will return with the deleted 
 			// state.
 						
-			if( (*CurrentHandler)->ProcessMessage( Mailbox.front() ) )
+			if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
 		  {
 				MessageServed = true;
 				
@@ -411,7 +421,7 @@ void Theron::Actor::DispatchMessages( void )
 			// It is necessary to lock to guard so that no other thread will try to 
 			// set the two flag variables at the same time. 
 			
-			std::unique_lock< std::mutex > Lock( WaitGuard );
+		  std::unique_lock< std::mutex > Lock( WaitGuard );
 			
 			// The flag indicating that a new message has arrived should be set so 
 			// Wait functions know why they are notified. The counter for 
@@ -427,15 +437,15 @@ void Theron::Actor::DispatchMessages( void )
 			// remember how many Wait functions that were notified, and only continue 
 			// processing when this number of acknowledgements has been received.
 			
-			unsigned int NotifiedWaiters = WaiterCount;
+	//		unsigned int NotifiedWaiters = WaiterCount;
 			
 			OneMessageArrived.notify_all();
 			
 			// Then the dispatcher will wait until all the Wait functions have seen 
 			// and acknowledged this notification.
 			
-			ContinueMessageProcessing.wait( Lock, 
-				  [&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; }  );
+	//		ContinueMessageProcessing.wait( Lock, 
+	//			  [&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; }  );
 			
 			// The New Message flag is then cleared. Note that the lock was released 
 			// by the condition variable wait, and re-locked when the wait ends, and 
@@ -443,7 +453,7 @@ void Theron::Actor::DispatchMessages( void )
 			// destroyed at the end of this code block.
 			
 			NewMessage = false;
-		}
+		}		
 	}
 }
 
@@ -501,6 +511,35 @@ Theron::Actor::MessageCount Theron::Actor::Wait(
 		return --Counter;
 	else
 		return Counter;
+}
+
+// The wait for global termination is based on the fact that only internal 
+// actors register by ID, so it is safe to go through the registry and join 
+// threads that are working until all queues are empty and all threads have 
+// stopped. 
+
+void Theron::Actor::Identification::WaitForGlobalTermination( void )
+{
+	auto ActorReference = ActorsByID.begin();
+	
+	while ( ActorReference != ActorsByID.end() )
+  {
+		EndpointIdentity * TheID = 
+									dynamic_cast< EndpointIdentity * >( ActorReference->second );
+		
+		// If the actor has messages, the mailbox should be drained. After that, 
+		// the iteration will restart from the beginning of the actor registry 
+		// because actors previously without messages may now have messages. 
+		// Otherwise, the search just continues with the next actor.
+									
+		if ( TheID && (TheID->ActorPointer->GetNumQueuedMessages() > 0) )
+		{
+			TheID->ActorPointer->DrainMailbox();
+			ActorReference = ActorsByID.begin();
+		}
+		else
+			++ActorReference;
+	}
 }
 
 /*=============================================================================

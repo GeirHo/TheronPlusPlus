@@ -1269,8 +1269,7 @@ public:
     StandardFallbackHandler( HostPointer->GetFramework(), ServerName ),
     SessionLayerMessages(), 
     KnownActors(), 
-    PresentationServer( Address("PresentationLayer") ), 
-    NetworkServer( Address("NetworkLayer") ),
+    PresentationServer(), NetworkServer(),
     Host( HostPointer ),
     NewPeerSubscribers(),
     OutboundResolutionActors(), InboundResolutionActors()

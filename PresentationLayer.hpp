@@ -324,11 +324,13 @@ public:
 		     std::string ServerName = "PresentationLayer"  ) 
   : Actor( TheHost->GetFramework() , ServerName.data() ),
     StandardFallbackHandler( TheHost->GetFramework(), ServerName.data() ),
-    SessionServer( Address( "SessionLayer" ) )
+    SessionServer()
   {
     Pointer      = this;
     TheFramework = dynamic_cast< Theron::Framework * >( TheHost );
     
+		Actor::RemoteIdentity::SetPresentationLayerServer( this );
+		
     RegisterHandler( this, &PresentationLayer::IncomingMessage );
   }
 };

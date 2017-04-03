@@ -46,6 +46,7 @@ License: LGPL 3.0
 #include <stdexcept>				  // To throw standard exceptions
 #include <sstream>						// To provide nice exception messages
 
+#include <iostream>					  // For debugging
 
 namespace Theron {
 	
@@ -170,7 +171,7 @@ protected:
 	// necessary to ensure sequential access by locking a mutex.
 	
 	static std::mutex InformationAccess;
-		
+	
 public:	
 
 	// There are static functions to obtain an address by name or by numerical 
@@ -196,6 +197,13 @@ public:
 	
 	virtual void Register(   Address * NewAddress ) = 0;
 	virtual void DeRegister( Address * OldAddress ) = 0;
+	
+	// It is a recurring problem to keep main() alive until all actors have done 
+	// their work. The following function can be called to all actors have empty 
+	// queues and no running handlers. It should then be safe to close the 
+	// application
+
+	static void WaitForGlobalTermination( void );
 	
 	// The constructor is protected since it can only be used by derived classes,
 	// and it only assigns the ID and the name. If the name string is not given
@@ -299,6 +307,8 @@ public:
 // layer, and trying to create a remote identity before the presentation layer 
 // server has been set will result in a standard logic error exception.
 
+public:
+	
 class RemoteIdentity : public Identification
 {
 private:
@@ -351,8 +361,6 @@ public:
 // reached only through an address object that has a pointer to the actor 
 // ID of the relevant actor. It also provides a method to invalidate this 
 // pointer when the actor closes.
-
-public: 
 	
 class Address
 {
@@ -664,14 +672,19 @@ public:
 
 template< class MessageType >
 inline bool Send( const MessageType & TheMessage, 
-								  const Address & Sender, const Address & Receiver )
+								  const Address & TheSender, const Address & TheReceiver )
 {
-	Actor * ReceivingActor = Identification::GetActor( Receiver );
+	Actor * ReceivingActor = Identification::GetActor( TheReceiver );
 	auto    MessageCopy    = std::make_shared< MessageType >( TheMessage );
 	
+	if( TheSender )
+		std::cout << "SEND: " << TheSender.AsString() << " sends message to " << TheReceiver.AsString() << std::endl;
+	else
+		std::cout << "SEND: NULL sends message to " << TheReceiver.AsString() << std::endl;
+
 	return	
 	ReceivingActor->EnqueueMessage( std::make_shared< Message< MessageType> >(	
-																	MessageCopy, Sender, Receiver	));
+																	MessageCopy, TheSender, TheReceiver	));
 }
 
 // Theron's actor has a simplified version of the send function basically just 
@@ -680,9 +693,9 @@ inline bool Send( const MessageType & TheMessage,
 protected:
 	
 template< class MessageType >
-inline bool Send( const MessageType & TheMessage, const Address & Receiver )
+inline bool Send( const MessageType & TheMessage, const Address & TheReceiver )
 {
-	return Send( TheMessage, GetAddress(), Receiver );
+	return Send( TheMessage, GetAddress(), TheReceiver );
 }
 
 /*=============================================================================
@@ -1202,6 +1215,15 @@ public:
 	
 MessageCount Wait( const MessageCount MessageLimit = 1 );
 
+// The identification class is private for good reason, and it is therefore an
+// interface function to delegate calls to the Identification's global wait 
+// method.
+
+inline static void WaitForGlobalTermination( void )
+{
+	Identification::WaitForGlobalTermination();
+}
+
 /*=============================================================================
 
  Constructors and destructor
@@ -1223,6 +1245,10 @@ inline Actor( const std::string & ActorName = std::string() )
 	// message that has arrived yet
 	
 	NewMessage = false;
+	
+	// The flag indicating if the actor is terminating has to be set to false.
+	
+	AbortWait = false;
 	
 	// The default error handling policy is to throw on unhanded messages
 	
@@ -1428,25 +1454,20 @@ public:
 // The receiver should essentially be unnecessary, however the functionality is 
 // slightly different from an actor the way it is described in Theron where it 
 // seems to put all received messages on hold and consume them with either the 
-// consume message or the wait message. It is therefore implemented similarly 
-// here with a separate message queue.
+// consume message or the wait message. Looking at the actual receiver 
+// implementation reveals that the receiver just maintains a counter of arrived
+// messages, and process them as they arrive. The counter is decreased by the 
+// consume and the wait method, and the actual wait only happens if the counter
+// reaches zero. The current implementation implements this behaviour.
 
 class Receiver : public Actor
 {
 private:
 	
-	// Buffered messages are kept in a message queue, and there is a mutex to 
-	// protect access to this queue.
+	// There is a counter for messages that has arrived an not yet Consumed or 
+	// waited for.
 	
-	MessageQueue MessageBuffer;
-	std::mutex   BufferGuard;
-	
-	// There is a waiting flag which is true if the wait function is invoked and 
-	// there are not sufficient messages buffered. In this case, the enqueue 
-	// method should not buffer incoming messages but let them through to the 
-	// actor for immediate processing.
-	
-	bool Waiting;
+	std::atomic< MessageCount > Unconsumed;
 	
 protected:
 	
@@ -1456,13 +1477,8 @@ protected:
 	virtual 
 	bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage )
 	{
-		std::lock_guard< std::mutex > Lock( BufferGuard );
-		
-		if ( Waiting )
-			Actor::EnqueueMessage( TheMessage );
-		else
-			MessageBuffer.push( TheMessage );
-		
+		Unconsumed++;
+		Actor::EnqueueMessage( TheMessage );
 		return true;
 	}
 
@@ -1476,78 +1492,42 @@ public:
 	
 	MessageCount Consume( MessageCount MessageLimit )
 	{
-		std::lock_guard< std::mutex > Lock( BufferGuard );
+		MessageCount Served = std::min( static_cast< MessageCount >(Unconsumed), 
+																		MessageLimit );
 		
-		MessageCount TheCount  = std::min( MessageBuffer.size(), MessageLimit ),
-								 Served = 0;
-		
-		while ( TheCount > 0 )
-		{
-			Actor::EnqueueMessage( MessageBuffer.front() );
-			MessageBuffer.pop();
-			TheCount--;
-			Served++;
-		}
-
-		// In order to ensure ordered delivery of messages, the processing of the 
-		// buffered messages must complete before it is possible to terminate. 
-				
-		DrainMailbox();
+		Unconsumed -= Served;
 		
 		return Served;
 	}
 	
-	// The Count function simply returns the number of messages in the buffer.
-	// This read operation should not necessitate a lock.
+	// The Count function simply returns the number of messages still unconsumed
+	// by calls to the counter or the wait function.
 	
 	inline MessageCount Count( void )
-	{ return MessageBuffer.size(); }
+	{ return Unconsumed; }
 	
-	// The reset function just clears the message buffer. However since the queue
-	// has no clear function, the elements must be popped one by one off the queue
+	// The reset function just clears the counter.
 	
 	inline void Reset( void )
 	{
-		std::lock_guard< std::mutex > Lock( BufferGuard );
-		
-		while ( ! MessageBuffer.empty() )
-			MessageBuffer.pop();
+		Unconsumed = 0;
 	}
 	
-	// The wait function is a dual interface: It will first consume the number 
-	// of messages in the buffer up to the minimum value of the given limit and 
-	// the buffer size. Then it will wait for the remaining messages using the 
-	// Actor's wait function.
+	// The wait function in Theron only blocks if the there are no unconsumed 
+	// messages. If there are messages to consume, it will just return the number
+	// of messages to consume up to the max limit. It means that calling the 
+	// Wait function with an argument of say, 4, with 3 messages unconsumed will 
+	// make the function return 3 and not wait for the forth message. This 
+	// behaviour seems strange, but since the whole purpose of this implementation
+	// is to copy the Theron Receiver, the same behaviour is implemented here.
 	
 	inline MessageCount Wait( MessageCount MessageLimit = 1 )
 	{
-		MessageCount MessagesToConsume = std::min( Count(), MessageLimit );
 		
-		if ( MessageLimit - MessagesToConsume > 0 )
-		{
-			// There are more messages to be awaited than currently in the buffer, 
-			// and it is necessary to instruct the Enqueue Message function to deliver 
-			// messages directly to the mailbox to be immediately processed and 
-			// counted by the actor's wait function.   
-			
-			Waiting = true;									
-			
-			Consume( MessagesToConsume );
-		
-			MessageCount AwaitedMessages =
-															 Actor::Wait( MessageLimit - MessagesToConsume );
-		  Waiting = false;
-			return MessagesToConsume + AwaitedMessages;
-		}
+		if ( Unconsumed > 0 )
+			return Consume( MessageLimit );
 		else
-		{
-			// It is not possible to Consume the messages before the If-block because
-			// the wait flag should be set before the consumption of buffered 
-			// messages if a wait on new arriving messages is necessary. 
-			
-			Consume( MessagesToConsume );
-			return MessagesToConsume;
-		}
+			return Actor::Wait();
 	}
 	
 	// The receiver has two constructors, one without argument that will give 
@@ -1555,11 +1535,11 @@ public:
 	// given, but also an endpoint reference is needed. 
 	
 	Receiver( void )
-	: Actor(), MessageBuffer(), BufferGuard()
+	: Actor(), Unconsumed(0)
 	{ }
 	
 	Receiver( EndPoint & endPoint, const char *const name = 0 )
-	: Actor( name ), MessageBuffer(), BufferGuard()
+	: Actor( name ), Unconsumed(0)
 	{ }
 };
 

@@ -42,7 +42,7 @@ void Theron::NetworkEndPoint::TerminationReceiver::StartTermination(
 	while ( std::any_of( GuardedActors.begin(), GuardedActors.end(), 
 											 [](const Theron::Actor * TheActor)->bool{ 
 											 	  return TheActor->GetNumQueuedMessages() > 0;  }) )
-		std::this_thread::sleep_for( std::chrono::seconds(1) );
+		std::this_thread::sleep_for( std::chrono::seconds(60) );
 }
 
 // The message to send the shut down request takes the address of a sending 

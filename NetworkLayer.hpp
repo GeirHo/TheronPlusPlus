@@ -121,9 +121,8 @@ protected:
 
   // The constructor initialises the actor making sure that it has the right
   // name, and registers the handler for messages received from the protocol
-  // engine. The address for the session layer server is initialised with the 
-  // default session layer address. This is possible since Theron Address 
-  // will not check if the object exists if initialised with a string. 
+  // engine. The address for the session layer server is left uninitialised,
+  // which may create a crash if no session server is registered.  
 
 public:
     
@@ -131,7 +130,7 @@ public:
 	        std::string ServerName = "NetworkLayer"  ) 
   : Actor( Host->GetFramework(), ServerName.data() ),
     StandardFallbackHandler( Host->GetFramework(), ServerName ),
-    SessionServer( Address( "SessionLayer" ) )
+    SessionServer()
   {
     RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );		
   }
