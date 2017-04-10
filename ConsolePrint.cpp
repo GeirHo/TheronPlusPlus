@@ -22,6 +22,6 @@ std::string ConsolePrintServer::ServerName;
 // server to be used when the console print stream is used outside of an actor
 // and where it can be difficult to provide an execution framework.
 
-Framework * ConsolePrintServer::ExecutionFramework = nullptr;
+ConsolePrintServer * ConsolePrintServer::TheServer = nullptr;
 
 }  // End name space Theron

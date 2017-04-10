@@ -95,6 +95,12 @@ class Address;
 
 private: 
 
+// Actors on this endpoint will have an endpoint identity derived from the 
+// generic identity to be defined next. The endpoint identity must therefore 
+// be forward declared.
+	
+class EndpointIdentity; 
+
 // -----------------------------------------------------------------------------
 // Generic identification
 // -----------------------------------------------------------------------------
@@ -154,7 +160,7 @@ private:
 	// to do this is using an unordered map since a lookup should be O(1). 
 	// These maps are protected since it is the responsibility of the derived
 	// identity classes to ensure that the name and ID is correctly stored.
-
+		
 protected:
 	
 	static std::unordered_map< std::string, Identification * > ActorsByName;
@@ -171,7 +177,7 @@ protected:
 	// necessary to ensure sequential access by locking a mutex.
 	
 	static std::mutex InformationAccess;
-	
+		
 public:	
 
 	// There are static functions to obtain an address by name or by numerical 
@@ -219,9 +225,22 @@ public:
     ActorPointer( TheActor )
 	{ }
 
+	// The Identification has a protected constructor that can be used to 
+	// transfer the information from one actor ID to another ID. This is only 
+	// useful in the case when an actor's ID is deleted while there are still 
+	// addresses referencing the actor. This constructor does not automatically
+	// assign the numerical ID, but just copies the one from the given actor,
+	// and the actor pointer is forced to the nullptr;
+	
+protected:
+	
+	Identification( const EndpointIdentity * TheActorID );
+	
 	// The destructor removes the named actor and the ID from the registries, 
 	// and since it implies a structural change of the maps, the lock must be 
 	// acquired. It is automatically released when the destructor terminates.
+
+public:
 	
 	virtual ~Identification( void )
 	{ }
@@ -307,8 +326,6 @@ public:
 // layer, and trying to create a remote identity before the presentation layer 
 // server has been set will result in a standard logic error exception.
 
-public:
-	
 class RemoteIdentity : public Identification
 {
 private:
@@ -327,7 +344,7 @@ public:
 	
 private:
 	
-	unsigned int NumberOfAddresses;
+ 	std::atomic< unsigned int > NumberOfAddresses;
 	
 	// This counter is increased when the address register, and decreased when 
 	// the actor de-register. If the de-registration leads to the counter 
@@ -347,10 +364,65 @@ public:
 	
 	// The destructor does nothing but is needed for completeness
 	
-	virtual ~RemoteIdentity( void )
-  { }
+	virtual ~RemoteIdentity( void );
 };
-		
+
+// Since the Presentation Layer server must be able to set the static server 
+// pointer, it should be allowed to access the static function. However the 
+// remote identity is a private member of Actor, and it should be, and so 
+// the presentation layer must be allowed access.
+
+friend class PresentationLayer;
+
+// -----------------------------------------------------------------------------
+// Deleted identity
+// -----------------------------------------------------------------------------
+//
+// Paradoxically, there is a need for a deleted identity to cache the name and 
+// ID of a local actor that has been deleted. The reason is that other actors 
+// may use the address as a key in certain data structures to more easily be 
+// able to address the deleted actor before it was deleted. Consider as an 
+// example a boss-worker scenario where workers receive a start message from 
+// the boss, and when done they are deleted. The boss my then have a set of 
+// active workers based on their addresses, i.e. their public identities. When
+// the finish message arrives, the worker will be removed from the set. However,
+// at that point, the actor has invalidated all addresses pointing to it, and 
+// comparing the stored address will be a comparison with a nullptr. 
+//
+// A different strategy is therefore taken: When an actor is destructing, it 
+// will set all the addresses still referring to it to a "deleted identity". 
+// This will allow address comparison, but it will not allow any messages to 
+// be sent to a deleted actor. For this the actor pointer is set to nullptr.
+// The object will auto-destruct when the last referencing address is 
+// is invalidated.
+
+class DeletedIdentity : public Identification
+{
+private:
+	
+	std::atomic< unsigned int > NumberOfAddresses;
+
+	// The registration and de-registration simply updates or decreases this 
+	// counter, similar to the remote identity.
+	
+public:
+	
+	virtual void Register(   Address * NewAddress );
+	virtual void DeRegister( Address * OldAddress );
+	
+	// The constructor takes the name of the deleted actor, and the destructor 
+	// of the Endpoint Identity will take care of transferring replacing the 
+	// references in the registries so that de-referencing the actor by its old 
+	// ID or name will return the deleted Identity. 
+	
+	DeletedIdentity( const EndpointIdentity * IDToRemove );
+	
+	// The destructor must then clean up the mess by de-registering the actor 
+	// from the two registries.
+	
+	virtual ~DeletedIdentity( void );
+};
+
 /*=============================================================================
 
  Address management
@@ -361,6 +433,8 @@ public:
 // reached only through an address object that has a pointer to the actor 
 // ID of the relevant actor. It also provides a method to invalidate this 
 // pointer when the actor closes.
+	
+public:
 	
 class Address
 {
@@ -636,19 +710,28 @@ MessageQueue Mailbox;
 
 // Since this queue will be written to by the sending actors and processed 
 // by this actor, there may be several threads trying to operate on the queue 
-// at the same time, so sequential access must be ensured by a mutex.
+// at the same time, so sequential access must be ensured by a mutex. There 
+// is also a simple flag to indicate that a message is available it is set by 
+// the enqueue function, and cleared when the message is popped from the queue.
 
-std::mutex QueueGuard;
+std::timed_mutex QueueGuard;
+bool NewMessageAvailable;
 
 // Messages are queued a dedicated function that obtains a unique lock on the 
 // queue guard before adding the message. The return type could be used to 
 // indicate issues with the queuing, but the function should really throw
 // an exception in case of serious errors.
 
-protected: 
-	
-virtual 
 bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage );
+
+// There is a callback function to be invoked when a new message has been 
+// processed. It is virtual in order to allow derived classes to be notified 
+// when a new message arrives. By default it does nothing.
+
+protected:
+	
+virtual void MessageArrived( void )
+{ }
 
 // Theron provides a function to check the number of queued messages, which 
 // essentially only returns the current queue size, including the message 
@@ -677,11 +760,6 @@ inline bool Send( const MessageType & TheMessage,
 	Actor * ReceivingActor = Identification::GetActor( TheReceiver );
 	auto    MessageCopy    = std::make_shared< MessageType >( TheMessage );
 	
-	if( TheSender )
-		std::cout << "SEND: " << TheSender.AsString() << " sends message to " << TheReceiver.AsString() << std::endl;
-	else
-		std::cout << "SEND: NULL sends message to " << TheReceiver.AsString() << std::endl;
-
 	return	
 	ReceivingActor->EnqueueMessage( std::make_shared< Message< MessageType> >(	
 																	MessageCopy, TheSender, TheReceiver	));
@@ -1073,13 +1151,34 @@ inline bool SetDefaultHandler( ActorType *const TheActor,
 
 =============================================================================*/
 
-// Execution of the handlers for queued messages will take place in a dedicated
-// thread that will be started from the method to enqueue messages if the 
-// arriving message is the first message in the queue.
+// There is a simple flag indicting if the actor is running. It is set to true 
+// in the Actor's constructor and to false in the destructor and it should 
+// be checked in other threads waiting for this Actor in some way.
 
 private: 
 	
+bool ActorRunning;
+
+// -----------------------------------------------------------------------------
+// Message processing
+// -----------------------------------------------------------------------------
+//
+// Execution of the handlers for queued messages will take place in a dedicated
+// thread that will be started at construction time.
+
 std::thread Postman;
+
+// There is one mutex and one condition variable to control this worker thread
+// from the main thread of the actor. These are used at start-up and shut down
+// and when a message has been enqueued for this actor. At start up, the 
+// constructor will wait on the condition variable until notified by the 
+// Postman. During normal operation the Postman will wait on this condition 
+// variable until notified by the Enqueue Message that a new message has 
+// arrived. Then again, at shut down the destructor will notify the condition
+// variable after setting the Actor Running flag to false.
+
+std::timed_mutex						Postoffice;
+std::condition_variable_any ContinueMessageProcessing;
 
 // This thread will execute the following function that will take out the 
 // first message from the queue and call the handler for this message. If 
@@ -1104,16 +1203,6 @@ enum class MessageError
 	Ignore
 } MessageErrorPolicy;
 
-// There is a small helper function that waits for the Postman to complete the 
-// delivery of messages, i.e. wait for the mailbox to drain. Essentially, it 
-// just joins the work of the Postman.
-
-inline void DrainMailbox( void )
-{
-	if ( Postman.joinable() )
-		Postman.join();
-}
-
 // -----------------------------------------------------------------------------
 // Synchronisation
 // -----------------------------------------------------------------------------
@@ -1126,11 +1215,8 @@ inline void DrainMailbox( void )
 // one actor, it can be called from many different actors running in multiple 
 // threads. The Wait function should block until the given number of messages 
 // has been received by the actor, and different invocations of the Wait 
-// function may wait for different number of messages.
-// 
-// Thus the only central coordination point is the Postman, which may not even 
-// be started when a Wait function is called, and the Postman may stop if there
-// are no more messages to process. 
+// function may wait for different number of messages. Thus the only central 
+// coordination point is the Postman
 //
 // It is a matter of definition whether the Receiver behaviour should be 
 // replicated or not. A Receiver will not process any messages before the Wait
@@ -1146,7 +1232,7 @@ inline void DrainMailbox( void )
 // process messages. If this counter is larger than zero, the postman will 
 // switch into message-by-message processing mode until this counter reaches 
 // zero again.
-
+/*
 private:
 	
 unsigned int WaiterCount;
@@ -1165,21 +1251,19 @@ unsigned int WaiterCount;
 // all Wait threads, and then continue with the processing of the message. 
 // However, this does not correspond to the Consume function, and it is 
 // illogical since the waiting thread could start processing before the 
-// receiving agent has processed the incoming message and thereby the agent 
+// receiving actor has processed the incoming message and thereby the agent 
 // waited for may have the same state as before the wait started. A further 
-// complication is if the agent is serving multiple messages - in this case 
+// complication is if the actor is serving multiple messages - in this case 
 // it is necessary to check that the right message has arrived, and then the 
 // message must be processed when wait returns. In conclusion: The notification
 // to the threads waiting for a message will happen AFTER the message has been 
 // consumed by the actor.
 // 
 // This requires one condition variable for the Wait threads to use when waiting
-// for the next message, and one mutex that can be used to set up the wait or
-// notify the waiting Wait functions. Note that the mutex must also be used to
-// protect updates to the count of the Wait functions above.
+// for the next message, and one mutex that can be used to set up the wait.
+// Note that the mutex must also be used to protect updates to the count of 
+// Wait functions above.
 
-std::condition_variable OneMessageArrived;
-std::mutex 							WaitGuard;
 
 // It is best practice to ensure that the condition variable is not triggered 
 // by some other reason that the arrival of a new message, and therefore 
@@ -1187,24 +1271,6 @@ std::mutex 							WaitGuard;
 // changed only by the Postman when holding the guard locked.
 
 bool NewMessage;
-
-// Since each Wait function runs in a different thread, which is again different
-// from the Postman's thread, it could be that the postman would have handled
-// the message and move on to the next message before all the Waiting threads 
-// have had the opportunity to process the notification of the previous message.
-// An acknowledgement protocol is therefore implemented, where each Wait will 
-// increase the acknowledgement count, and notify the Postman. When the 
-// acknowledgement count equals the number of wait functions, the Postman will 
-// proceed to dispatch the message to the right handler(s).
-
-unsigned int 						AcknowledgementCount;
-std::condition_variable ContinueMessageProcessing;
-
-// It could be that a wait is still active when the actor terminates. The wait 
-// must then be aborted, and there is specific flag for this that is checked 
-// by the Wait method when it regains control. 
-
-bool AbortWait;
 
 // The wait function is defined as it is for Theron, with an optional number 
 // of messages to wait for. Note that in contrast with the receiver, an actor 
@@ -1214,7 +1280,7 @@ bool AbortWait;
 public:
 	
 MessageCount Wait( const MessageCount MessageLimit = 1 );
-
+*/
 // The identification class is private for good reason, and it is therefore an
 // interface function to delegate calls to the Identification's global wait 
 // method.
@@ -1222,6 +1288,16 @@ MessageCount Wait( const MessageCount MessageLimit = 1 );
 inline static void WaitForGlobalTermination( void )
 {
 	Identification::WaitForGlobalTermination();
+}
+
+// There is a small helper function that waits for the Postman to complete the 
+// delivery of messages, i.e. wait for the mailbox to drain. Essentially, it 
+// is just a wait for the current queue size to be processed.
+
+inline void DrainMailbox( void )
+{
+	while ( ! Mailbox.empty() )
+		std::this_thread::sleep_for( std::chrono::seconds(5) );
 }
 
 /*=============================================================================
@@ -1237,22 +1313,34 @@ inline static void WaitForGlobalTermination( void )
 inline Actor( const std::string & ActorName = std::string() )
 : ActorID( this, ActorName ), 
   Mailbox(), QueueGuard(), 
-  MessageHandlers(), DefaultHandler(), Postman(), 
-  WaiterCount(0), OneMessageArrived(), WaitGuard(), 
-  AcknowledgementCount(0), ContinueMessageProcessing()
+  MessageHandlers(), DefaultHandler(), 
+  Postman(), Postoffice(), ContinueMessageProcessing()
 {
-	// The flags for message processing is set by default to false as there is no
-	// message that has arrived yet
+	// The flag indicating if the actor is running is set to true, and currently
+	// there is no message available.
 	
-	NewMessage = false;
-	
-	// The flag indicating if the actor is terminating has to be set to false.
-	
-	AbortWait = false;
+	ActorRunning 				= true;
+	NewMessageAvailable = false;
 	
 	// The default error handling policy is to throw on unhanded messages
 	
 	MessageErrorPolicy = MessageError::Throw;
+	
+	// Then the thread can be started. It will wait until it is signalled from 
+	// the Enqueue message function. The lock is taken to synchronise the start
+	// up message
+	
+	std::unique_lock< std::timed_mutex > Lock( Postoffice );
+	
+	Postman = std::thread( &Actor::DispatchMessages, this );
+	
+	// It is necessary to ensure that the Postman is up and running before 
+	// returning from the constructor given that it may take some time to 
+	// allocate the thread
+	
+	ContinueMessageProcessing.wait( Lock, [&](void)->bool{
+		return Postman.joinable();
+	});	
 }
 
 // The destructor needs to consider the situation where the actor is destroyed 
@@ -1467,21 +1555,28 @@ private:
 	// There is a counter for messages that has arrived an not yet Consumed or 
 	// waited for.
 	
-	std::atomic< MessageCount > Unconsumed;
+	volatile MessageCount Unconsumed;
+	
+	// The actual wait is ensured by a condition variable and a mutex to wait 
+	// on this variable
+
+	std::condition_variable_any OneMessageArrived;
+  std::timed_mutex						WaitGuard;
 	
 protected:
 	
-	// The Actor's enqueue is captured and the delivered message is just put in 
-	// the message buffer to be processed by the Wait or the Consume methods.
+	// The main hook for the receiver functionality in extending the functionality
+	// of the actor is the new message function. This will add to the count of 
+	// unconsumed messages and notify the wait handler.
 	
-	virtual 
-	bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage )
+	virtual void MessageArrived( void )
 	{
+		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
+																							 std::chrono::seconds(10) );
 		Unconsumed++;
-		Actor::EnqueueMessage( TheMessage );
-		return true;
+		OneMessageArrived.notify_one();
 	}
-
+	
 public:
 	
 	// The Consume function takes a number of messages up to the message limit 
@@ -1492,7 +1587,10 @@ public:
 	
 	MessageCount Consume( MessageCount MessageLimit )
 	{
-		MessageCount Served = std::min( static_cast< MessageCount >(Unconsumed), 
+		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
+																							 std::chrono::seconds(10) );
+		
+		MessageCount Served = std::min( static_cast< MessageCount >( Unconsumed ), 
 																		MessageLimit );
 		
 		Unconsumed -= Served;
@@ -1510,12 +1608,14 @@ public:
 	
 	inline void Reset( void )
 	{
+		std::lock_guard< std::timed_mutex > Lock( WaitGuard );
+		
 		Unconsumed = 0;
 	}
 	
 	// The wait function in Theron only blocks if the there are no unconsumed 
 	// messages. If there are messages to consume, it will just return the number
-	// of messages to consume up to the max limit. It means that calling the 
+	// of messages to consume up to the maximum limit. It means that calling the 
 	// Wait function with an argument of say, 4, with 3 messages unconsumed will 
 	// make the function return 3 and not wait for the forth message. This 
 	// behaviour seems strange, but since the whole purpose of this implementation
@@ -1523,11 +1623,25 @@ public:
 	
 	inline MessageCount Wait( MessageCount MessageLimit = 1 )
 	{
+
+		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
+																							 std::chrono::seconds(10) );
+
+		// The wait function will wait for one message, but this will be added
+		// to the unconsumed count by the enqueue message function, and hence 
+		// it should be subtracted.
+
+		OneMessageArrived.wait( Lock, [&](void)->bool{ return Unconsumed > 0; });
 		
-		if ( Unconsumed > 0 )
-			return Consume( MessageLimit );
-		else
-			return Actor::Wait();
+		// Theoretically, more than one message could have arrived from the 
+		// point in time when the Wait function is called until the return of 
+		// the function. The Consume function can be called on its own and it will
+		// therefore lock, which means that the lock should be released prior to 
+		// this call.
+		
+		Lock.unlock();
+
+		return Consume( MessageLimit );
 	}
 	
 	// The receiver has two constructors, one without argument that will give 
@@ -1535,11 +1649,11 @@ public:
 	// given, but also an endpoint reference is needed. 
 	
 	Receiver( void )
-	: Actor(), Unconsumed(0)
+	: Actor(), Unconsumed(0), OneMessageArrived(), WaitGuard()
 	{ }
 	
 	Receiver( EndPoint & endPoint, const char *const name = 0 )
-	: Actor( name ), Unconsumed(0)
+	: Actor( name ), Unconsumed(0), OneMessageArrived(), WaitGuard()
 	{ }
 };
 

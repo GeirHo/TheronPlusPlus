@@ -961,7 +961,6 @@ private:
   virtual void EnqueueEvent ( const Event & TheEvent, 
 											        const Theron::Address RequestingActor )
   {
-		std::cout << "EVENT: Got event from " << RequestingActor.AsString() << std::endl;
 		if ( CurrentTime <= ToTimeCounter( TheEvent.TimeOfEvent ) )
 		{
 			Address EventReceiver;

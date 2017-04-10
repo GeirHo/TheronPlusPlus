@@ -45,9 +45,15 @@ Theron::Actor * Theron::Actor::Identification::GetActor(
 																	 const Theron::Actor::Address & ActorAddress )
 {
 	if ( ActorAddress )
-		return ActorAddress.TheActor->ActorPointer;
+  {
+		Actor * TheActor = ActorAddress.TheActor->ActorPointer;
+		if ( TheActor != nullptr )
+			return TheActor;
+		else
+			throw std::invalid_argument( "GetActor: NULL actor pointer");
+  }
 	else
-		throw std::invalid_argument( "Invalid actor address" );
+		throw std::invalid_argument( "GetActor: NULL actor address" );
 }
 
 // The first lookup function by name simply acquires the lock and then 
@@ -131,15 +137,13 @@ void Theron::Actor::EndpointIdentity::DeRegister( Address * OldAddress )
 
 void Theron::Actor::RemoteIdentity::Register( Address * NewAddress )
 {
-	++NumberOfAddresses;
+	NumberOfAddresses++;
 }
 
 // The remote identity is created whenever an actor refers to an address by 
 // name only and this address cannot be found on the current endpoint. It will 
 // count how many addresses that refer to this remote actor, and if there are 
-// no more addresses then the entry can be removed from the registry. Since 
-// the identity was dynamically allocated it will also be deleted to ensure 
-// that there are no memory leaks.
+// no more addresses then the entry can be removed. 
 //
 // Note that this strategy may allow other actors to be constructed locally with
 // the same name as the remote actor was known to have, and local actors will 
@@ -147,22 +151,46 @@ void Theron::Actor::RemoteIdentity::Register( Address * NewAddress )
 
 void Theron::Actor::RemoteIdentity::DeRegister( Address * OldAddress )
 {
-	if ( NumberOfAddresses == 0 )
-  {
-		InformationAccess.lock();
-		ActorsByName.erase( Name        );
-		ActorsByID.erase  ( NumericalID );
-		InformationAccess.unlock();
+	if ( --NumberOfAddresses == 0 )
 		delete this;
-	}
-	else	
-		--NumberOfAddresses;
 }
 
+// The registration and de-registration functions for the Deleted Identity 
+// are identical to the ones for the remote identity.
+
+void Theron::Actor::DeletedIdentity::Register( Address* NewAddress )
+{
+	NumberOfAddresses++;
+}
+
+void Theron::Actor::DeletedIdentity::DeRegister( Address * OldAddress )
+{
+	if ( --NumberOfAddresses == 0 )
+		delete this;
+}
+
+
 // -----------------------------------------------------------------------------
-// Constructor and Destructor 
+// Constructors and Destructors 
 // -----------------------------------------------------------------------------
 //
+
+// The "copy" constructor of the Identification is provided for another identity
+// to mask as an existing identity. The issue is with the automatically assigned
+// ID since addresses are sorted in containers based on their actor's numerical
+// IDs, and then one can cannot remove an ID without that have active addresses
+// referring to this Identification. The solution is to create a deleted 
+// identity and make this assume the given actor's name and numerical ID, but 
+// not the actor pointer. This is only an issue for endpoint local actors and 
+// it is therefore required that the given pointer is to an endpoint identity.
+
+Theron::Actor::Identification::Identification( 
+																					const EndpointIdentity * TheActorID )
+: NumericalID( TheActorID->NumericalID ), Name( TheActorID->Name ),
+  ActorPointer( nullptr )
+{ }
+
+
 // The constructor of the identification simply stores the name in 
 
 Theron::Actor::EndpointIdentity::EndpointIdentity( 
@@ -188,37 +216,61 @@ Theron::Actor::EndpointIdentity::EndpointIdentity(
 	ActorsByID.emplace( NumericalID, &(TheActor->ActorID) );
 }
 
-// The destructor first invalidates all addresses that references this actor,
-// and then removes the actor from the two maps. The lock is acquired only 
-// before the second part of the destructor
+// In the optimal situation there are no more addresses referencing the 
+// actor having this Endpoint Identity, and then it can just be taken out of 
+// the actor registries. However, if there are addresses still referencing 
+// the actor, a Deleted Identification object must be constructed and all the 
+// referencing actors must be set to the Deleted Address, which will be 
+// responsible for cleaning up the registrations when it eventually terminates.
 
 Theron::Actor::EndpointIdentity::~EndpointIdentity()
 {
-
-	// The address registry must be locked for access from this thread. However,
-	// as addresses are invalidated, they will de-register which implies that 
-	// the lock will be acquired also in the de-registration function. It will 
-	// be from the same thread, but it will block unless the mutex accepts 
-	// multiple locks.
-	
-	std::lock_guard< std::recursive_mutex > AddressLock( AddressAccess ); 
-	
-	// A standard for loop cannot be used to invalidate the addresses since 
-	// the invalidation function will call back and remove the address entry 
-	// from the address set. Instead, the first element will be invalidated until
-	// the set is empty. The assignment is necessary for the compiler to 
-	// understand that the returned iterator should not be constant. 
-	
-	while ( ! Addresses.empty() )
-  {
-		Address * TheAddress = *(Addresses.begin());
-		TheAddress->Invalidate();
-	}
+	// First the lock for accessing the name and ID registries is obtained since
+	// it is needed regardless of whether there are addresses referencing this 
+	// actor or not.
 	
 	std::lock_guard< std::mutex > InformationLock( InformationAccess );
+
+	// Then the further actions depend on the number of address objects known
 	
-	ActorsByName.erase( Name 				);
-	ActorsByID.erase  ( NumericalID );
+	if ( Addresses.empty() )
+  {
+		// The case is simple: The endpoint identity can just be removed and this
+		// node forgets about the actor entirely.
+		
+		ActorsByName.erase( Name 				);
+		ActorsByID.erase  ( NumericalID );
+	}
+	else
+  {
+		// In this case a deleted identity must be created to allow addresses to 
+		// remain local information sources, but disallow further messages to be 
+		// sent to this destroyed actor. This ghost will destroy itself once the 
+		// last address de-register, and so there should be no risk of a memory 
+		// leak.
+		
+		DeletedIdentity * TheActorGhost = new DeletedIdentity( this );
+		
+		// This ghost will replace this actor in the registries.
+		
+		ActorsByName[ Name 				] = TheActorGhost;
+		ActorsByID  [ NumericalID ] = TheActorGhost;
+		
+		// Then the referencing addresses can be "re-constructed" with the ghost 
+		// as the identifier for the actor. The address lock must be acquired first
+		
+		std::lock_guard< std::recursive_mutex > AddressLock( AddressAccess ); 
+		
+		for ( Address * TheAddress : Addresses )
+		{
+			TheAddress->TheActor = TheActorGhost;
+			TheActorGhost->Register( TheAddress );
+		}
+		
+		// Eventually the references back to the the addresses are cleared.
+		
+		Addresses.clear();
+	}
 }
 
 // The constructor for the remote identity stores the identity in the registry 
@@ -233,7 +285,8 @@ Theron::Actor::EndpointIdentity::~EndpointIdentity()
 // will check the availability of the Session Server as a pre-requisite.
 
 Theron::Actor::RemoteIdentity::RemoteIdentity( const std::string & ActorName )
-: Identification( ThePresentationLayerServer, ActorName )
+: Identification( ThePresentationLayerServer, ActorName ),
+  NumberOfAddresses(0)
 {
 
 	if ( ThePresentationLayerServer != nullptr )
@@ -251,11 +304,48 @@ Theron::Actor::RemoteIdentity::RemoteIdentity( const std::string & ActorName )
 			
 			throw std::invalid_argument( ErrorMessage.str() );
 		}
+		else
+			ActorsByID.emplace( NumericalID, this );
 	}
 	else
 		throw std::logic_error("Remote actor IDs requires a Session Layer Server");
+	
 }
 
+// When the remote identity is no longer referenced it should remove its ID 
+// and name from the registries.
+
+Theron::Actor::RemoteIdentity::~RemoteIdentity( void )
+{
+	std::lock_guard< std::mutex > Lock( InformationAccess );
+	
+	ActorsByName.erase( Name );
+	ActorsByID.erase  ( NumericalID );
+}
+
+// Since the Identification guarantees that each ID is unique, it will assign 
+// a new ID for the Deleted Identity. Hence, the deleted identity needs to 
+// look after two IDs: The one of the original actor and the ID automatically
+// assigned. Note that only the latter needs to be registered as the one 
+// that was assigned to the deleted actor is transferred by the destructor of 
+// the Endpoint Identity.
+
+Theron::Actor::DeletedIdentity::DeletedIdentity( 
+																				  const EndpointIdentity * IDToRemove )
+: Identification( IDToRemove ), 
+  NumberOfAddresses(0)
+{ }
+
+// Similar to the remote identity the destructor has to clean up the 
+// registrations.
+
+Theron::Actor::DeletedIdentity::~DeletedIdentity( void )
+{
+	std::lock_guard< std::mutex > Lock( InformationAccess );
+	
+	ActorsByName.erase( Name );
+	ActorsByID.erase  ( NumericalID );
+}
 
 /*=============================================================================
 
@@ -277,19 +367,21 @@ bool Theron::Actor::EnqueueMessage(
 {
 	// Enqueue the message 
 	
-	QueueGuard.lock();
+	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, 
+																									std::chrono::seconds(5) );
 	Mailbox.push( TheMessage );
-	QueueGuard.unlock();
+	QueueLock.unlock();
 	
-	// If the postman is not working, then it will be started. A small detail
-	// is that the 'this' pointer must be explicitly passed in order to use 
-	// a class member function for a thread. It is also an issue that the thread
-	// is not joinable before it is started, so if the messages are delivered 
-	// too quickly there can be a race condition on the thread. The mailbox 
-	// size check is hopefully preventing this problem.
+	// The postman should be signalled that processing should continue if it is 
+	// waiting for messages, i.e. if the queued message was the first message 
+	// in the queue. Otherwise, the Postman is already processing messages and 
+	// will come to this queued message at one point.
 	
-	if ( (Mailbox.size() == 1) && (! Postman.joinable()) )
-		Postman = std::thread( &Actor::DispatchMessages, this );
+	std::unique_lock< std::timed_mutex > ProcessLock( Postoffice, 
+																						        std::chrono::seconds(5) );
+	NewMessageAvailable = true;
+	ContinueMessageProcessing.notify_one();
+	ProcessLock.unlock();
 	
 	return true;
 }
@@ -310,170 +402,166 @@ bool Theron::Actor::EnqueueMessage(
 // If no message handler is available to serve the message the message will 
 // be delivered to the default message handler. If no default message handler
 // exists, then the message will be handled according to the error policy set.
+//
+// The handler is supposed to run in the actor's thread and it will block if 
+// there is no message available. 
 
 void Theron::Actor::DispatchMessages( void )
 {
-	// The main loop will continue as long as there are messages in the queue
+	// The first thing to do is to tell the Actor constructor that the postman 
+	// thread is up running and ready to dispatch messages.
 	
-	while ( ! Mailbox.empty() )
-  {
-	  // There is an iterator to the current handler, and a flag indicating that 
-		// the message has been served by at least one handler.
-		
-		auto CurrentHandler = MessageHandlers.begin();
-		bool MessageServed  = false;
-		
-		// It is an overhead to call Mailbox front for each handler as the first 
-		// message in the queue can be cached
-		
-		auto TheMessage = Mailbox.front();
-		
-		// ...and then loop over all handlers to allow them to manage the message 
-		// if they are able to.
-		
-		while ( CurrentHandler != MessageHandlers.end() )
-		{
-			// There is a minor problem related to the handler call since invoking the 
-			// message handler may create or destroy handlers. A mutex cannot help 
-			// since the handler is executing in this thread, and since it runs on 
-			// the same stack all operations implicitly made by the handler
-			// on the handler list will have terminated when control is returned to 
-			// this method. Insertions are not problematic since they will appear at 
-			// the end of the list, and will just be included in the continued 
-			// iterations here. Deletions are similarly not problematic unless the 
-			// handler de-register itself. 
-			//
-			// In this case it does not help having an iterator to the next element 
-			// as there is also no guarantee that that also that pointer will not be 
-			// deleted. The only safe way is to ensure that the handler object for 
-			// the current handler is not deleted. A copy of the current handler is 
-			// therefore made, and its status is set to executing.
-			
-			auto ExecutingHandler = CurrentHandler;
-			(*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
-			
-			// Then the handler can process the message, and if this results in the 
-			// handler de-registering this handler, it will return with the deleted 
-			// state.
-						
-			if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
-		  {
-				MessageServed = true;
-				
-				// Then the list of handlers is optimised by swapping the current 
-				// handler with the handler in front unless it is already the first 
-				// handler. It is necessary to use a separate swap iterator to ensure 
-				// that the current handler iterator points to the next handler not 
-				// affected by the swap operation.
-
-				auto SuccessfulHandler = CurrentHandler++;
-				
-				if( SuccessfulHandler != MessageHandlers.begin() )
-					std::iter_swap( SuccessfulHandler, std::prev( SuccessfulHandler ) );
-			}
-			else	
-				++CurrentHandler; // necessary because of the transposition rule 
-				
-			// The Current Handler is now safely set to a handler that is valid for 
-			// the next execution, and the handler just executed can be deleted, or
-			// its state can be switched back to normal.
-			
-			if ( (*ExecutingHandler)->GetStatus() == GenericHandler::State::Deleted )
-				MessageHandlers.erase( ExecutingHandler );
-			else
-				(*ExecutingHandler)->SetStatus( GenericHandler::State::Normal );
-		}
-		
-		// If the message is not served at this point, it should be delivered to 
-		// the fall back handler. If that handler does not exist it should either 
-		// be ignored or an error message will be thrown.
-		
-		if ( ! MessageServed )
-		{
-			if ( DefaultHandler )
-				DefaultHandler->ProcessMessage( Mailbox.front() );
-			else if ( MessageErrorPolicy == MessageError::Throw )
-		  {
-				std::ostringstream ErrorMessage;
-				auto RawMessagePointer = *(Mailbox.front());
-				
-				ErrorMessage << "No message handler for the message " 
-										 << typeid( RawMessagePointer ).name() 
-										 << " and no default message handler!";
-										 
-			  throw std::logic_error( ErrorMessage.str() );
-			}
-		}
-		
-		// The message is fully handled, and it can be popped from the queue and 
-		// thereby prepare the queue for processing the next message.
-		
-		QueueGuard.lock();
-		Mailbox.pop();
-		QueueGuard.unlock();
-		
-		// If one or more Wait functions have been called, next message should not 
-		// be processed before they all have acknowledged the notification about 
-		// the the arrival of this message.
-		
-		if ( WaiterCount > 0 )
-		{
-			// It is necessary to lock to guard so that no other thread will try to 
-			// set the two flag variables at the same time. 
-			
-		  std::unique_lock< std::mutex > Lock( WaitGuard );
-			
-			// The flag indicating that a new message has arrived should be set so 
-			// Wait functions know why they are notified. The counter for 
-			// acknowledgements is also reset to count only real, new acknowledgements
-			
-			NewMessage 					 = true;
-			AcknowledgementCount = 0;
-			
-			// Then all the Wait functions can be notified. A subtle point is that 
-			// if one of the Wait functions finishes the wait by this message, it will 
-			// reduce the count of waiters, so the number of received acknowledgements
-			// will be higher than the Waiter Count. It is therefore necessary to 
-			// remember how many Wait functions that were notified, and only continue 
-			// processing when this number of acknowledgements has been received.
-			
-	//		unsigned int NotifiedWaiters = WaiterCount;
-			
-			OneMessageArrived.notify_all();
-			
-			// Then the dispatcher will wait until all the Wait functions have seen 
-			// and acknowledged this notification.
-			
-	//		ContinueMessageProcessing.wait( Lock, 
-	//			  [&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; }  );
-			
-			// The New Message flag is then cleared. Note that the lock was released 
-			// by the condition variable wait, and re-locked when the wait ends, and 
-			// it will be unlocked permanently when the unique lock object is 
-			// destroyed at the end of this code block.
-			
-			NewMessage = false;
-		}		
+	{
+		std::lock_guard< std::timed_mutex > Guard( Postoffice );
+		ContinueMessageProcessing.notify_one();
 	}
-}
+	
+	// Then the processing loop can be started and this will run as long as 
+	// the actor is running.
+	
+	while ( ActorRunning )
+  {
+		// The thread should just wait until messages becomes available.
+		
+		if ( Mailbox.empty() )
+		{
+			std::unique_lock< std::timed_mutex > Lock( Postoffice, 
+																								 std::chrono::seconds(5) );
+			ContinueMessageProcessing.wait( Lock, 
+				[&](void)->bool{ return NewMessageAvailable || (!ActorRunning); });
+			
+			NewMessageAvailable = false;
+		}
+		else
+	  {
+		  // There is an iterator to the current handler, and a flag indicating that 
+			// the message has been served by at least one handler.
+			
+			auto CurrentHandler = MessageHandlers.begin();
+			bool MessageServed  = false;
+			
+			// It is an overhead to call Mailbox front for each handler as the first 
+			// message in the queue can be cached
+			
+			auto TheMessage = Mailbox.front();
+			
+			// ...and then loop over all handlers to allow them to manage the message 
+			// if they are able to.
+			
+			while ( CurrentHandler != MessageHandlers.end() )
+			{
+				// There is a minor problem related to the handler call since invoking the 
+				// message handler may create or destroy handlers. A mutex cannot help 
+				// since the handler is executing in this thread, and since it runs on 
+				// the same stack all operations implicitly made by the handler
+				// on the handler list will have terminated when control is returned to 
+				// this method. Insertions are not problematic since they will appear at 
+				// the end of the list, and will just be included in the continued 
+				// iterations here. Deletions are similarly not problematic unless the 
+				// handler de-register itself. 
+				//
+				// In this case it does not help having an iterator to the next element 
+				// as there is also no guarantee that that also that pointer will not be 
+				// deleted. The only safe way is to ensure that the handler object for 
+				// the current handler is not deleted. A copy of the current handler is 
+				// therefore made, and its status is set to executing.
+				
+				auto ExecutingHandler = CurrentHandler;
+				(*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
+				
+				// Then the handler can process the message, and if this results in the 
+				// handler de-registering this handler, it will return with the deleted 
+				// state.
+							
+				if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
+			  {
+					MessageServed = true;
+					
+					// Then the list of handlers is optimised by swapping the current 
+					// handler with the handler in front unless it is already the first 
+					// handler. It is necessary to use a separate swap iterator to ensure 
+					// that the current handler iterator points to the next handler not 
+					// affected by the swap operation.
+
+					auto SuccessfulHandler = CurrentHandler++;
+					
+					if( SuccessfulHandler != MessageHandlers.begin() )
+						std::iter_swap( SuccessfulHandler, std::prev( SuccessfulHandler ) );
+				}
+				else	
+					++CurrentHandler; // necessary because of the transposition rule 
+					
+				// The Current Handler is now safely set to a handler that is valid for 
+				// the next execution, and the handler just executed can be deleted, or
+				// its state can be switched back to normal.
+				
+				if ( (*ExecutingHandler)->GetStatus() == GenericHandler::State::Deleted )
+					MessageHandlers.erase( ExecutingHandler );
+				else
+					(*ExecutingHandler)->SetStatus( GenericHandler::State::Normal );
+			}
+			
+			// If the message is not served at this point, it should be delivered to 
+			// the fall back handler. If that handler does not exist it should either 
+			// be ignored or an error message will be thrown.
+			
+			if ( ! MessageServed )
+			{
+				if ( DefaultHandler )
+					DefaultHandler->ProcessMessage( TheMessage );
+				else if ( MessageErrorPolicy == MessageError::Throw )
+			  {
+					std::ostringstream ErrorMessage;
+					auto RawMessagePointer = *(Mailbox.front());
+					
+					ErrorMessage << "No message handler for the message " 
+											 << typeid( RawMessagePointer ).name() 
+											 << " and no default message handler!";
+											 
+				  throw std::logic_error( ErrorMessage.str() );
+				}
+			}
+			
+			// The message is fully handled, and it can be popped from the queue and 
+			// thereby prepare the queue for processing the next message.
+			
+			std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, 
+																											std::chrono::seconds(5) );
+			Mailbox.pop();
+			QueueLock.unlock();
+			
+			// The callback that a new message has arrived and is processed is given
+			// in case derived classes need this information.
+			
+			MessageArrived();
+			
+			// Finally, the thread yields before processing the next message to allow
+			// other threads and actors to progress in parallel.
+			
+			std::this_thread::yield();
+			
+		}   // Queue was not empty
+	}     // While Actor is running
+}				// Dispatch function
 
 // The wait function will mirror the waiting behaviour of the message dispatcher
 // function in that it will lock the mutex and then set the flags. It will also
 // count the number of messages processed and return when the requested number 
 // has been received.
 
+/*
 Theron::Actor::MessageCount Theron::Actor::Wait( 
 																							const MessageCount MessageLimit )
 {
 	// Counting the received messages
 	
 	MessageCount Counter = 0;
-	
+
 	// Then acquiring the lock to be released when the conditional wait starts,
 	// or when the lock object is destroyed. 
 	
-	std::unique_lock< std::mutex > Lock( WaitGuard );
-	
+	std::unique_lock< std::mutex > MessageLock( WaitGuard );
+		
 	// There is now one more Wait function in effect.
 	
 	WaiterCount++;
@@ -481,21 +569,24 @@ Theron::Actor::MessageCount Theron::Actor::Wait(
 	// Message are accounted for and acknowledged one by one until the message 
 	// limit is reached
 	
-	while ( !AbortWait && (Counter < MessageLimit) )
+	while ( ActorRunning && (Counter < MessageLimit) )
   {
+		// The New Message flag is cleared as it will be set before all the waiting
+		// threads are notified and is used to check that the return from the wait
+		// is for real.
+		
+		NewMessage = false;
+
 		// It is just to wait for the next message to arrive. This will release the 
 		// lock while waiting.
 		
-		OneMessageArrived.wait( Lock, [&](void)->bool{ return NewMessage; } );
+		OneMessageArrived.wait(MessageLock, [&](void)->bool{ return NewMessage; });
 		
 		// After this thread has been notified by the Postman about the new message
 		// available, the lock is again set and it is just to increase the message
-		// count, add one acknowledgement for this Wait function and notify the 
-		// Postman.
+		// count.
 
 		Counter++;
-		AcknowledgementCount++;		
-		ContinueMessageProcessing.notify_one();		
 	}
 	
 	// Then this Wait function is done with its wait and can de-register
@@ -507,12 +598,12 @@ Theron::Actor::MessageCount Theron::Actor::Wait(
 	// counted as a message and it should be subtracted from the count of real 
 	// messages before the value is returned.
 	
-	if ( AbortWait )
-		return --Counter;
-	else
+	if ( ActorRunning )
 		return Counter;
+	else
+		return --Counter;
 }
-
+*/
 // The wait for global termination is based on the fact that only internal 
 // actors register by ID, so it is safe to go through the registry and join 
 // threads that are working until all queues are empty and all threads have 
@@ -550,29 +641,16 @@ void Theron::Actor::Identification::WaitForGlobalTermination( void )
 
 Theron::Actor::~Actor()
 {
-	// The lock on the wait guard is then taken to prevent any Wait functions 
-	// from starting and 
+	// First the postmaster is told to close if it is pending more messages. One
+	// may always argue that the actor running flag should be atomic or protected
+	// by a mutex, however there is only one worker and it should be stalled at 
+	// this point because the message queue should be empty. Hence it will not 
+	// do anything before it gets notified and then it realises that it is time 
+	// to stop.
 	
-	std::unique_lock< std::mutex > TerminationLock( WaitGuard );
-
-	// If there is an active wait, the flag indicating a wait after message 
-	// processing is set, and this is used as an indicator that the blocking 
-	// flags should be reset and the Postman should be allowed to process messages
-	// at full speed.
+	ActorRunning = false;
 	
-	if ( WaiterCount > 0 )
-  {
-		AbortWait	 					 = true;
-		NewMessage 				   = true;
-		AcknowledgementCount = 0;
-		
-		unsigned int NotifiedWaiters = WaiterCount;
-		
-		OneMessageArrived.notify_all();
-		
-		ContinueMessageProcessing.wait( TerminationLock, 
-						[&](void)->bool{ return AcknowledgementCount == NotifiedWaiters; });
-	}
+	ContinueMessageProcessing.notify_one();
 	
 	// This should allow the Postman to empty the message queue, and so it is 
 	// just to wait for this to happen if the Postman is still working.
