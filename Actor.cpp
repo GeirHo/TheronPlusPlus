@@ -6,17 +6,19 @@ License: LGPL 3.0
 =============================================================================*/
 
 #include "Actor.hpp"
+#include "PresentationLayer.hpp"
 
 /*=============================================================================
 
- Actor identification (alias Framework)
+ Actor identification
 
 =============================================================================*/
 
-// Static members shared by all actors
+// Static members shared by all actors, but protected within the Identification 
+// object. 
 
 std::atomic< Theron::Actor::Identification::IDType >
-				Theron::Actor::Identification::TotalActorsCreated;
+				Theron::Actor::Identification::TotalActorsCreated(0);
 
 std::unordered_map< std::string, Theron::Actor::Identification * >
 				Theron::Actor::Identification::ActorsByName;
@@ -25,10 +27,10 @@ std::unordered_map< Theron::Actor::Identification::IDType,
 										Theron::Actor::Identification * >
 				Theron::Actor::Identification::ActorsByID;
 
-std::mutex Theron::Actor::Identification::InformationAccess;
+std::recursive_mutex Theron::Actor::Identification::InformationAccess;
 
-Theron::Actor * 
-Theron::Actor::RemoteIdentity::ThePresentationLayerServer = nullptr;
+Theron::Actor::Address 
+Theron::Actor::Identification::ThePresentationLayerServer;
 
 // For compatibility reasons there is a global framework pointer
 
@@ -38,6 +40,92 @@ Theron::Framework * Theron::Actor::GlobalFramework = nullptr;
 // Static functions 
 // -----------------------------------------------------------------------------
 //
+// The presentation layer server can only be set by a presentation layer to 
+// its address. It will throw a logical error exception if the presentation 
+// layer server already exists
+
+void Theron::Actor::Identification::SetPresentationLayerServer( 
+																		const Theron::PresentationLayer * TheSever )
+{
+	if ( ThePresentationLayerServer )
+		throw std::logic_error( "Only one presentation server can be used" );
+	
+	ThePresentationLayerServer = TheSever->GetAddress();
+}
+
+// Creating an Identification object is subject to an initial verification that
+// an object with the given name does not already exist. If it does, an address
+// to that object is returned, possibly with the actor pointer set to the value
+// of the pointer given (which is the case when this function is used from an 
+// actor's constructor)
+
+Theron::Actor::Address Theron::Actor::Identification::Create(
+								 const std::string & ActorName, Theron::Actor * const TheActor )
+{
+	// In order to ensure that the Identification object of an existing actor is 
+	// not destructed in parallel with the creation of a reference to the same 
+	// object, access to the maps must be locked.
+	
+	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+	
+	// The found Identification object is stored. There is a very subtle learning
+	// point: This could have been a raw pointer, but that would leave the 
+	// shared pointer of the base class of the identification void. The shared 
+	// pointer constructor ensures that it is possible to say 'enable shared from 
+	// this', and so a shared pointer must be set to take care of the newly
+	// created Identification object. Furthermore, since the share pointer 
+	// constructor updates the 'enable shared from this' base class, that base 
+	// class could not be protected.
+	
+	std::shared_ptr< Identification > TheActorID;
+	
+	// The lookup is considered first: If the name is not given, then a new ID 
+	// with automatically assigned name must be created, otherwise a check is
+	// made to find an actor with the given name. If no actor is found, then a 
+	// new Identification is again constructed. Note that the constructor takes
+	// care of inserting the Identification object in the two lookup maps.
+	
+	if ( ActorName.empty() )
+    TheActorID = std::shared_ptr< Identification >( new Identification() );
+	else
+  {
+		auto ExistingActor = ActorsByName.find( ActorName );
+		
+		if ( ExistingActor == ActorsByName.end() )
+			TheActorID = std::shared_ptr< Identification >( 
+																							new Identification( ActorName ) );
+		else
+			TheActorID = ExistingActor->second->GetSmartPointer();
+	}
+	
+	// If the actor pointer is given, this should replace the actor pointer of 
+	// the Identification object provided that this pointer is not set. If the 
+	// pointer has a value there is a serious logical error in the application 
+	// and an exception should be thrown.
+	
+	if ( TheActor != nullptr )
+  {
+		if ( TheActorID->ActorPointer == nullptr )
+			TheActorID->ActorPointer = TheActor;
+		else if( TheActor != TheActorID->ActorPointer )
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << "Attempt to Create an Identification with name "
+									 << ActorName << " and address " << TheActor 
+									 << " but this named Identification already points "
+									 << " to the actor at " << TheActorID->ActorPointer;
+									 
+		  throw std::logic_error( ErrorMessage.str() );
+		}
+	}
+	
+	// At this point the Identification pointer is correctly set, and the 
+	// address constructed from its shared pointer can be returned.
+	
+	return Address( TheActorID );
+}
+
 // The static function to return the actor pointer based on a an address will
 // throw an invalid argument if the given address is Null
 
@@ -46,9 +134,11 @@ Theron::Actor * Theron::Actor::Identification::GetActor(
 {
 	if ( ActorAddress )
   {
-		Actor * TheActor = ActorAddress.TheActor->ActorPointer;
+		Actor * TheActor = ActorAddress->ActorPointer;
 		if ( TheActor != nullptr )
 			return TheActor;
+		else if ( ThePresentationLayerServer )
+			return ThePresentationLayerServer->ActorPointer;
 		else
 			throw std::invalid_argument( "GetActor: NULL actor pointer");
   }
@@ -61,16 +151,16 @@ Theron::Actor * Theron::Actor::Identification::GetActor(
 // may result in an invalid address if the given actor name is not found.
 
 Theron::Actor::Address Theron::Actor::Identification::Lookup(
-																									const std::string ActorName )
+																								 const std::string & ActorName )
 {
-	std::lock_guard< std::mutex > Lock( InformationAccess );
+	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 	
 	auto TheActor = ActorsByName.find( ActorName );
 	
 	if ( TheActor == ActorsByName.end() )
-		return Theron::Actor::Address();
+		return Address();
 	else
-		return Theron::Actor::Address( TheActor->second );
+		return TheActor->second->GetSmartPointer();
 }
 
 // The second lookup function is almost identical except that it uses the ID 
@@ -79,273 +169,66 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 Theron::Actor::Address Theron::Actor::Identification::Lookup(
 																														const IDType TheID )
 {
-	std::lock_guard< std::mutex > Lock( InformationAccess );
+	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 	
 	auto TheActor = ActorsByID.find( TheID );
 	
 	if ( TheActor == ActorsByID.end() )
-		return Theron::Actor::Address();
+		return Address();
 	else
-		return Theron::Actor::Address( TheActor->second );
-}
-
-// The function setting the presentation layer will throw a logic error if 
-// another actor already has claimed the role of a presentation layer, and the 
-// given pointer is not null, i.e. that this is invoked by an actor currently 
-// acting as the presentation layer, but about to close.
-
-void Theron::Actor::RemoteIdentity::SetPresentationLayerServer( 
-																											Theron::Actor * TheSever )
-{
-  if ( TheSever == nullptr )
-	{
-		// The session layer is de-registering and all external references to this 
-		// session layer server should be removed - with no session layer server
-		// it is not possible to communicate externally and the external references
-		// should be invalidated.
-		// TODO: Implement this functionality
-	}
-	else if ( ThePresentationLayerServer == nullptr  )
-		ThePresentationLayerServer = TheSever;
-	else 
-	{
-		std::ostringstream ErrorMessage;
-		 
-		ErrorMessage << "The presentation layer server is already set to actor "
-								 << ThePresentationLayerServer->ActorID.Name;
-								 
-	  throw std::logic_error( ErrorMessage.str() );
-	}
-		
+		return TheActor->second->GetSmartPointer();
 }
 
 // -----------------------------------------------------------------------------
-// virtual functions 
-// -----------------------------------------------------------------------------
-
-void Theron::Actor::EndpointIdentity::Register( Address * NewAddress )
-{
-	std::lock_guard< std::recursive_mutex > Lock( AddressAccess );
-	Addresses.insert( NewAddress );
-}
-
-void Theron::Actor::EndpointIdentity::DeRegister( Address * OldAddress )
-{
-	std::lock_guard< std::recursive_mutex > Lock( AddressAccess );
-	Addresses.erase( OldAddress );
-}
-
-void Theron::Actor::RemoteIdentity::Register( Address * NewAddress )
-{
-	NumberOfAddresses++;
-}
-
-// The remote identity is created whenever an actor refers to an address by 
-// name only and this address cannot be found on the current endpoint. It will 
-// count how many addresses that refer to this remote actor, and if there are 
-// no more addresses then the entry can be removed. 
-//
-// Note that this strategy may allow other actors to be constructed locally with
-// the same name as the remote actor was known to have, and local actors will 
-// prevent the creation of references to remote actors with the same name.
-
-void Theron::Actor::RemoteIdentity::DeRegister( Address * OldAddress )
-{
-	if ( --NumberOfAddresses == 0 )
-		delete this;
-}
-
-// The registration and de-registration functions for the Deleted Identity 
-// are identical to the ones for the remote identity.
-
-void Theron::Actor::DeletedIdentity::Register( Address* NewAddress )
-{
-	NumberOfAddresses++;
-}
-
-void Theron::Actor::DeletedIdentity::DeRegister( Address * OldAddress )
-{
-	if ( --NumberOfAddresses == 0 )
-		delete this;
-}
-
-
-// -----------------------------------------------------------------------------
-// Constructors and Destructors 
+// Other functions
 // -----------------------------------------------------------------------------
 //
+// A small check to see if the Identification object can be used for routing 
+// messages. Note that the default validity check on addresses cannot be used 
+// for the Presentation Layer Server Pointer because this check will call the 
+// Allow Routing function which would lead to an infinite recursion. Instead 
+// the address is compared against the Null address to verify that the pointer 
+// is properly set.
 
-// The "copy" constructor of the Identification is provided for another identity
-// to mask as an existing identity. The issue is with the automatically assigned
-// ID since addresses are sorted in containers based on their actor's numerical
-// IDs, and then one can cannot remove an ID without that have active addresses
-// referring to this Identification. The solution is to create a deleted 
-// identity and make this assume the given actor's name and numerical ID, but 
-// not the actor pointer. This is only an issue for endpoint local actors and 
-// it is therefore required that the given pointer is to an endpoint identity.
+bool Theron::Actor::Identification::AllowRouting( void )
+{
+	return ( ActorPointer != nullptr ) || 
+				 ( ( ThePresentationLayerServer != Address::Null() ) && 
+				   ( ThePresentationLayerServer->ActorPointer != nullptr ) ) ;
+}
 
-Theron::Actor::Identification::Identification( 
-																					const EndpointIdentity * TheActorID )
-: NumericalID( TheActorID->NumericalID ), Name( TheActorID->Name ),
+// -----------------------------------------------------------------------------
+// Constructor and Destructor
+// -----------------------------------------------------------------------------
+//
+// Then this newly created Identification object is inserted into the 
+// relevant maps. The access to the maps must be locked to ensure to prevent 
+// the situation where an Identification is created and destroyed at the same 
+// time
+
+Theron::Actor::Identification::Identification( const std::string & ActorName )
+: enable_shared_from_this(), 
+  NumericalID( GetNewID() ),  Name( ActorName.empty() ? 
+		  "Actor" + std::to_string( NumericalID ) : ActorName ),
   ActorPointer( nullptr )
-{ }
-
-
-// The constructor of the identification simply stores the name in 
-
-Theron::Actor::EndpointIdentity::EndpointIdentity( 
-		Theron::Actor * TheActor, const std::string & ActorName )
-	: Identification( TheActor, ActorName ),
-	  Addresses(), AddressAccess()
-{
-	std::lock_guard< std::mutex > Lock( InformationAccess );
+{	
+	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 	
-	auto Outcome = ActorsByName.emplace( Name, &(TheActor->ActorID) );
-	
-	if ( Outcome.second != true )
-	{
-		std::ostringstream ErrorMessage;
-		
-		ErrorMessage << "An actor with the name " << Name 
-								 << " does already exist! This ID = " << NumericalID
-								 << " other ID = " << Outcome.first->second->NumericalID;
-		
-		throw std::invalid_argument( ErrorMessage.str() );
-	}
-	
-	ActorsByID.emplace( NumericalID, &(TheActor->ActorID) );
+	ActorsByName.emplace( Name,        this );
+	ActorsByID.emplace  ( NumericalID, this );
 }
 
-// In the optimal situation there are no more addresses referencing the 
-// actor having this Endpoint Identity, and then it can just be taken out of 
-// the actor registries. However, if there are addresses still referencing 
-// the actor, a Deleted Identification object must be constructed and all the 
-// referencing actors must be set to the Deleted Address, which will be 
-// responsible for cleaning up the registrations when it eventually terminates.
+// The destructor simply reverses this registration after locking the access
+// to the registries.
 
-Theron::Actor::EndpointIdentity::~EndpointIdentity()
+Theron::Actor::Identification::~Identification( void )
 {
-	// First the lock for accessing the name and ID registries is obtained since
-	// it is needed regardless of whether there are addresses referencing this 
-	// actor or not.
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess )	;
 	
-	std::lock_guard< std::mutex > InformationLock( InformationAccess );
-
-	// Then the further actions depend on the number of address objects known
-	
-	if ( Addresses.empty() )
-  {
-		// The case is simple: The endpoint identity can just be removed and this
-		// node forgets about the actor entirely.
-		
-		ActorsByName.erase( Name 				);
-		ActorsByID.erase  ( NumericalID );
-	}
-	else
-  {
-		// In this case a deleted identity must be created to allow addresses to 
-		// remain local information sources, but disallow further messages to be 
-		// sent to this destroyed actor. This ghost will destroy itself once the 
-		// last address de-register, and so there should be no risk of a memory 
-		// leak.
-		
-		DeletedIdentity * TheActorGhost = new DeletedIdentity( this );
-		
-		// This ghost will replace this actor in the registries.
-		
-		ActorsByName[ Name 				] = TheActorGhost;
-		ActorsByID  [ NumericalID ] = TheActorGhost;
-		
-		// Then the referencing addresses can be "re-constructed" with the ghost 
-		// as the identifier for the actor. The address lock must be acquired first
-		
-		std::lock_guard< std::recursive_mutex > AddressLock( AddressAccess ); 
-		
-		for ( Address * TheAddress : Addresses )
-		{
-			TheAddress->TheActor = TheActorGhost;
-			TheActorGhost->Register( TheAddress );
-		}
-		
-		// Eventually the references back to the the addresses are cleared.
-		
-		Addresses.clear();
-	}
-}
-
-// The constructor for the remote identity stores the identity in the registry 
-// for actors by name if the Session Layer server is set. Otherwise it will 
-// throw a logic error since remote addresses cannot be used without a session
-// layer server. 
-// 
-// It is similar to the end point identity in that it will check that there is 
-// no actor by this name already, even though this test should not be necessary
-// it is included as an additional precaution. However, it will not store 
-// the ID because the numerical ID is valid only on this endpoint, and it 
-// will check the availability of the Session Server as a pre-requisite.
-
-Theron::Actor::RemoteIdentity::RemoteIdentity( const std::string & ActorName )
-: Identification( ThePresentationLayerServer, ActorName ),
-  NumberOfAddresses(0)
-{
-
-	if ( ThePresentationLayerServer != nullptr )
-  {
-		std::lock_guard< std::mutex > Lock( InformationAccess );
-		
-		auto Outcome = ActorsByName.emplace( Name, this );
-		
-		if ( Outcome.second != true )
-		{
-			std::ostringstream ErrorMessage;
-			
-			ErrorMessage << "An actor with the name " << Name 
-									 << " does already exist!";
-			
-			throw std::invalid_argument( ErrorMessage.str() );
-		}
-		else
-			ActorsByID.emplace( NumericalID, this );
-	}
-	else
-		throw std::logic_error("Remote actor IDs requires a Session Layer Server");
-	
-}
-
-// When the remote identity is no longer referenced it should remove its ID 
-// and name from the registries.
-
-Theron::Actor::RemoteIdentity::~RemoteIdentity( void )
-{
-	std::lock_guard< std::mutex > Lock( InformationAccess );
-	
-	ActorsByName.erase( Name );
+	ActorsByName.erase( Name 			  );
 	ActorsByID.erase  ( NumericalID );
 }
 
-// Since the Identification guarantees that each ID is unique, it will assign 
-// a new ID for the Deleted Identity. Hence, the deleted identity needs to 
-// look after two IDs: The one of the original actor and the ID automatically
-// assigned. Note that only the latter needs to be registered as the one 
-// that was assigned to the deleted actor is transferred by the destructor of 
-// the Endpoint Identity.
-
-Theron::Actor::DeletedIdentity::DeletedIdentity( 
-																				  const EndpointIdentity * IDToRemove )
-: Identification( IDToRemove ), 
-  NumberOfAddresses(0)
-{ }
-
-// Similar to the remote identity the destructor has to clean up the 
-// registrations.
-
-Theron::Actor::DeletedIdentity::~DeletedIdentity( void )
-{
-	std::lock_guard< std::mutex > Lock( InformationAccess );
-	
-	ActorsByName.erase( Name );
-	ActorsByID.erase  ( NumericalID );
-}
 
 /*=============================================================================
 
@@ -615,17 +498,16 @@ void Theron::Actor::Identification::WaitForGlobalTermination( void )
 	
 	while ( ActorReference != ActorsByID.end() )
   {
-		EndpointIdentity * TheID = 
-									dynamic_cast< EndpointIdentity * >( ActorReference->second );
+		Actor * TheActor = ActorReference->second->ActorPointer;
 		
 		// If the actor has messages, the mailbox should be drained. After that, 
 		// the iteration will restart from the beginning of the actor registry 
 		// because actors previously without messages may now have messages. 
 		// Otherwise, the search just continues with the next actor.
 									
-		if ( TheID && (TheID->ActorPointer->GetNumQueuedMessages() > 0) )
+		if ( ( TheActor != nullptr ) && ( TheActor->GetNumQueuedMessages() > 0 ) )
 		{
-			TheID->ActorPointer->DrainMailbox();
+			TheActor->DrainMailbox();
 			ActorReference = ActorsByID.begin();
 		}
 		else

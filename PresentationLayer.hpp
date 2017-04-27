@@ -87,7 +87,10 @@
   [7] http://www.json.org/
   [8] https://github.com/open-source-parsers/jsoncpp
  
-  Author: Geir Horn, University of Oslo, 2015, 2016
+  REVISION: This file is NOT compatible with standard Theron - the new actor 
+            implementation MUST be used.
+ 
+  Author: Geir Horn, University of Oslo, 2015 - 2017
   Contact: Geir.Horn [at] mn.uio.no
   License: LGPL3.0
 =============================================================================*/
@@ -132,11 +135,20 @@ public:
   // --------------------------------------------------------------------------
   // Serialised message format
   // --------------------------------------------------------------------------
-  
+  //
+	// The general mechanism of serialisation is discussed above. Transparent
+	// communication means in this context that the actors should be identical 
+	// whether they are at the same network endpoint or on different endpoints
+	// (or nodes) as long as the message sent supports serialisation. This the 
+	// serialisation depends on the actual data fields and structure of the 
+	// message to be transmitted. Fundamentally, a serialised message only needs 
+	// to contain the sender's address, the receiver's address and a string 
+	// representing the serialised message.
+	//
   // The result of the serialisation and what is received from the remote actor
-  // is a message, which is a class combining the two involved addresses and 
-  // the payload. This class is also what will be forwarded to the protocol 
-  // engine to be sent out on the network.
+  // is a thus a serialised message, which is a class combining the two 
+	// involved addresses and the payload string. This class is also what will 
+	// be forwarded to the protocol engine to be sent out on the network.
   
   class SerialMessage
   {
@@ -212,87 +224,91 @@ public:
   };
   
   // --------------------------------------------------------------------------
-  // Catching messages for external actors
+  // Serialisation and de-serialisation
   // --------------------------------------------------------------------------
-
-private:
-  
-  // Theron will detect if a message is not on the local endpoint and then 
-  // invoke a function Request Send on the local endpoint to forward the 
-  // message over the network. This function is re-defined and will call the 
-  // outbound message function below for the serialisation. However, that 
-  // implies that the Request Send function needs the pointer to a presentation
-  // layer actor, and this must be globally accessible. Hence, we define the 
-  // pointer as a static variable, and initialise it to the pointer to 'this'
-  // in the constructor. 
-  //
-  // A unfortunate implementation detail is that this static variable forces 
-  // a source file for its memory location, breaking the desire for a header 
-  // only library. 
-  
-  static PresentationLayer * Pointer;
-  
-  // Then the Request Send function needs to be a friend in order to access 
-  // this private pointer. The revised function is found in the source file.
-  
-  friend Theron::EndPoint;
-
-  // --------------------------------------------------------------------------
-  // Serialisation
-  // --------------------------------------------------------------------------
-  
+  // 
   // The serialised message will be forwarded to the Session Layer server for 
   // being encapsulated and sent to the remote actor.
   
+protected:
+	
   Address SessionServer;
 
-  // The Presentation Layer should be able to receive any kind of message as 
-  // long as it is derived from the Serializeable class. This is implemented 
-  // by a static cast on the raw message kept by Theron. The cast must be 
-  // static since we only have a void pointer, as per the discussion at 
-  // http://stackoverflow.com/questions/6771998/dynamic-cast-of-void
-  
-  void OutboundMessage( const void * TheMessage, uint32_t MessageSize,
-												const Address From, const Address To )
-  {
-    const Serializeable * BinaryMessage = 
-			    static_cast< const Serializeable * >( TheMessage );
-    
-    if ( BinaryMessage != nullptr )
-      Send( SerialMessage( From, To, BinaryMessage->Serialize() ), 
-	    SessionServer);
-    else
-      throw std::invalid_argument("Message not derived from Serializeable");
-  }
-  
-  // --------------------------------------------------------------------------
-  // De-Serialisation
-  // --------------------------------------------------------------------------
-
-private: 
-  
-  // We keep a pointer to the Theron Framework to allow the sending of 
-  // serialised messages from to the actors' de-serialise functions as if they 
-  // were from the remote actor.
-  
-  Framework * TheFramework;
-  
-protected:
-  
-  // When a message is received from the network it is received by the incoming 
-  // message handler from the Session Layer server (whose address will be in the 
-  // From parameter). The handler will simply encapsulate the payload as a 
-  // serialized payload message to be handled by the corresponding handler on 
-  // the receiving actor, which will transform the message into the right 
-  // binary format understood by other handlers on the actor.
-  
-  void IncomingMessage( const SerialMessage & TheMessage, const Address From )
-  {
-    
-    TheFramework->Send( SerializedPayload( TheMessage.GetPayload() ), 
-			TheMessage.GetSender(),
-			TheMessage.GetReceiver() );
-  }
+  // A fundamental issue is that Theron's message handlers do not specify the 
+	// receiver of a message because it is unnecessary since the receiver is and 
+	// actor on the local endpoint. However, for transparent communication it 
+	// is necessary to intercept the message if it is destined for an actor on 
+	// a remote endpoint. Then the real receiver's address is needed to construct 
+	// correctly the serialised message. In other words, the Presentation Layer 
+	// cannot define a simple message hander, since the "To" address would be 
+	// lost.
+	// 
+	// The option is to modify the message enqueue function and intercept the 
+	// message before it is queued for local handling since the generic message
+	// contains information about both the sender and the receiver. 
+	// 
+	// Two cases must be considered: The one where a message is outbound for a 
+	// remote endpoint, and the case where the message is inbound coming from an
+	// actor on a remote endpoint and addressed to a local actor. In the outbound
+	// case the message should be Serializeable, and in the inbound case it
+	// it should be a Serialised Message. 
+	//
+	// The implementation is therefore based on the Run Time Type Information
+	// (RTTI) and the ability to convert the generic message to a message of the 
+	// expected type. Invalid argument exceptions will be created if the message 
+	// given is not of the expected type. Note that the message will not be 
+	// enqueued for processing with this actor. 
+	
+	virtual
+	bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage )
+	{
+		if ( TheMessage->To == GetAddress() )
+		{
+			// Note that the test is made to see if the message is from the Session 
+			// Layer to this Presentation Layer as this implies an incoming message 
+			// to an actor on this endpoint that should be of type Serial Message.
+			// The real sending actor the real destination actor are encoded in the 
+			// serial message.
+			
+			auto InboundMessage = 
+					 std::dynamic_pointer_cast< Message< SerialMessage > >( TheMessage );
+					 
+		  // If the message conversion was successful, then this can be forwarded
+		  // to the local destination actor as if it was sent from the remote 
+		  // sender.
+					 
+		  if ( InboundMessage )
+				Send( SerializedPayload( InboundMessage->TheMessage->GetPayload() ), 
+							InboundMessage->TheMessage->GetSender(), 
+							InboundMessage->TheMessage->GetReceiver() );
+			else
+				throw std::invalid_argument("Inbound message is not a Serial Message");
+		}
+		else
+		{
+			// The message should be outbound and it should be convertible to a 
+			// serialised message
+			
+			auto OutboundMessage = 
+					 std::dynamic_pointer_cast< Message< Serializeable > >( TheMessage );
+					 
+		  // A valid message will in this case be forwarded as a serial message 
+		  // to the Session Layer server.
+					 
+		  if ( OutboundMessage )
+				Send( SerialMessage( TheMessage->From, TheMessage->To, 
+														 OutboundMessage->TheMessage->Serialize() ), 
+							SessionServer );
+			else
+				throw std::invalid_argument("Outbound message is not Serializeable");
+		}
+		
+		// If this point is reached, then the message handling must have been 
+		// successful (otherwise and exception would have resulted), and it can be
+		// confirmed as successful.
+		
+		return true;
+	}
   
 public:
   
@@ -321,17 +337,12 @@ public:
   // this no further initialisation is needed.
   
   PresentationLayer( NetworkEndPoint * TheHost,
-		     std::string ServerName = "PresentationLayer"  ) 
-  : Actor( TheHost->GetFramework() , ServerName.data() ),
+								     std::string ServerName = "PresentationLayer"  ) 
+  : Actor( ServerName ),
     StandardFallbackHandler( TheHost->GetFramework(), ServerName.data() ),
     SessionServer()
   {
-    Pointer      = this;
-    TheFramework = dynamic_cast< Theron::Framework * >( TheHost );
-    
-		Actor::RemoteIdentity::SetPresentationLayerServer( this );
-		
-    RegisterHandler( this, &PresentationLayer::IncomingMessage );
+		Actor::SetPresentationLayerServer( this );
   }
 };
 
