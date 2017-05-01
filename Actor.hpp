@@ -36,7 +36,7 @@ License: LGPL 3.0
 #include <mutex>						  // To protect the queue
 #include <utility>						// Pairs
 #include <unordered_map>			// To map actor names to actors
-#include <set>							  // To keep track of actor addresses
+//#include <set>							  // To keep track of actor addresses
 #include <functional>					// For defining handler functions
 #include <list>								// The list of message handlers
 #include <algorithm>					// Various container related utilities
@@ -219,7 +219,7 @@ private:
 	// the serialisation and forwarding of the message to the remote actor. 
 
 	Actor * ActorPointer; 
-
+	
 	// It will also keep track of the known actors, both by name and by ID.
 	// All actors must have an identification, locally or remotely. It may be 
 	// necessary to look up actors based on their name, and the best way
@@ -293,6 +293,11 @@ public:
 	// throw invalid_argument if the address is not for a valid and running actor.
 	
 	static Actor * GetActor( const Address & ActorAddress );
+	
+	// There is a static function used by the actor's destructor to clear the 
+	// actor pointer.
+	
+	static void ClearActor( const Address & ActorAddress );
 	
 	// There is a simple test to see if the actor pointer is defined. Note that 
 	// the actor pointer is only defined for actors on the local endpoint so this 
@@ -577,6 +582,10 @@ public:
 	: From( Sender ), To( Receiver )
 	{ }
 	
+	inline GenericMessage( void )
+	: From(), To()
+	{ }
+	
 	// It is important to make this class polymorphic by having at least one 
 	// virtual method, and it must in order to ensure proper destruction of the 
 	// derived messages.
@@ -587,12 +596,120 @@ public:
 
 // Each actor has a queue of messages and add new messages to the end and 
 // consume from the front of the queue. It can therefore be implemented as a 
-// standard queue.
+// standard queue. Other Actors will place messages for this actor into this
+// queue, and this actor will consume messages from this queue. Hence, this 
+// queue will be the a memory resource shared and accessed by several threads
+// and it therefore needs proper mutex protection. The access to the standard
+// queue is consequently encapsulated in a message queue class. It is a private
+// class as no derived actor should need to directly invoke any of the provided
+// methods.
 
-using MessageQueue = std::queue< std::shared_ptr< GenericMessage > >;
+private:
+
+class MessageQueue : protected std::queue< std::shared_ptr< GenericMessage > >
+{
+private:
+	
+	// The messages queue has a mutex to serialise access to the queue, and it 
+	// supports the notification of two events: One for the arrival of a new 
+	// message and one for the completed message handling. One for ingress 
+	// messages and one for egress.
+	
+	std::timed_mutex 						QueueGuard;
+	std::condition_variable_any NewMessage, MessageDone;
+	
+	// An interesting aspect with waiting for these events is that the condition
+	// triggering the event may have changed when the thread waiting for the event
+	// is started. For instance, if one is waiting for a new message on an empty 
+	// queue, this message could already be processed by the time the thread 
+	// waiting for this signal gets an opportunity to run. Checking the size of 
+	// the queue would then again yield an empty queue, and there should be no 
+	// reason to terminate the wait. This condition would not happen if the 
+	// following requirements are fulfilled by the thread implementation:
+	//
+	// 	1) A notifying all waiting threads will immediately make them ready to 
+  //     run and they will all try to lock the mutex.
+	//  2) Access to the mutex is given in order of request. In other words, 
+	//     all the threads woken by the notification will have locked the mutex
+	//     before the lock would again be acquired from this thread to add or 
+	//     delete messages. 
+	//
+	// It has not been possible to find any documentation for this behaviour, 
+	// although it is reasonable. 
+		
+public:
+	
+	// The fundamental operations is to store a message and to delete the first 
+	// message of the queue. The two operations will signal the corresponding 
+	// condition variable.
+	
+	void StoreMessage( const std::shared_ptr< GenericMessage > & TheMessage );
+	void DeleteFirstMessage( void );
+	
+	// The owning actor will need to access the first message in the queue, and
+	// since messages in the queue can only be deleted by the owning actor when 
+	// the message has been handled, it is a safe operation to read the first 
+	// element and the standard 'front' function for the queue is directly used
+	
+	using std::queue< std::shared_ptr< GenericMessage > >::front;
+	
+	// The size type of the queue is also allowed for external access to ensure
+	// that other types are using the correct type
+	
+	using std::queue< std::shared_ptr< GenericMessage > >::size_type;
+	
+	// Reading the current size of the queue should be allowed
+	
+	using std::queue< std::shared_ptr< GenericMessage > >::size;
+	
+	// There is a function to check if the queue is empty, and to ensure the 
+	// correctness of the test, it must prevent new messages from arriving while 
+	// the test is performed. It can also be that one would like to wait for the 
+	// next message if the queue is empty. It therefore supports two alternatives
+	
+	enum class QueueEmpty
+	{
+		Return,
+		Wait
+	};
+	
+	bool HasMessage( QueueEmpty Action = QueueEmpty::Return );
+	
+	// It could also be that one would like to wait for the next message to 
+	// arrive. This function will therefore block the calling thread until the 
+	// next message arrives and the new message condition is signalled. It 
+	// optionally takes an address of a sender to wait for and if this is given
+	// it will continue to wait until a message from that sender is received.
+	// It is up to the application to ensure that this will not block forever in 
+	// that case; or in the case there will never be another message for this 
+	// actor.
+	
+	void WaitForNextMessage( const Address & SenderToWaitFor = Address::Null() );
+	
+	// Finally, there is a method to wait for the queue to become empty. Again,
+	// this cannot be called from one of the actor's message handlers as that 
+	// will create a deadlock, but it could be necessary for one actor to wait 
+	// until another actor has processed all of its messages.
+	
+	void WaitUntilEmpty( void );
+	
+	// The constructor is simply a place holder for initialising the queue and
+	// the locks
+	
+	MessageQueue( void )
+	: std::queue< std::shared_ptr< GenericMessage > >(),
+	  QueueGuard(), NewMessage(), MessageDone()
+	{ }
+	
+	// The destructor does nothing special and the default destructor is good 
+	// enough.
+	
+} Mailbox;
 
 // The size type is defined as it is convenient to use for anything that has 
 // to do with the message queue
+
+protected:
 
 using MessageCount = MessageQueue::size_type;
 
@@ -616,21 +733,6 @@ public:
 	{ }
 };
 
-// Each actor has a message queue 
-
-private:
-
-MessageQueue Mailbox;
-
-// Since this queue will be written to by the sending actors and processed 
-// by this actor, there may be several threads trying to operate on the queue 
-// at the same time, so sequential access must be ensured by a mutex. There 
-// is also a simple flag to indicate that a message is available it is set by 
-// the enqueue function, and cleared when the message is popped from the queue.
-
-std::timed_mutex QueueGuard;
-bool NewMessageAvailable;
-
 // Messages are queued a dedicated function that obtains a unique lock on the 
 // queue guard before adding the message. The return type could be used to 
 // indicate issues with the queuing, but the function should really throw
@@ -648,12 +750,13 @@ protected:
 virtual
 bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage );
 
-// There is a callback function to be invoked when a new message has been 
-// processed. It is virtual in order to allow derived classes to be notified 
-// when a new message arrives. By default it does nothing.
+// There is a callback function invoked by the Postman when a new message has 
+// been processed. It is virtual in order to allow derived classes to be 
+// notified when a message has been processed.
 
-virtual void MessageArrived( void )
-{ }
+protected:
+	
+virtual void MessageProcessed( void );
 
 // Theron provides a function to check the number of queued messages, which 
 // essentially only returns the current queue size, including the message 
@@ -1075,11 +1178,13 @@ inline bool SetDefaultHandler( ActorType *const TheActor,
 
 // There is a simple flag indicting if the actor is running. It is set to true 
 // in the Actor's constructor and to false in the destructor and it should 
-// be checked in other threads waiting for this Actor in some way.
+// be checked in other threads waiting for this Actor in some way. It is marked
+// as volatile to ensure that the Postman will load it from memory when it is 
+// checked as it may have been changed by another thread closing the actor.
 
 private: 
 	
-bool ActorRunning;
+volatile bool ActorRunning;
 
 // -----------------------------------------------------------------------------
 // Message processing
@@ -1089,18 +1194,6 @@ bool ActorRunning;
 // thread that will be started at construction time.
 
 std::thread Postman;
-
-// There is one mutex and one condition variable to control this worker thread
-// from the main thread of the actor. These are used at start-up and shut down
-// and when a message has been enqueued for this actor. At start up, the 
-// constructor will wait on the condition variable until notified by the 
-// Postman. During normal operation the Postman will wait on this condition 
-// variable until notified by the Enqueue Message that a new message has 
-// arrived. Then again, at shut down the destructor will notify the condition
-// variable after setting the Actor Running flag to false.
-
-std::timed_mutex						Postoffice;
-std::condition_variable_any ContinueMessageProcessing;
 
 // This thread will execute the following function that will take out the 
 // first message from the queue and call the handler for this message. If 
@@ -1129,24 +1222,86 @@ enum class MessageError
 // Synchronisation
 // -----------------------------------------------------------------------------
 //
-// The identification class is private for good reason, and it is therefore an
-// interface function to delegate calls to the Identification's global wait 
-// method.
+// In general, actors should proceed completely asynchronous. However, there is 
+// a particular pattern that makes this difficult: request - response. If an 
+// actor sends a request to another actor and expect a response there are two
+// situations to consider: The response will not depend on the current actor 
+// state, and the actor can therefore continue normal message processing until 
+// the response arrived and is processed as a normal message. Alternatively,
+// the actor should wait for the response to arrive, before processing any other
+// message. This latter case is more difficult and requires some kind of 
+// synchronisation.
+//
+// Again, there are two cases to consider: 1) The actual content of the 
+// response has a meaning. In this case the actor should set up a Receiver and 
+// send the request as if it was from this receiver, and wait for the receiver
+// to receive and handle the response before the necessary response content 
+// information is obtained from the receiver. Looking at the stack this means 
+// that the Postman runs a message handler, which blocks on a receiver. 
+// consequently no more messages will be processed by the actor during this 
+// wait, but they will be queued up. The response arriving to the Receiver 
+// will be processed as soon as it arrives since the Receiver is an actor that 
+// has its own Postman. Conceptually, this implies that the response message 
+// 'bypasses' the other messages to the actor and will be processed before the 
+// other messages in the actor's mailbox. The Receiver provides the necessary 
+// mechanism for implementing this, and it is the standard way to manage 
+// responses. 
+//
+// 2) In this case the response is a simple acknowledgement from the other actor
+// that the request has been received, and potentially processed. The sole fact
+// that a message has arrived from the other actor is sufficient for this 
+// actor to continue processing, and then handle the acknowledgement at some 
+// later time according to the place of the message in the queue. Also this 
+// case can be implemented with a Receiver, although it would be better if the 
+// message handler could wait until a message arrives. To support this 
+// scenario, a special function is provided to wait for the arriving message, 
+// and the function terminates with the address of the sender of the last 
+// message in the queue to allow the waiting message handler to check if this 
+// was the right sender and potentially restart the wait if it was not.
+
+protected:
+
+inline 
+void WaitForNextMessage( const Address & AddressToWaitFor = Address::Null() )
+{ 
+	Mailbox.WaitForNextMessage( AddressToWaitFor ); 
+}
+
+// There is a small helper function that waits for the Postman to complete the 
+// delivery of messages, i.e. wait for the mailbox to drain. Essentially, it 
+// is just a wait until the message queue is empty. This method cannot be 
+// called from the actor itself, as it would cause the same type of deadlock 
+// as for the previous wait function, and it will throw a logic error if it is 
+// called from the Postman. It needs a condition variable to indicate when the 
+// queue is empty. Since it is related to the queue, it is protected by the 
+// queue's mutex Queue Guard.
+
+public:
+void DrainMailbox( void );
+
+// The next level is to use the drain mailbox wait on all running actors. This
+// is delegated to the Identification's static wait function that will loop 
+// over all local actors waiting for them to drain the mailbox until there are
+// no more actors with messages. This can typically be used to block the main 
+// thread until the whole actor system has finished processing.
 
 inline static void WaitForGlobalTermination( void )
 {
 	Identification::WaitForGlobalTermination();
 }
 
-// There is a small helper function that waits for the Postman to complete the 
-// delivery of messages, i.e. wait for the mailbox to drain. Essentially, it 
-// is just a wait for the current queue size to be processed.
-
-inline void DrainMailbox( void )
-{
-	while ( ! Mailbox.empty() )
-		std::this_thread::sleep_for( std::chrono::seconds(1) );
-}
+// Waiting for a message to be processed is provided via the virtual call back 
+// function Message Processed, and the Receiver class below provides a way for
+// another thread to wait for an actor to receive and process one or more 
+// messages. The philosophical problem with the Receiver is that another thread
+// or actor directly calls a method on the Receiver and thereby breaking the 
+// actor model. It is better to implement actor synchronisation by a message 
+// protocol, although it may not always be possible because one could need to
+// wait for an acknowledgement to be returned before continuing with the 
+// processing of messages. In this case, the current message handler should 
+// block waiting for the acknowledgement, and creating a Receiver and blocking 
+// on that Receiver could be a more robust alternative than to use the Wait For 
+// the Next Message function above.
 
 /*=============================================================================
 
@@ -1160,41 +1315,21 @@ inline void DrainMailbox( void )
 
 inline Actor( const std::string & ActorName = std::string() )
 : ActorID( Identification::Create( ActorName, this ) ), 
-  Mailbox(), QueueGuard(), 
-  MessageHandlers(), DefaultHandler(), 
-  Postman(), Postoffice(), ContinueMessageProcessing()
+  Mailbox(), MessageHandlers(), DefaultHandler(), Postman()
 {
-	// Then the actor ID can be set to the correct value. This could not be done 
-	// as an argument to the ActorID constructor above because the actor's this 
-	// pointer would not yet be properly initialised.
-	
-	//ActorID = ;
-	
 	// The flag indicating if the actor is running is set to true, and currently
 	// there is no message available.
 	
-	ActorRunning 				= true;
-	NewMessageAvailable = false;
+	ActorRunning = true;
 	
 	// The default error handling policy is to throw on unhanded messages
 	
 	MessageErrorPolicy = MessageError::Throw;
 	
 	// Then the thread can be started. It will wait until it is signalled from 
-	// the Enqueue message function. The lock is taken to synchronise the start
-	// up message
+	// the Enqueue message function. 
 	
-	std::unique_lock< std::timed_mutex > Lock( Postoffice );
-	
-	Postman = std::thread( &Actor::DispatchMessages, this );
-	
-	// It is necessary to ensure that the Postman is up and running before 
-	// returning from the constructor given that it may take some time to 
-	// allocate the thread
-	
-	ContinueMessageProcessing.wait( Lock, [&](void)->bool{
-		return Postman.joinable();
-	});	
+	Postman = std::thread( &Actor::DispatchMessages, this );	
 }
 
 // The destructor needs to consider the situation where the actor is destroyed 
@@ -1389,6 +1524,7 @@ public:
 		Actor::GlobalFramework = this;
 	}
 };
+
 // -----------------------------------------------------------------------------
 // Receiver
 // -----------------------------------------------------------------------------
@@ -1423,7 +1559,7 @@ protected:
 	// of the actor is the new message function. This will add to the count of 
 	// unconsumed messages and notify the wait handler.
 	
-	virtual void MessageArrived( void )
+	virtual void MessageProcessed( void )
 	{
 		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
 																							 std::chrono::seconds(10) );
@@ -1439,7 +1575,7 @@ public:
 	// the Postman to complete the processing of these messages before terminating
 	// with the number of messages that could be processed.
 	
-	MessageCount Consume( MessageCount MessageLimit )
+	inline MessageCount Consume( MessageCount MessageLimit )
 	{
 		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
 																							 std::chrono::seconds(10) );
@@ -1481,9 +1617,8 @@ public:
 		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
 																							 std::chrono::seconds(10) );
 
-		// The wait function will wait for one message, but this will be added
-		// to the unconsumed count by the enqueue message function, and hence 
-		// it should be subtracted.
+		// The wait function will wait for one message. It will not block if there 
+		// are already unconsumed messages.
 
 		OneMessageArrived.wait( Lock, [&](void)->bool{ return Unconsumed > 0; });
 		

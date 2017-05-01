@@ -5,8 +5,20 @@ Author and Copyright: Geir Horn, 2017
 License: LGPL 3.0
 =============================================================================*/
 
-#include "Actor.hpp"
-#include "PresentationLayer.hpp"
+#include <chrono>									// To support time out mutexes
+#include <functional>							// Run-time functions
+
+#include "Actor.hpp"							// The Actor definition
+#include "PresentationLayer.hpp"  // The Presentation Layer definition
+
+// It has been noted on some systems that obtaining the lock for a mutex could
+// be a source of deadlock, and for this reasons the synchronisation mutexes
+// are timed mutexes allowing the lock operation to be tried for some time.
+// This is a tuning parameter, but for now it is set sufficiently long to ensure
+// the mutex lock in even larger systems
+
+constexpr std::chrono::seconds MutexTimeout( void )
+{ return std::chrono::seconds(5); }
 
 /*=============================================================================
 
@@ -132,6 +144,8 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 Theron::Actor * Theron::Actor::Identification::GetActor( 
 																	 const Theron::Actor::Address & ActorAddress )
 {
+	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+	
 	if ( ActorAddress )
   {
 		Actor * TheActor = ActorAddress->ActorPointer;
@@ -178,6 +192,17 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 	else
 		return TheActor->second->GetSmartPointer();
 }
+
+// Clearing the actor is just setting the actor pointer to the null pointer
+
+void Theron::Actor::Identification::ClearActor( 
+																	const Theron::Actor::Address & ActorAddress )
+{
+	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+	
+	ActorAddress->ActorPointer = nullptr;
+}
+
 
 // -----------------------------------------------------------------------------
 // Other functions
@@ -236,10 +261,23 @@ Theron::Actor::Identification::~Identification( void )
 
 =============================================================================*/
 
+// The mailbox stores a message by simply enqueue it after locking the mutex 
+// to ensure that only one thread will enqueue a message at the time. After 
+// adding the message to the queue it will signal the new message condition.
+
+void Theron::Actor::MessageQueue::StoreMessage(
+													  const std::shared_ptr<GenericMessage> & TheMessage )
+{
+	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	push( TheMessage );
+	NewMessage.notify_all();
+}
+
 // When an actor sends a message to another actor, it will call the 
 // enqueue message function on the receiving agent with a pointer to a copy of
 // the message to ensure that it does exists also when the message is handed 
-// by the receiving actor.
+// by the receiving actor. The enqueue function will simply ask the mailbox to
+// store the message.
 //
 // The enqueue function will first append the message to the message queue, and 
 // if no postman in running, it will start the thread to dispatch the message 
@@ -248,25 +286,84 @@ Theron::Actor::Identification::~Identification( void )
 bool Theron::Actor::EnqueueMessage( 
 													const	std::shared_ptr< GenericMessage > & TheMessage )
 {
-	// Enqueue the message 
-	
-	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, 
-																									std::chrono::seconds(5) );
-	Mailbox.push( TheMessage );
-	QueueLock.unlock();
-	
-	// The postman should be signalled that processing should continue if it is 
-	// waiting for messages, i.e. if the queued message was the first message 
-	// in the queue. Otherwise, the Postman is already processing messages and 
-	// will come to this queued message at one point.
-	
-	std::unique_lock< std::timed_mutex > ProcessLock( Postoffice, 
-																						        std::chrono::seconds(5) );
-	NewMessageAvailable = true;
-	ContinueMessageProcessing.notify_one();
-	ProcessLock.unlock();
-	
+	Mailbox.StoreMessage( TheMessage );
 	return true;
+}
+
+// A message is deleted from the dispatching function after it has been given 
+// to all message handlers for this message type. It indicates the end of the 
+// processing for this message so it can safely be popped from the queue and 
+// other threads waiting for this event can be notified.
+
+void Theron::Actor::MessageQueue::DeleteFirstMessage( void )
+{
+	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	pop();
+	MessageDone.notify_all();
+}
+
+// The method to check if the queue is empty will wait for a message if that 
+// is the selected policy. This is safe to use from the methods running under 
+// the Postman like its dispatch method or message handlers since the arrival 
+// events will be created by other actors, i.e. other threads.
+
+bool Theron::Actor::MessageQueue::HasMessage(
+																Theron::Actor::MessageQueue::QueueEmpty Action )
+{
+	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	if ( empty() )
+  {
+		if ( Action == QueueEmpty::Wait )
+		{
+			NewMessage.wait( QueueLock, [&](void)->bool{ return size() > 0; } );
+			return true;
+		}
+		else
+			return false;
+	}
+	else
+		return true;
+}
+
+// Waiting for the next message to arrive is a forced version of the check for 
+// message function since it will block until the message has arrived. This is
+// therefore also safe to be used from message handlers via the corresponding 
+// function on the actor's interface.
+
+void Theron::Actor::MessageQueue::WaitForNextMessage(
+																const Theron::Actor::Address & SenderToWaitFor )
+{
+	// The lock is taken and the current queue size is remembered
+	
+	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	auto IngressQueueSize = size();
+	
+	// The condition depends on what the given address is. If it is Null then 
+	// the wait should terminate whenever there is a new message.
+	
+	if ( SenderToWaitFor == Address::Null() )
+		NewMessage.wait( QueueLock, 
+										 [&](void)->bool{ return size() > IngressQueueSize; } );
+	else
+		NewMessage.wait( QueueLock, 
+										 [&](void)->bool{ return ( size() > IngressQueueSize ) 
+									 								    && ( back()->From == SenderToWaitFor );});	
+}
+
+// Waiting for the the queue to drain is potentially the only wait that could 
+// have multiple threads waiting for the signal since the condition for 
+// termination is unique: The queue should be empty! If another message has 
+// arrived before a thread manages to start up and process the notification,
+// then it is still right to block again waiting for the next signal.
+
+void Theron::Actor::MessageQueue::WaitUntilEmpty( void )
+{
+ 	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+
+	// Since the condition is tested before the wait triggers, it is safe to call
+	// the wait directly even if the queue should be empty.
+	
+  MessageDone.wait( QueueLock, [&](void)->bool{ return empty(); } );	
 }
 
 /*=============================================================================
@@ -291,206 +388,152 @@ bool Theron::Actor::EnqueueMessage(
 
 void Theron::Actor::DispatchMessages( void )
 {
-	// The first thing to do is to tell the Actor constructor that the postman 
-	// thread is up running and ready to dispatch messages.
+	// Messages are continuously dispatched as long as there are more messages 
+	// and the actor is running. Note that the order of these tests is important 
+	// when the actor terminates because the destructor will first wait for the 
+	// queue to drain, and then set the running flag to false before submitting 
+	// an empty message that will stop the wait on a message, but cause the while 
+	// loop to terminate because the actor is no longer running and thereby avoid 
+	// processing the empty message.
 	
-	{
-		std::lock_guard< std::timed_mutex > Guard( Postoffice );
-		ContinueMessageProcessing.notify_one();
-	}
-	
-	// Then the processing loop can be started and this will run as long as 
-	// the actor is running.
-	
-	while ( ActorRunning )
+	while ( Mailbox.HasMessage( MessageQueue::QueueEmpty::Wait ) && ActorRunning )
   {
-		// The thread should just wait until messages becomes available.
+	  // There is an iterator to the current handler, and a flag indicating that 
+		// the message has been served by at least one handler.
 		
-		if ( Mailbox.empty() )
+		auto CurrentHandler = MessageHandlers.begin();
+		bool MessageServed  = false;
+		
+		// It is an overhead to call Mailbox front for each handler as the first 
+		// message in the queue can be cached
+		
+		auto TheMessage = Mailbox.front();
+		
+		// ...and then loop over all handlers to allow them to manage the message 
+		// if they are able to.
+		
+		while ( CurrentHandler != MessageHandlers.end() )
 		{
-			std::unique_lock< std::timed_mutex > Lock( Postoffice, 
-																								 std::chrono::seconds(5) );
-			ContinueMessageProcessing.wait( Lock, 
-				[&](void)->bool{ return NewMessageAvailable || (!ActorRunning); });
+			// There is a minor problem related to the handler call since invoking the 
+			// message handler may create or destroy handlers. A mutex cannot help 
+			// since the handler is executing in this thread, and since it runs on 
+			// the same stack all operations implicitly made by the handler
+			// on the handler list will have terminated when control is returned to 
+			// this method. Insertions are not problematic since they will appear at 
+			// the end of the list, and will just be included in the continued 
+			// iterations here. Deletions are similarly not problematic unless the 
+			// handler de-register itself. 
+			//
+			// In this case it does not help having an iterator to the next element 
+			// as there is also no guarantee that that also that pointer will not be 
+			// deleted. The only safe way is to ensure that the handler object for 
+			// the current handler is not deleted. A copy of the current handler is 
+			// therefore made, and its status is set to executing.
 			
-			NewMessageAvailable = false;
-		}
-		else
-	  {
-		  // There is an iterator to the current handler, and a flag indicating that 
-			// the message has been served by at least one handler.
+			auto ExecutingHandler = CurrentHandler;
+			(*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
 			
-			auto CurrentHandler = MessageHandlers.begin();
-			bool MessageServed  = false;
-			
-			// It is an overhead to call Mailbox front for each handler as the first 
-			// message in the queue can be cached
-			
-			auto TheMessage = Mailbox.front();
-			
-			// ...and then loop over all handlers to allow them to manage the message 
-			// if they are able to.
-			
-			while ( CurrentHandler != MessageHandlers.end() )
-			{
-				// There is a minor problem related to the handler call since invoking the 
-				// message handler may create or destroy handlers. A mutex cannot help 
-				// since the handler is executing in this thread, and since it runs on 
-				// the same stack all operations implicitly made by the handler
-				// on the handler list will have terminated when control is returned to 
-				// this method. Insertions are not problematic since they will appear at 
-				// the end of the list, and will just be included in the continued 
-				// iterations here. Deletions are similarly not problematic unless the 
-				// handler de-register itself. 
-				//
-				// In this case it does not help having an iterator to the next element 
-				// as there is also no guarantee that that also that pointer will not be 
-				// deleted. The only safe way is to ensure that the handler object for 
-				// the current handler is not deleted. A copy of the current handler is 
-				// therefore made, and its status is set to executing.
+			// Then the handler can process the message, and if this results in the 
+			// handler de-registering this handler, it will return with the deleted 
+			// state.
+						
+			if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
+		  {
+				MessageServed = true;
 				
-				auto ExecutingHandler = CurrentHandler;
-				(*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
-				
-				// Then the handler can process the message, and if this results in the 
-				// handler de-registering this handler, it will return with the deleted 
-				// state.
-							
-				if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
-			  {
-					MessageServed = true;
-					
-					// Then the list of handlers is optimised by swapping the current 
-					// handler with the handler in front unless it is already the first 
-					// handler. It is necessary to use a separate swap iterator to ensure 
-					// that the current handler iterator points to the next handler not 
-					// affected by the swap operation.
+				// Then the list of handlers is optimised by swapping the current 
+				// handler with the handler in front unless it is already the first 
+				// handler. It is necessary to use a separate swap iterator to ensure 
+				// that the current handler iterator points to the next handler not 
+				// affected by the swap operation.
 
-					auto SuccessfulHandler = CurrentHandler++;
-					
-					if( SuccessfulHandler != MessageHandlers.begin() )
-						std::iter_swap( SuccessfulHandler, std::prev( SuccessfulHandler ) );
-				}
-				else	
-					++CurrentHandler; // necessary because of the transposition rule 
-					
-				// The Current Handler is now safely set to a handler that is valid for 
-				// the next execution, and the handler just executed can be deleted, or
-				// its state can be switched back to normal.
+				auto SuccessfulHandler = CurrentHandler++;
 				
-				if ( (*ExecutingHandler)->GetStatus() == GenericHandler::State::Deleted )
-					MessageHandlers.erase( ExecutingHandler );
-				else
-					(*ExecutingHandler)->SetStatus( GenericHandler::State::Normal );
+				if( SuccessfulHandler != MessageHandlers.begin() )
+					std::iter_swap( SuccessfulHandler, std::prev( SuccessfulHandler ) );
 			}
+			else	
+				++CurrentHandler; // necessary because of the transposition rule 
+				
+			// The Current Handler is now safely set to a handler that is valid for 
+			// the next execution, and the handler just executed can be deleted, or
+			// its state can be switched back to normal.
 			
-			// If the message is not served at this point, it should be delivered to 
-			// the fall back handler. If that handler does not exist it should either 
-			// be ignored or an error message will be thrown.
-			
-			if ( ! MessageServed )
-			{
-				if ( DefaultHandler )
-					DefaultHandler->ProcessMessage( TheMessage );
-				else if ( MessageErrorPolicy == MessageError::Throw )
-			  {
-					std::ostringstream ErrorMessage;
-					auto RawMessagePointer = *(Mailbox.front());
-					
-					ErrorMessage << "No message handler for the message " 
-											 << typeid( RawMessagePointer ).name() 
-											 << " and no default message handler!";
-											 
-				  throw std::logic_error( ErrorMessage.str() );
-				}
+			if ( (*ExecutingHandler)->GetStatus() == GenericHandler::State::Deleted )
+				MessageHandlers.erase( ExecutingHandler );
+			else
+				(*ExecutingHandler)->SetStatus( GenericHandler::State::Normal );
+		}
+		
+		// If the message is not served at this point, it should be delivered to 
+		// the fall back handler. If that handler does not exist it should either 
+		// be ignored or an error message will be thrown.
+		
+		if ( ! MessageServed )
+		{
+			if ( DefaultHandler )
+				DefaultHandler->ProcessMessage( TheMessage );
+			else if ( MessageErrorPolicy == MessageError::Throw )
+		  {
+				std::ostringstream ErrorMessage;
+				auto RawMessagePointer = *(Mailbox.front());
+				
+				ErrorMessage << "No message handler for the message " 
+										 << typeid( RawMessagePointer ).name() 
+										 << " and no default message handler!";
+										 
+			  throw std::logic_error( ErrorMessage.str() );
 			}
-			
-			// The message is fully handled, and it can be popped from the queue and 
-			// thereby prepare the queue for processing the next message.
-			
-			std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, 
-																											std::chrono::seconds(5) );
-			Mailbox.pop();
-			QueueLock.unlock();
-			
-			// The callback that a new message has arrived and is processed is given
-			// in case derived classes need this information.
-			
-			MessageArrived();
-			
-			// Finally, the thread yields before processing the next message to allow
-			// other threads and actors to progress in parallel.
-			
-			std::this_thread::yield();
-			
-		}   // Queue was not empty
+		}
+		
+		// The message is fully handled, and it can be popped from the queue and 
+		// thereby prepare the queue for processing the next message.
+		
+		Mailbox.DeleteFirstMessage();
+		
+		// The callback that a new message has arrived and is processed is given
+		// in case derived classes need this information.
+		
+		MessageProcessed();
+		
+		// Finally, the thread yields before processing the next message to allow
+		// other threads and actors to progress in parallel.
+		
+		std::this_thread::yield();
+		
 	}     // While Actor is running
 }				// Dispatch function
 
-// The wait function will mirror the waiting behaviour of the message dispatcher
-// function in that it will lock the mutex and then set the flags. It will also
-// count the number of messages processed and return when the requested number 
-// has been received.
 
-/*
-Theron::Actor::MessageCount Theron::Actor::Wait( 
-																							const MessageCount MessageLimit )
+// When the Postman has processed a message it will notify the actor about this 
+// event by calling the virtual message processed function, which will in turn 
+// notify other threads that may wait for the condition variable.
+
+void Theron::Actor::MessageProcessed( void )
+{ }
+
+// The function to wait for the mailbox to drain is identical to the previous,
+// except that it uses a different predicate function to the wait to avoid the 
+// additional overhead of repeatedly calling the wait for one message and 
+// acquire the lock (although it will happen implicitly in the wait condition)
+
+void Theron::Actor::DrainMailbox( void )
 {
-	// Counting the received messages
-	
-	MessageCount Counter = 0;
-
-	// Then acquiring the lock to be released when the conditional wait starts,
-	// or when the lock object is destroyed. 
-	
-	std::unique_lock< std::mutex > MessageLock( WaitGuard );
-		
-	// There is now one more Wait function in effect.
-	
-	WaiterCount++;
-	
-	// Message are accounted for and acknowledged one by one until the message 
-	// limit is reached
-	
-	while ( ActorRunning && (Counter < MessageLimit) )
-  {
-		// The New Message flag is cleared as it will be set before all the waiting
-		// threads are notified and is used to check that the return from the wait
-		// is for real.
-		
-		NewMessage = false;
-
-		// It is just to wait for the next message to arrive. This will release the 
-		// lock while waiting.
-		
-		OneMessageArrived.wait(MessageLock, [&](void)->bool{ return NewMessage; });
-		
-		// After this thread has been notified by the Postman about the new message
-		// available, the lock is again set and it is just to increase the message
-		// count.
-
-		Counter++;
-	}
-	
-	// Then this Wait function is done with its wait and can de-register
-	
-	WaiterCount--;
-	
-	// For the sake of compatibility the number of messages handled will be 
-	// returned to the calling thread. If the abort wait is set, then the it was
-	// counted as a message and it should be subtracted from the count of real 
-	// messages before the value is returned.
-	
-	if ( ActorRunning )
-		return Counter;
+	if ( std::this_thread::get_id() != Postman.get_id() )
+		Mailbox.WaitUntilEmpty();
 	else
-		return --Counter;
+	throw 
+		std::logic_error("Cannot wait for message DRAIN within the same actor!");
+
 }
-*/
-// The wait for global termination is based on the fact that only internal 
-// actors register by ID, so it is safe to go through the registry and join 
-// threads that are working until all queues are empty and all threads have 
-// stopped. 
+
+// The identification's function to wait for global termination will start 
+// from the beginning of the registry of Identifications and wait for the first
+// actor to drain its queue. It will not move to the second actor before the 
+// first actor has drained. Whenever an actor is found with messages, the 
+// wait will re-start from the beginning of the actor registry because the 
+// the actor that had messages could send messages to other actors, and hence 
+// it is necessary to wait for them too.
 
 void Theron::Actor::Identification::WaitForGlobalTermination( void )
 {
@@ -500,11 +543,6 @@ void Theron::Actor::Identification::WaitForGlobalTermination( void )
   {
 		Actor * TheActor = ActorReference->second->ActorPointer;
 		
-		// If the actor has messages, the mailbox should be drained. After that, 
-		// the iteration will restart from the beginning of the actor registry 
-		// because actors previously without messages may now have messages. 
-		// Otherwise, the search just continues with the next actor.
-									
 		if ( ( TheActor != nullptr ) && ( TheActor->GetNumQueuedMessages() > 0 ) )
 		{
 			TheActor->DrainMailbox();
@@ -523,19 +561,29 @@ void Theron::Actor::Identification::WaitForGlobalTermination( void )
 
 Theron::Actor::~Actor()
 {
-	// First the postmaster is told to close if it is pending more messages. One
-	// may always argue that the actor running flag should be atomic or protected
-	// by a mutex, however there is only one worker and it should be stalled at 
-	// this point because the message queue should be empty. Hence it will not 
-	// do anything before it gets notified and then it realises that it is time 
-	// to stop.
+	// First the postmaster is told to close. This is done by first waiting for 
+	// it to drain the current message queue so that already received messages 
+	// can be properly processed.
+	
+	Mailbox.WaitUntilEmpty();
+	
+	// Then the flag is set to ensure that the Postman will stop and not process 
+	// any messages arriving after this.
 	
 	ActorRunning = false;
 	
-	ContinueMessageProcessing.notify_one();
+	// Other actors should no longer be able to route messages to this actor
+	// and the actor pointer in the Identification object should be cleared.
 	
-	// This should allow the Postman to empty the message queue, and so it is 
-	// just to wait for this to happen if the Postman is still working.
+	Identification::ClearActor( ActorID );
+	
+	// To force a stop, an empty message is queued in the case the Postman has 
+	// gone into a wait for the next message. This should wake it up and make it
+	// check the actor running flag.
+	
+	Mailbox.StoreMessage( std::make_shared< GenericMessage >() );
+	
+	// Then it is just to wait for the Postman to finish off
 	
 	if ( Postman.joinable() )
 		Postman.join();	
