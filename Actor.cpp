@@ -94,8 +94,9 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 	// The lookup is considered first: If the name is not given, then a new ID 
 	// with automatically assigned name must be created, otherwise a check is
 	// made to find an actor with the given name. If no actor is found, then a 
-	// new Identification is again constructed. Note that the constructor takes
-	// care of inserting the Identification object in the two lookup maps.
+	// new Identification is again constructed. Note that the constructor of the 
+	// Identification object takes care of inserting the Identification object 
+	// in the two lookup maps.
 	
 	if ( ActorName.empty() )
     TheActorID = std::shared_ptr< Identification >( new Identification() );
@@ -110,14 +111,20 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 			TheActorID = ExistingActor->second->GetSmartPointer();
 	}
 	
-	// If the actor pointer is given, this should replace the actor pointer of 
-	// the Identification object provided that this pointer is not set. If the 
-	// pointer has a value there is a serious logical error in the application 
-	// and an exception should be thrown.
+	// An actor is allowed to steal the Actor Pointer if this actor pointer is 
+	// either unassigned or set to the Presentation Layer actor indicating that 
+	// this Identification could be for a remote object which is now confirmed 
+	// to be a local identity. If no actor pointer is given, the the Actor Pointer
+	// of the Identification object is set to the Presentation Layer server if 
+	// that is known. Otherwise, if an actor pointer is given to this function 
+	// for a named actor that is already set to another actor that is not the 
+	// Presentation Layer actor, there is a serious logical error in the 
+	// application and an exception will be thrown.
 	
 	if ( TheActor != nullptr )
   {
-		if ( TheActorID->ActorPointer == nullptr )
+		if ((TheActorID->ActorPointer == nullptr) ||
+				(TheActorID->ActorPointer == ThePresentationLayerServer->ActorPointer) )
 			TheActorID->ActorPointer = TheActor;
 		else if( TheActor != TheActorID->ActorPointer )
 		{
@@ -131,6 +138,8 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 		  throw std::logic_error( ErrorMessage.str() );
 		}
 	}
+	else if ( ThePresentationLayerServer->ActorPointer != nullptr )
+		TheActorID->ActorPointer = ThePresentationLayerServer->ActorPointer;
 	
 	// At this point the Identification pointer is correctly set, and the 
 	// address constructed from its shared pointer can be returned.
@@ -151,8 +160,6 @@ Theron::Actor * Theron::Actor::Identification::GetActor(
 		Actor * TheActor = ActorAddress->ActorPointer;
 		if ( TheActor != nullptr )
 			return TheActor;
-		else if ( ThePresentationLayerServer )
-			return ThePresentationLayerServer->ActorPointer;
 		else
 			throw std::invalid_argument( "GetActor: NULL actor pointer");
   }
@@ -193,7 +200,13 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 		return TheActor->second->GetSmartPointer();
 }
 
-// Clearing the actor is just setting the actor pointer to the null pointer
+// Clearing the actor is just setting the actor pointer to the null pointer 
+// effectively invalidating all addresses pointing to this Identification 
+// object ensuring that no further messages will be sent to this actor. If 
+// the actor is meant to re-appear on a remote endpoint, which is bad practice,
+// it can only be re-created as an Identification object on this endpoint after
+// all addresses referring to the Identification have been cleared, and the 
+// Identification object has been deleted.
 
 void Theron::Actor::Identification::ClearActor( 
 																	const Theron::Actor::Address & ActorAddress )
@@ -202,7 +215,6 @@ void Theron::Actor::Identification::ClearActor(
 	
 	ActorAddress->ActorPointer = nullptr;
 }
-
 
 // -----------------------------------------------------------------------------
 // Other functions

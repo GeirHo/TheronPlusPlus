@@ -215,8 +215,17 @@ private:
 	
 	// There is a pointer to the actor for which this is the ID. This 
 	// will be the real actor on this endpoint, and for actors on remote 
-	// endpoints, it will be the Session Layer actor which is responsible for 
+	// endpoints, it will be the Presentation Layer actor which is responsible for 
 	// the serialisation and forwarding of the message to the remote actor. 
+	// This pointer is Null if no Presentation Layer is registered. Note the 
+	// precedence: The Identification object is created when the first address 
+	// object is created for a named actor. If no Presentation Layer is registered
+	// the pointer becomes Null, otherwise it will point to the Presentation 
+	// Layer actor. If then an actor with the same name is created, the actor 
+	// pointer will be set to point to this local actor. When the local actor is 
+	// deleted, this pointer is set to Null as all addresses referencing this 
+	// Identification object must be removed before a new Identification object 
+	// can be created for a remote actor of the same name. 
 
 	Actor * ActorPointer; 
 	
@@ -404,11 +413,12 @@ public:
 	{
 		// The lookup may fail if no actor, either locally or remotely, exists by 
 		// that name. In that case, it is understood that this is a reference to 
-		// either a remote actor or a local actor not yet created, and the 
+		// a remote actor, or to a local actor not yet created, and the 
 		// corresponding address object is constructed and assigned to this 
 		// address.
 		
-		*this = Identification::Create( Name );
+		if ( get() == nullptr )
+			*this = Identification::Create( Name );
 	}
 	
 	// Oddly enough, but Theron has no constructor to get an address by the 
