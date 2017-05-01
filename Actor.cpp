@@ -280,7 +280,7 @@ Theron::Actor::Identification::~Identification( void )
 void Theron::Actor::MessageQueue::StoreMessage(
 													  const std::shared_ptr<GenericMessage> & TheMessage )
 {
-	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	std::unique_lock< std::mutex > QueueLock( QueueGuard );
 	push( TheMessage );
 	NewMessage.notify_all();
 }
@@ -309,7 +309,7 @@ bool Theron::Actor::EnqueueMessage(
 
 void Theron::Actor::MessageQueue::DeleteFirstMessage( void )
 {
-	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	std::unique_lock< std::mutex > QueueLock( QueueGuard );
 	pop();
 	MessageDone.notify_all();
 }
@@ -322,7 +322,7 @@ void Theron::Actor::MessageQueue::DeleteFirstMessage( void )
 bool Theron::Actor::MessageQueue::HasMessage(
 																Theron::Actor::MessageQueue::QueueEmpty Action )
 {
-	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	std::unique_lock< std::mutex > QueueLock( QueueGuard );
 	if ( empty() )
   {
 		if ( Action == QueueEmpty::Wait )
@@ -347,19 +347,20 @@ void Theron::Actor::MessageQueue::WaitForNextMessage(
 {
 	// The lock is taken and the current queue size is remembered
 	
-	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	std::unique_lock< std::mutex > QueueLock( QueueGuard );
 	auto IngressQueueSize = size();
 	
 	// The condition depends on what the given address is. If it is Null then 
-	// the wait should terminate whenever there is a new message.
+	// the wait should terminate whenever there is a new message. If an address 
+	// is given the wait should terminate when there the newly received message 
+	// is from the specified sender. 
 	
 	if ( SenderToWaitFor == Address::Null() )
 		NewMessage.wait( QueueLock, 
 										 [&](void)->bool{ return size() > IngressQueueSize; } );
 	else
 		NewMessage.wait( QueueLock, 
-										 [&](void)->bool{ return ( size() > IngressQueueSize ) 
-									 								    && ( back()->From == SenderToWaitFor );});	
+										 [&](void)->bool{ return back()->From == SenderToWaitFor;});	
 }
 
 // Waiting for the the queue to drain is potentially the only wait that could 
@@ -370,10 +371,10 @@ void Theron::Actor::MessageQueue::WaitForNextMessage(
 
 void Theron::Actor::MessageQueue::WaitUntilEmpty( void )
 {
- 	std::unique_lock< std::timed_mutex > QueueLock( QueueGuard, MutexTimeout() );
+	std::unique_lock< std::mutex > QueueLock( QueueGuard );
 
 	// Since the condition is tested before the wait triggers, it is safe to call
-	// the wait directly even if the queue should be empty.
+	// the wait directly even if the queue should already be empty.
 	
   MessageDone.wait( QueueLock, [&](void)->bool{ return empty(); } );	
 }

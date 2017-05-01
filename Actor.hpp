@@ -625,8 +625,8 @@ private:
 	// message and one for the completed message handling. One for ingress 
 	// messages and one for egress.
 	
-	std::timed_mutex 						QueueGuard;
-	std::condition_variable_any NewMessage, MessageDone;
+	std::mutex 						  QueueGuard;
+	std::condition_variable NewMessage, MessageDone;
 	
 	// An interesting aspect with waiting for these events is that the condition
 	// triggering the event may have changed when the thread waiting for the event
@@ -1553,15 +1553,21 @@ class Receiver : public Actor
 private:
 	
 	// There is a counter for messages that has arrived an not yet Consumed or 
-	// waited for.
+	// waited for. It is declared volatile to ensure that the compiler does not 
+	// optimise it away. 
 	
 	volatile MessageCount Unconsumed;
 	
-	// The actual wait is ensured by a condition variable and a mutex to wait 
-	// on this variable
+	// Access to this counter will be protected by a mutex.
+	
+	std::mutex CounterGuard;
+	
+	// The actual wait is ensured by a condition variable waiting for a change 
+	// in the unconsumed counter, and therefore use the counter guard mutex.
 
-	std::condition_variable_any OneMessageArrived;
-  std::timed_mutex						WaitGuard;
+	std::condition_variable OneMessageArrived;
+  
+
 	
 protected:
 	
@@ -1571,8 +1577,8 @@ protected:
 	
 	virtual void MessageProcessed( void )
 	{
-		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
-																							 std::chrono::seconds(10) );
+		std::lock_guard< std::mutex > Lock( CounterGuard );
+
 		Unconsumed++;
 		OneMessageArrived.notify_one();
 	}
@@ -1587,8 +1593,7 @@ public:
 	
 	inline MessageCount Consume( MessageCount MessageLimit )
 	{
-		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
-																							 std::chrono::seconds(10) );
+		std::lock_guard< std::mutex > Lock( CounterGuard );
 		
 		MessageCount Served = std::min( static_cast< MessageCount >( Unconsumed ), 
 																		MessageLimit );
@@ -1608,8 +1613,7 @@ public:
 	
 	inline void Reset( void )
 	{
-		std::lock_guard< std::timed_mutex > Lock( WaitGuard );
-		
+		std::lock_guard< std::mutex > Lock( CounterGuard );		
 		Unconsumed = 0;
 	}
 	
@@ -1623,9 +1627,7 @@ public:
 	
 	inline MessageCount Wait( MessageCount MessageLimit = 1 )
 	{
-
-		std::unique_lock< std::timed_mutex > Lock( WaitGuard, 
-																							 std::chrono::seconds(10) );
+		std::unique_lock< std::mutex > Lock( CounterGuard );
 
 		// The wait function will wait for one message. It will not block if there 
 		// are already unconsumed messages.
@@ -1634,9 +1636,9 @@ public:
 		
 		// Theoretically, more than one message could have arrived from the 
 		// point in time when the Wait function is called until the return of 
-		// the function. The Consume function can be called on its own and it will
-		// therefore lock, which means that the lock should be released prior to 
-		// this call.
+		// the function. The Consume function can be called on its own and it must
+		// therefore lock the mutex, which means that the lock should be released 
+		// prior to this call.
 		
 		Lock.unlock();
 
@@ -1648,11 +1650,11 @@ public:
 	// given, but also an endpoint reference is needed. 
 	
 	Receiver( void )
-	: Actor(), Unconsumed(0), OneMessageArrived(), WaitGuard()
+	: Actor(), Unconsumed(0), CounterGuard(), OneMessageArrived()
 	{ }
 	
 	Receiver( EndPoint & endPoint, const char *const name = 0 )
-	: Actor( name ), Unconsumed(0), OneMessageArrived(), WaitGuard()
+	: Actor( name ), Unconsumed(0), CounterGuard(), OneMessageArrived()
 	{ }
 };
 
