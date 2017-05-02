@@ -11,15 +11,6 @@ License: LGPL 3.0
 #include "Actor.hpp"							// The Actor definition
 #include "PresentationLayer.hpp"  // The Presentation Layer definition
 
-// It has been noted on some systems that obtaining the lock for a mutex could
-// be a source of deadlock, and for this reasons the synchronisation mutexes
-// are timed mutexes allowing the lock operation to be tried for some time.
-// This is a tuning parameter, but for now it is set sufficiently long to ensure
-// the mutex lock in even larger systems
-
-constexpr std::chrono::seconds MutexTimeout( void )
-{ return std::chrono::seconds(5); }
-
 /*=============================================================================
 
  Actor identification
@@ -207,13 +198,26 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 // it can only be re-created as an Identification object on this endpoint after
 // all addresses referring to the Identification have been cleared, and the 
 // Identification object has been deleted.
+// 
+// However, if the actor closing is currently registered as the Presentation 
+// Layer, it could have several addresses pointing at it, and it must therefore
+// clear multiple pointers.
 
 void Theron::Actor::Identification::ClearActor( 
 																	const Theron::Actor::Address & ActorAddress )
 {
 	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 	
-	ActorAddress->ActorPointer = nullptr;
+	if ( ActorAddress == ThePresentationLayerServer )
+  {
+		for ( auto & TheID : ActorsByID )
+			if ( TheID.second->ActorPointer == ActorAddress->ActorPointer )
+				TheID.second->ActorPointer = nullptr;
+			
+		ThePresentationLayerServer = Address::Null();
+	}
+	else
+		ActorAddress->ActorPointer = nullptr;
 }
 
 // -----------------------------------------------------------------------------

@@ -455,10 +455,10 @@ public:
 	// containers.
 	
 	inline bool operator == ( const Address & OtherAddress ) const
-	{ return get() == OtherAddress.get(); }
+	{ return get()->NumericalID == OtherAddress->NumericalID; }
 	
 	inline bool operator != ( const Address & OtherAddress ) const
-	{ return get() != OtherAddress.get(); } 
+	{ return get()->NumericalID != OtherAddress->NumericalID; } 
 
 	// The less-than operator is more interesting since the address could be 
 	// Null and how does that compare with other addresses? It is here defined 
