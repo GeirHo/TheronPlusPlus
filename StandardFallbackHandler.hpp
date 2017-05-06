@@ -55,15 +55,14 @@ private:
 		std::ostringstream ErrorMessage;
 		const char * ByteString = reinterpret_cast< const char * >( Data );
 		
-		ErrorMessage << "Unhandled message "
+		ErrorMessage << "*** ERROR  *** Unmanaged message "
 								 << " to " << GetAddress().AsString()
 								 << " from " << From.AsString() << " with data ";
 								 
 		for ( unsigned int i=0; i < Size; i++ )
 			ErrorMessage << ByteString[i] << " ";
 		
-		//throw std::runtime_error( ErrorMessage.str() );
-		std::cout << " *** ERROR  *** " << ErrorMessage.str() << std::endl;
+		throw std::runtime_error( ErrorMessage.str() );
 	}
 	
 public:

@@ -36,7 +36,6 @@ License: LGPL 3.0
 #include <mutex>						  // To protect the queue
 #include <utility>						// Pairs
 #include <unordered_map>			// To map actor names to actors
-//#include <set>							  // To keep track of actor addresses
 #include <functional>					// For defining handler functions
 #include <list>								// The list of message handlers
 #include <algorithm>					// Various container related utilities
@@ -455,10 +454,32 @@ public:
 	// containers.
 	
 	inline bool operator == ( const Address & OtherAddress ) const
-	{ return get()->NumericalID == OtherAddress->NumericalID; }
+	{ 
+		if ( get() != nullptr )
+			if ( OtherAddress.get() != nullptr )
+				return get()->NumericalID == OtherAddress->NumericalID; 
+			else
+				return false; // Other address is Null
+		else
+			if ( OtherAddress.get() == nullptr )
+				return true;  // both are Null
+			else
+				return false; // Other address is not Null, but this is
+	}
 	
 	inline bool operator != ( const Address & OtherAddress ) const
-	{ return get()->NumericalID != OtherAddress->NumericalID; } 
+	{ 
+		if ( get() != nullptr )
+			if ( OtherAddress.get() != nullptr )
+				return get()->NumericalID != OtherAddress->NumericalID; 
+			else
+				return true; // Other address is Null
+		else
+			if ( OtherAddress.get() == nullptr )
+				return false; // Both are Null
+			else
+				return true; // Other address is not Null, but this is
+	} 
 
 	// The less-than operator is more interesting since the address could be 
 	// Null and how does that compare with other addresses? It is here defined 
