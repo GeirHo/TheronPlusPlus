@@ -14,11 +14,9 @@
   can be a string for IP adresses, but it can be anything that the link supports
   like an integer.
   
-  The link message is formatted by the ProtocolEngine and sent by the 
-  LinkServer. Incoming messages are received by the LinkServer and forwarded 
-  as a link message object to the ProtocolEngine. 
-  
-  TO DO: Interface based on ProtocolEngine::InboundMessage
+  The link message is formatted by the Session Layer and sent by the 
+  Network Layer. Incoming messages are received by the Network Layer and 
+  forwarded as a link message object to the Session Layer. 
   
   Author: Geir Horn, University of Oslo, 2015
   Contact: Geir.Horn [at] mn.uio.no

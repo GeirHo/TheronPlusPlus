@@ -1536,7 +1536,7 @@ public:
 	// do the work. When no name is passed, the actor is called "Framework", which 
 	// should prevent the construction of two actors with the same name.
 
-	Framework( const unsigned int ThreadCount )
+	Framework( const unsigned int ThreadCount = 0 )
 	: Actor( "Framework" )
 	{ 
 		Actor::GlobalFramework = this;
@@ -1568,8 +1568,12 @@ public:
 // messages, and process them as they arrive. The counter is decreased by the 
 // consume and the wait method, and the actual wait only happens if the counter
 // reaches zero. The current implementation implements this behaviour.
+//
+// The Actor base class is virtual so that the Receiver functionality can be
+// combined to extend other actors (provided that they also inherit the actor
+// as a virtual base class).
 
-class Receiver : public Actor
+class Receiver : public virtual Actor
 {
 private:
 	

@@ -132,7 +132,7 @@ private:
 
   void PrintString ( const std::string & message, const Address sender )
   {
-      *OutputStream << message << std::endl;
+      *OutputStream << message;
 
       if ( TerminationPhase )
 	      Send( true, TerminationPhase->GetAddress() );
