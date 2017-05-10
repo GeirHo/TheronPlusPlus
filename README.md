@@ -52,12 +52,12 @@ The Actor header and source files fully support the following Theron class APIs:
 * [Address](http://docs.theron-library.com/6.00/classTheron_1_1Address.html), but the `GetFramework` has no meaning and returns the numerical ID of the actor referenced by the address.
 
 Two obsolete classes are supported at the level of API to ensure that legacy Theron code will compile:
-* 	**Framework** is a core component of Theron responsible for managing and executing actors. This is delegated to the operating system in Theron++ and where the Framework is a simple actor capable of supporting the sending of messages. It is recommended not to use a Framework in applications created for Theron++, and it can safely be omitted from the constructors and functions where the Theron API requires a Framework. For instance, note the `Actor( Name )` constructor of the above code example which in Theron should have a Framework as first argument. The actor does provide a Theron compliant constructor, but it ignores the Framework and delegates the actor initialisation to the `Actor( Name )` constructor.
+* 	**Framework** is a core component of Theron responsible for managing and executing actors. This is delegated to the operating system in Theron++ where the Framework is a simple actor capable of supporting the sending of messages. It is recommended not to use a Framework in applications created for Theron++, and it can safely be omitted from the constructors and functions where the Theron API requires a Framework. For instance, note the `Actor( Name )` constructor of the above code example which in Theron should have a Framework as first argument. The actor does provide a Theron compliant constructor, but it ignores the Framework and delegates the actor initialisation to the `Actor( Name )` constructor.
 * 	**Endpoint** is responsible for network communication in Theron. This is replaced by the four actors supporting _transparent communication_: 
 	1. **Presentation Layer** responsible for serialising and de-serialising messages
 	2. **Session Layer** responsible for mapping a local actor ID to a remote actor address
 	3. **Network Layer** implementing the network protocol in use
-	4. **Network End Point** to ensure that the three other actors are correctly bound together, and correctly started and stopped consistently.
+	4. **Network End Point** to ensure that the three other actors are correctly bound together, and started and stopped consistently.
 
 	Thus, no Endpoint should be used as the current implementation has no functionality. Legacy applications using the Endpoint for communication are probably outdated anyway since Theron's Endpoint is based on Crossroads.io (XS.h) which has been [superseded](http://stackoverflow.com/questions/13494033/zeromq-vs-crossroads-i-o) by the [nanomsg](https://github.com/nanomsg/nanomsg) library. Theron++ does support [XMPP](https://xmpp.org/) and has tested interoperability with the Python [SPADE](https://github.com/javipalanca/spade) mult-agent environment. Support for [ZeroMQ](http://zeromq.org/) is currently being implemented.
 
@@ -65,7 +65,7 @@ The Theron classes supporting the user defined memory allocation (**AllocatorMan
 
 ## Tests
 
-The Hello World example can be built using the provided makefile `make HelloWorld`. Theron legacy applications can be compiled by replacing the `Theron.h`file with the `Actor.hpp`file and replace the Theron library at linking with the compiled `Actor.cpp`, i.e. `Actor.o`as the last project objective file.
+The Hello World example can be built using the provided makefile `make HelloWorld`. Theron legacy applications can be compiled by replacing the `Theron.h`file with the `Actor.hpp`file and replace the Theron library at linking with the compiled `Actor.cpp`, i.e. `Actor.o`as the last project object code file.
 
 ## Contributors
 
