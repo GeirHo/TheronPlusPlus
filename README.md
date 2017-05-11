@@ -1,4 +1,4 @@
-# Theron++: An actor framework for C++
+# Theron++: An Actor Framework for C++
 
 ## Synopsis
 
@@ -40,9 +40,9 @@ Theron is the best actor model library for C++ with an elegant C++ API; arguably
 
 ## Installation
 
-The Theron++ framework is fully implemented in the Actor header and source file. There is no installation required, and these files can either be placed with the other source files of a project, or in a separate directory. 
+The Theron++ framework is fully implemented in the Actor header and source file. The Presentation Layer header file is needed to compile the Actor source file. There is no installation required, and these files can either be placed with the other source files of a project, or in a separate directory. 
 
-All other files in this project are _utility actors_ supporting various functionality often implemented in actor systems. Four classes are related to the support of _transparent communication_ soon to be described in the project's wiki.
+All other files in this project are _utility actors_ supporting various functionality often implemented in actor systems. Four classes are related to the support of _transparent communication_ soon to be described in the project's wiki. The XMPP classes requires the [Swiften](http://swift.im/swiften.html) library.
 
 ## API Reference
 
