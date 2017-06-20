@@ -9,6 +9,7 @@
 #include <thread>			// To wait for all messages to be served
 #include <chrono>			// To wait one second when there are unhanded messages
 #include <algorithm>	// To accumulate unhanded messages
+#include <sstream>    // Formatted error messages
 #include <stdexcept>  // To throw exceptions if no shut down receiver
 
 #include "NetworkEndPoint.hpp"
@@ -50,12 +51,21 @@ void Theron::NetworkEndPoint::TerminationReceiver::StartTermination(
 // been created. Otherwise, it throws a standard logic error. 
 
 void Theron::NetworkEndPoint::SendShutDownMessage(
-	   const Theron::Address & Sender)
+																								const Theron::Address & Sender)
 {
 	if ( ShutDownReceiver )
 		Send( ShutDownMessage(), Sender, ShutDownReceiver->GetAddress() );
 	else
-		throw std::logic_error("Sending a shut down message requires a shut down receiver" );
+	{
+		std::ostringstream ErrorMessage;
+		
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "Sending a shut down message requires a shut down " 
+								 << "receiver";
+		
+		throw std::logic_error( ErrorMessage.str() );
+	}
+		
 }
 
 // To support the cases where the user would want to send the shut down 
@@ -69,6 +79,14 @@ Theron::Address Theron::NetworkEndPoint::ShutDownAddress( void )
 	if ( ShutDownReceiver )
 		return ShutDownReceiver->GetAddress();
 	else
-		throw std::logic_error("No shut down receiver to give the address of");
+	{
+		std::ostringstream ErrorMessage;
+		
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "No shut down receiver to give the address of";
+								 
+		throw std::logic_error( ErrorMessage.str() );
+	}
+		
 }
 

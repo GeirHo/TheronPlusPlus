@@ -88,8 +88,9 @@ void Link::NewPeer( const JabberID & LocalID, const JabberID & RemoteID )
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "JID = " << RemoteID << " is new peer for unknown "
-		 << "local JID = " << LocalID;
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "JID = " << RemoteID << " is new peer for unknown "
+								 << "local JID = " << LocalID;
     
     throw std::invalid_argument( ErrorMessage.str() );
   }
@@ -108,8 +109,9 @@ void Link::RemovePeer( const JabberID & LocalID, const JabberID & RemoteID )
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "JID = " << RemoteID << " cannot be removed from unknown "
-		 << "local JID = " << LocalID;
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "JID = " << RemoteID << " cannot be removed from unknown "
+								 << "local JID = " << LocalID;
     
     throw std::invalid_argument( ErrorMessage.str() );
   }
@@ -435,9 +437,10 @@ void Link::SubscribeKnownPeers( JabberID NewEndpoint,
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "Subscribe known peers expected SUBSCRIBE as subject "
-		 << "and got subject " << XMPPMessage->getSubject() 
-		 << " and body = [ " << XMPPMessage->getBody() << "]";
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "Subscribe known peers expected SUBSCRIBE as subject "
+								 << "and got subject " << XMPPMessage->getSubject() 
+								 << " and body = [ " << XMPPMessage->getBody() << "]";
 		 
     throw std::invalid_argument( ErrorMessage.str() );
   }
@@ -465,7 +468,7 @@ void Link::EndpointPresence( JabberID ClientID,
     
     RosterRequest( ClientID, 
       [=]( Swift::RosterPayload::ref TheRoster, 
-	   Swift::ErrorPayload::ref  Error )->void{
+				   Swift::ErrorPayload::ref  Error )->void{
       DispatchKnownPeers( ClientID, NewEndpoint, TheRoster, Error );
     });
   }
@@ -597,9 +600,10 @@ void Link::ClientRecord::SendMessage( const OutsideMessage & Message )
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "Send message called on client JID = "
-		 << TheClient->getJID() << " with sender address JID = "
-		 << Message.GetSender();
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "Send message called on client JID = "
+								 << TheClient->getJID() << " with sender address JID = "
+								 << Message.GetSender();
 		 
     throw std::logic_error( ErrorMessage.str() );
   }
@@ -710,7 +714,7 @@ Link::Link( NetworkEndPoint * Host,
 
   TheClient->onPresenceReceived.connect( 
     [=] (Swift::Presence::ref PresenceMessage)->void {
-	EndpointPresence( ThisEndpoint, PresenceMessage );
+				EndpointPresence( ThisEndpoint, PresenceMessage );
     });
 
   // Then this network endpoint will simply subscribe to this known endpoint
@@ -721,7 +725,7 @@ Link::Link( NetworkEndPoint * Host,
   
   if ( InitialRemoteEndpoint.isValid() )
     TheClient->onConnected.connect( [=](void)->void { 
-	SendPresence( ThisEndpoint, Swift::Presence::Type::Subscribe,
+					SendPresence( ThisEndpoint, Swift::Presence::Type::Subscribe,
 		      InitialRemoteEndpoint );
     });
 
@@ -732,7 +736,7 @@ Link::Link( NetworkEndPoint * Host,
   
   TheClient->onMessageReceived.connect(
     [=](Swift::Message::ref XMPPMessage)->void {
-	SubscribeKnownPeers( ThisEndpoint, XMPPMessage );
+				SubscribeKnownPeers( ThisEndpoint, XMPPMessage );
     });
 
   // All parts of the client record has now been initialised and it can be
@@ -871,9 +875,10 @@ Address XMPPProtocolEngine::ResolveUndefined( const JabberID & ExAddress )
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "Unable to construct actor ID for " << ExAddress
-		 << " since an actor with ID " << RemoteID.AsString()
-		 << " already exists on " << Host->GetName();
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "Unable to construct actor ID for " << ExAddress
+								 << " since an actor with ID " << RemoteID.AsString()
+								 << " already exists on " << Host->GetName();
 		 
     throw std::invalid_argument( ErrorMessage.str() );
   }

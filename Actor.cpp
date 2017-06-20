@@ -51,7 +51,15 @@ void Theron::Actor::Identification::SetPresentationLayerServer(
 																		const Theron::PresentationLayer * TheSever )
 {
 	if ( ThePresentationLayerServer )
-		throw std::logic_error( "Only one presentation server can be used" );
+	{
+		std::ostringstream ErrorMessage;
+		
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+							   <<  "Only one presentation server can be used!"
+								 << " Already set to " << ThePresentationLayerServer.AsString();
+ 
+		throw std::logic_error( ErrorMessage.str() );
+	}
 	
 	ThePresentationLayerServer = TheSever->GetAddress();
 }
@@ -121,7 +129,8 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 		{
 			std::ostringstream ErrorMessage;
 			
-			ErrorMessage << "Attempt to Create an Identification with name "
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "Attempt to Create an Identification with name "
 									 << ActorName << " and address " << TheActor 
 									 << " but this named Identification already points "
 									 << " to the actor at " << TheActorID->ActorPointer;
@@ -152,10 +161,25 @@ Theron::Actor * Theron::Actor::Identification::GetActor(
 		if ( TheActor != nullptr )
 			return TheActor;
 		else
-			throw std::invalid_argument( "GetActor: NULL actor pointer");
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "GetActor: NULL actor pointer";
+			
+			throw std::invalid_argument( ErrorMessage.str() );
+		}
   }
 	else
-		throw std::invalid_argument( "GetActor: NULL actor address" );
+	{
+		std::ostringstream ErrorMessage;
+		
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "GetActor: NULL actor address";
+								 
+		throw std::invalid_argument( ErrorMessage.str() );
+	}
+		
 }
 
 // The first lookup function by name simply acquires the lock and then 
@@ -457,13 +481,43 @@ void Theron::Actor::DispatchMessages( void )
 			if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
 		  {
 				MessageServed = true;
-				
-				// Then the list of handlers is optimised by swapping the current 
-				// handler with the handler in front unless it is already the first 
-				// handler. It is necessary to use a separate swap iterator to ensure 
-				// that the current handler iterator points to the next handler not 
-				// affected by the swap operation.
 
+				// One learn over time which messages that are most frequently used, 
+				// and move the forwarding functions for these messages forward in 
+				// the handler structure. There are several known strategies known 
+				// from the literature. The most famous one is to move the created 
+				// message to the front of the list. However, this runs the risk that 
+				// if the list is in an organised state, a simple access to one of 
+				// the infrequently sent messages will will destroy the organisation 
+				// and it will take many messages before the list is again organised. 
+				
+				// Alternatively, the received message can be moved k elements forward
+				// in the list. A compromise between these two is to move the element 
+				// to position k+1 if it it is in the end part of the list (move 
+				// almost to front), and the transpose the element with the element 
+				// in front if it is in the 2..k positions of the list. This 
+				// heuristic is known as the POS(k) rule. Two different strategies 
+				// are suggested in Oommen et al. (1990): "Deterministic optimal and 
+				// expedient move-to-rear list organizing strategies", Theoretical 
+				// Computer Science, Vol. 74, No. 2, pp. 183-197. Their first and 
+				// optimal strategy implies keeping a counter for each element, and 
+				// then move the accessed element to the rear of the list once it has
+				// been accessed T times. Their expedient strategy implies moving the 
+				// element to the rear of the list when it has been accessed T 
+				// consecutive times. The implementation cost of the first rule would
+				// be similar to keeping a map sorted on the number of times each 
+				// message has arrived - and this map will obviously be exact. Waiting
+				// for T consecutive accesses for an element may again be too slow. 
+				
+				// The transposition rule suggested by Ronald Rivest (1976): "On 
+				// self-organizing sequential search heuristics", Communications of 
+				// the ACM, Vol. 19, No. 2, pp. 63-67 is much more efficient. Here a 
+				// successfully constructed message will be swapped with the element 
+				// immediately in front unless the element is already at the start of 
+				// the list. It is necessary to use a separate swap iterator to ensure 
+				// that the current handler iterator points to the next handler not 
+				// affected by the swap operation. 
+.
 				auto SuccessfulHandler = CurrentHandler++;
 				
 				if( SuccessfulHandler != MessageHandlers.begin() )
@@ -495,7 +549,8 @@ void Theron::Actor::DispatchMessages( void )
 				std::ostringstream ErrorMessage;
 				auto RawMessagePointer = *(Mailbox.front());
 				
-				ErrorMessage << "No message handler for the message " 
+				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+										 << "No message handler for the message " 
 										 << typeid( RawMessagePointer ).name() 
 										 << " and no default message handler!";
 										 
@@ -539,9 +594,15 @@ void Theron::Actor::DrainMailbox( void )
 	if ( std::this_thread::get_id() != Postman.get_id() )
 		Mailbox.WaitUntilEmpty();
 	else
-	throw 
-		std::logic_error("Cannot wait for message DRAIN within the same actor!");
-
+	{
+		std::ostringstream ErrorMessage;
+		
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "Actor " << ActorID.AsString() 
+								 << "Cannot wait for message DRAIN within the same actor!";
+		
+		throw std::logic_error( ErrorMessage.str() );
+	}
 }
 
 // The identification's function to wait for global termination will start 

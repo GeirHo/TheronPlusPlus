@@ -207,7 +207,9 @@ private:
 	static std::atomic< IDType > TotalActorsCreated;
 	
 	// There is a small function to increment the total number of actors and 
-	// return that id
+	// return that ID. It should be noted that since the increment is done before
+	// the value is returned, the real actors will be numbered from 1... and hence
+	// 0 is a valid address for the object Address::Null (see below).
 	
 	inline static IDType GetNewID( void )
 	{	return ++TotalActorsCreated;	}
@@ -506,22 +508,22 @@ public:
 		
 	// Then it must provide access to the actor's name and ID that can be 
 	// taken from the actor's stored information. If these are called on a Null
-	// address, they will throw a standard logic error.
+	// address, they will NULL in some form.
 	
 	inline std::string AsString( void ) const
 	{	
 		if ( get() == nullptr )
-			throw std::logic_error( "Null address has no name" );
-	  
-		return get()->Name;
+			return "Address::Null";
+	  else
+			return get()->Name;
 	}
 	
 	inline Identification::IDType AsInteger( void ) const
 	{	
 		if ( get() == nullptr )
-			throw std::logic_error( "Null address has no numerical ID");
-		
-		return get()->NumericalID;
+			return Identification::IDType(0);
+		else
+			return get()->NumericalID;
 	}
 	
 	inline Identification::IDType AsUInt64( void ) const
@@ -529,14 +531,13 @@ public:
 	
 	// There is a legacy function to obtain the numerical ID of the framework, 
 	// which is here taken identical to the actor pointed to by this address. 
-	// It will throw a logic error if it is a null address.
 	
 	inline Identification::IDType GetFramework( void ) const
 	{
 		if ( get() == nullptr )
-			throw std::logic_error( "Null address has no framework!" );
-		
-	  return get()->NumericalID;
+			return Identification::IDType(0);
+		else
+		  return get()->NumericalID;
 	}	
 };
 	
@@ -811,8 +812,12 @@ public:
 
 template< class MessageType >
 inline bool Send( const MessageType & TheMessage, 
-								  const Address & TheSender, const Address & TheReceiver )
+								  const Address & TheSender, 
+									const Address & TheReceiver ) const
 {
+	static_assert( std::is_copy_constructible< MessageType >::value,
+								"The message to send must be copy constructible"	);
+	
 	Actor * ReceivingActor = Identification::GetActor( TheReceiver );
 	auto    MessageCopy    = std::make_shared< MessageType >( TheMessage );
 	
@@ -827,7 +832,8 @@ inline bool Send( const MessageType & TheMessage,
 protected:
 	
 template< class MessageType >
-inline bool Send( const MessageType & TheMessage, const Address & TheReceiver )
+inline bool Send( const MessageType & TheMessage, 
+									const Address & TheReceiver     ) const
 {
 	return Send( TheMessage, GetAddress(), TheReceiver );
 }

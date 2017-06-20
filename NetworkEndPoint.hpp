@@ -199,7 +199,15 @@ public:
     if ( ThePointer )
       return ThePointer;
     else
-      throw std::logic_error("Network server inheritance error");
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "Network server inheritance error";
+									 
+			throw std::logic_error( ErrorMessage.str() );
+		}
+      
   }
   
   // It is the responsibility of the constructor of the communication specific 
@@ -227,7 +235,7 @@ public:
     
     CommunicationActor[Role] = std::shared_ptr< Actor >( 
       new ServerClass( this, 
-	  std::forward< ArgumentTypes >(ConstructorArguments)... 
+										   std::forward< ArgumentTypes >(ConstructorArguments)... 
       ));
   }
 

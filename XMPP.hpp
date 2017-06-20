@@ -857,7 +857,12 @@ protected:
 																		const Address & PresentationLayerActor,
 																		const Address & SessionLayerActor )
   {
-    throw std::logic_error("XMPP Inbound resolver should not be needed!");
+    std::ostringstream ErrorMessage;
+		
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "XMPP Inbound resolver should not be needed!";
+								 
+		throw std::logic_error( ErrorMessage.str() );
   }
   
   // --------------------------------------------------------------------------

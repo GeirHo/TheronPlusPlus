@@ -448,7 +448,8 @@ protected:
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "Unable to construct actor ID for " << ExAddress;
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "Unable to construct actor ID for " << ExAddress;
     
     throw std::invalid_argument( ErrorMessage.str() );
   }
@@ -457,8 +458,9 @@ protected:
   {
     std::ostringstream ErrorMessage;
     
-    ErrorMessage << "Unable to construct external address for " 
-		 << ActorID.AsString();
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+						     << "Unable to construct external address for " 
+								 << ActorID.AsString();
     
     throw std::invalid_argument( ErrorMessage.str() );
   }
@@ -992,7 +994,7 @@ protected:
 public:
   
   void OutboundMessage( const PresentationLayer::SerialMessage & TheMessage,
-			const Address From                     )
+												const Address From                     )
   {
     ExternalMessage LinkMessage;
     
@@ -1283,21 +1285,10 @@ public:
     RegisterHandler( this, &SessionLayer<ExternalMessage>::UnsubscribePeerDiscovery );
   }
   
-  // The destructor will de-register the message handlers and leave the other
-  // containers to clean up their own storage. Note that this is not strictly 
-  // necessary as Theron will clean up any message handlers still registered 
-  // when the actor closes.
+  // The destructor has nothing to do, but is a place holder for derived classes
   
   virtual ~SessionLayer()
-  {
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::RegisterActor            );
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::RemoveActor              );
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::StoreRemoteAddress       );
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::OutboundMessage          );
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::InboundMessage   	      );    
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::SubscribeToPeerDiscovery );
-    DeregisterHandler( this, &SessionLayer<ExternalMessage>::UnsubscribePeerDiscovery );
-  }
+  { }
 };
   
 } 	// End name space Theron

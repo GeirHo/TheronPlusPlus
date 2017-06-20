@@ -123,7 +123,16 @@ public:
 		if ( Name.empty() )
 			Name = RegistryName;
 		else
-			throw std::logic_error( "There can be only one Actor Registry" );
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "Attempt to construct a second actor registry! "
+									 << "There can be only one";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
+			
 		
 	  RegisterHandler( this, &ActorRegistry::CommandHandler );		
   };
@@ -205,7 +214,14 @@ public:
 										 const Theron::Address Sender )
 		{
 			if ( Status == false )
-				throw std::logic_error( "Terminator error message received" );
+			{
+				std::ostringstream ErrorMessage;
+				
+				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+										 << "Terminator registration failed";
+										 
+				throw std::logic_error( ErrorMessage.str() );
+			}
 		};
 
 	public:

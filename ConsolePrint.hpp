@@ -157,7 +157,14 @@ public:
     if ( ServerName.empty() )
 	    ServerName = Actor::GetAddress().AsString();
 		else
-			throw std::logic_error( "Only one Console Print Server can be used" );
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "Only one Console Print Server can be used";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
 		
     TheServer = this;
     RegisterHandler(this, &ConsolePrintServer::PrintString );

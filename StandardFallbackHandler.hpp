@@ -55,7 +55,8 @@ private:
 		std::ostringstream ErrorMessage;
 		const char * ByteString = reinterpret_cast< const char * >( Data );
 		
-		ErrorMessage << "*** ERROR  *** Unmanaged message "
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "*** ERROR  *** Unmanaged message "
 								 << " to " << GetAddress().AsString()
 								 << " from " << From.AsString() << " with data ";
 								 
@@ -84,6 +85,14 @@ public:
 																		 &StandardFallbackHandler::FallbackHandler);
 	}
 	
+	// The new constructor for Theron++
+	
+	StandardFallbackHandler( const std::string & ActorName = std::string() )
+	: Actor( ActorName )
+	{
+		SetDefaultHandler( this, &StandardFallbackHandler::FallbackHandler );
+	}
+		
 }; 	// End class standard fall back handler
 } 	// End name space Theron
 #endif

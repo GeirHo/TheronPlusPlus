@@ -757,8 +757,15 @@ public:
 		if( EventHandlerName.empty() )
 			EventHandlerName = GetAddress().AsString();
 		else
-			throw std::logic_error("There can only be one event handler at the time");
-		
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "There can only be one event handler at the time";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
+			
 		RegisterHandler( this, &EventHandler::AddSubscriber 				);
 		RegisterHandler( this, &EventHandler::RemoveSubscriber 			);
 		RegisterHandler( this, &EventHandler::CompletedEventHandler );
