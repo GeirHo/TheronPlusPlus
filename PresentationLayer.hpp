@@ -72,9 +72,10 @@
   a library that also supports binary encoding in addition to XML and JSON [7].
   There may be good libraries available for given message formats, like 
   JsonCpp [8], which generally receives good reviews for completeness and 
-  performance, and use JSON messages among the actors. It is strongly 
-  recommended to implement the serialising message handler using one of these 
-  libraries and not implement the serialisation mechanism in a non-standard way.
+  performance, or the more elegant library for JSON [9], and then use JSON 
+  messages among the actors. It is strongly recommended to implement the 
+  serialising message handler using one of these libraries and not to implement 
+  the serialisation mechanism in a non-standard way.
   
   REFERENCES:
   
@@ -86,9 +87,10 @@
   [6] http://uscilab.github.io/cereal/index.html
   [7] http://www.json.org/
   [8] https://github.com/open-source-parsers/jsoncpp
+  [9] https://github.com/nlohmann/json
  
   REVISION: This file is NOT compatible with standard Theron - the new actor 
-            implementation MUST be used.
+            implementation of Theron++ MUST be used.
  
   Author: Geir Horn, University of Oslo, 2015 - 2017
   Contact: Geir.Horn [at] mn.uio.no
@@ -100,18 +102,16 @@
 
 #include <string>
 #include <sstream>
-//#include <utility>
 #include <algorithm>
 #include <functional>
 #include <map>
-#include <set>
-#include <list>
 #include <iterator>
 #include <type_traits>
+#include <typeinfo>
+#include <typeindex>
 #include <stdexcept>
-#include <mutex>
 
-#include <Theron/Theron.h>
+#include "Actor.hpp"
 #include "StandardFallbackHandler.hpp"
 #include "NetworkEndPoint.hpp"
 
@@ -119,11 +119,13 @@
 
 namespace Theron
 {
- 
-/*****************************************************************************
-  PRESENTATION LAYER
-******************************************************************************/
 
+/*=============================================================================
+
+ Presentation layer
+
+=============================================================================*/
+//
 // The Presentation Layer is itself an actor that will exchange messages with 
 // other actors, and with the Session Layer server. 
   
@@ -220,7 +222,13 @@ public:
     // Then we can define the functions to deal with serialisation.
     
     virtual std::string Serialize( void ) const = 0;
-    virtual bool        Deserialize( const SerializedPayload & Payload ) = 0;    
+    virtual bool        Deserialize( const SerializedPayload & Payload ) = 0; 
+		
+		// Messages that can serialised must provide a default constructor as
+		// as the de-serialisation function will be used to initialise the 
+		// message after construction.
+		
+		Serializeable ( void ) = default;
   };
   
   // --------------------------------------------------------------------------
@@ -282,7 +290,15 @@ protected:
 							InboundMessage->TheMessage->GetSender(), 
 							InboundMessage->TheMessage->GetReceiver() );
 			else
-				throw std::invalid_argument("Inbound message is not a Serial Message");
+			{
+				std::ostringstream ErrorMessage;
+				
+				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+										 << "Inbound message to the Presentation Layer is " 
+										 << " not a Serial Message";
+				
+				throw std::invalid_argument( ErrorMessage.str() );
+			}
 		}
 		else
 		{
@@ -300,7 +316,14 @@ protected:
 														 OutboundMessage->TheMessage->Serialize() ), 
 							SessionServer );
 			else
-				throw std::invalid_argument("Outbound message is not Serializeable");
+			{
+				std::ostringstream ErrorMessage;
+				
+				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+										 << "Outbound message is not Serializeable";
+				
+				throw std::invalid_argument( ErrorMessage.str() );
+			}
 		}
 		
 		// If this point is reached, then the message handling must have been 
@@ -346,262 +369,261 @@ public:
   }
 };
 
-/*****************************************************************************
-  DE-SERIALISING ACTOR
-******************************************************************************/
-// The presentation layer cannot know which serialised message types an actor 
-// will be able to support, and therefore each actor using serialised messages
-// must be able to construct these and invoke the appropriate message handlers
-// after the binary message has been created.
+
+/*=============================================================================
+
+ De-serialising actor
+
+=============================================================================*/
 //
-// Unless it is easy to deduce from the payload which message type it is and 
-// its completeness, which basically corresponds to the tasks of the de-
-// serialise function, a brute force approach that will always work will be 
-// to try to construct all supported messages that can be serialised, and 
-// continue to the next supported message type if the construction fails. This
-// general approach is implemented by the de-serialising actor, leaving the 
-// implementation for the user to just provide the initialiser for the message
-// types list. 
+// When a message arrives from the network it comes as a string of characters
+// that must be de-serialised to the corresponding binary message. However, 
+// without decoding the string it is not possible to know which serialised 
+// message the string corresponds to. This decoding is supposed to be handled
+// in one place: by the message itself. The approach is therefore to go 
+// message by message and try to de-serialise the string to the given message 
+// type, and if it fails, one should move to the next message type. If the 
+// de-serialisation was successful, the message constructed can be send to 
+// the actor's normal message handler for the binary message.
 //
-// The Actor is defined as a virtual base class to allow possible multiple 
-// inheritance at the expense that each level of the heritage hierarchy has to 
-// explicitly call the the Actor's constructor.
+// The ideal situation is that a class only register the message handlers as 
+// normal, and then overloading and polymorphism ensures that this message is 
+// registered as a message that supports serial sending. This can be detected
+// by overloading the actor's Register Handler checking if the message is 
+// derived from the Serializeable class, and register the message if this holds.
+//
+// The first issue relates to the difference between "instance" and "type" of 
+// the actor. Each instance will register its message handlers. Since the 
+// handlers are the same for all instances of a type and only the 'this' pointer
+// decides which actor instance execute the handler, Hence, the list of 
+// Serializeable messages could be shared by all instances of that actor type.
+// This would imply some actor type specific static structure remembering the 
+// message types.
+//
+// The second issue relates to inheritance. Consider the following situation:
+// Actor C is derived from B which is derived from A. Each of the actors in 
+// the family line declares some Serializeable messages with corresponding
+// handlers. When a serialised payload arrives for an instance of actor C, one 
+// could use its type ID to find the structure for its serialised messages, 
+// but this will be different from the structure for the actor types B and A.
+// This implies that the structures must be chained in some way.
+//
+// These issues were solved in the first release by defining a static class 
+// holding the various message types. This class was derived along the 
+// inheritance tree, adding the serialised message types supported at each 
+// level. Finally, there was a polymorphic function returning the pointer 
+// to the static structure that could be called on an instance to get the 
+// message types supported by the actor type of that instance.
+//
+// The downside of this approach was that each class supporting serialised 
+// messages has extend this static structure. This is functionality external
+// to the actor definition, and the developer of a serialising actor needs 
+// to be aware of this code pattern and apply it to the derived actors. This 
+// is error prone and a better approach was needed.
+//
+// The second issue can be solved by observing that the compiler will enforce 
+// the initialisation of the classes in the inheritance tree from the base 
+// and up. This implies that by checking the type ID of the class registering 
+// the message, one will be able to first build the list of messages supported
+// by actor type A, then actor type B, and finally actor type C. Then one could
+// make each set of messages refer back to the previous actor type set. When a
+// serial message arrives for an instance of actor type C, it will first try 
+// to construct the messages for actor type C, then for actor type B, and 
+// finally for actor type A.
+//
+// The first issue could then be solved by the de-serialising actor having 
+// a static structure mapping all the message types to their corresponding 
+// sets of serialised message types. This would allow the messages to be 
+// registered by type, and only once per actor type, and all instances of 
+// serialising actors would share this database.
+//
+// However, the actors execute in separate threads, and therefore if two or more
+// actors have received a serial message. They would then both need to access 
+// the registered serial message types in this database. Hence there should be 
+// a lock (mutex) serialising the access to the database. Furthermore, the lock
+// must be kept until a message de-serialisation has been completed to success 
+// or failure. This could severely hamper application performance. 
+//
+// Alternatively, each de-serialising actor instance could have its own map of 
+// messages, This would duplicate the the database of serial messages supported
+// by a particular actor for each instance. Access would be simpler in this 
+// case since each actor could de-serialise the incoming messages in parallel 
+// and independent of the activities of the other actors in the system. Hence,
+// it is the classical trade-off between memory use and performance. 
+//
+// The current implementation emphasises performance, and the de-serialising 
+// class defines its own database of messages supporting serialisation, and 
+// this will therefore be unique to each instance of an actor supporting 
+// serialisation. Hopefully, the number of messages supported by an actor is 
+// not very large, and not too much memory will be wasted by this approach.
+
 
 class DeserializingActor : virtual public Actor,
 													 virtual public StandardFallbackHandler
 {
-protected:
-  
-  // The approach is to construct each message type based on the payload, and 
-  // if the construction fails, then we will move on to the next message type.
-  // This means that we will have to capture the exceptions thrown from the 
-  // failing constructors since the constructor does not return a value, 
-  // and then translate this to a positive or negative outcome. A dedicated 
-  // function is used for this purpose. This function is generic and can be used
-  // by any actor supporting serialised messages.
-  //
-  // This is declared as static because it is has no this pointer, and it is 
-  // rather required that this is explicitly given, and it is explicitly used 
-  // to forward the message to the calling actor.
+private:
+	
+	// When a serial payload arrives it is given to a function that constructs 
+	// the message, de-serialise the message, and if successful, it will forward
+	// the message to the normal message handler.
+	
+	using MessageCreator = std::function< bool( 
+															 const PresentationLayer::SerializedPayload &,
+														   const Address & ) >;
+	
+	// The messages supporting serialisation is kept in a standard map since it 
+	// will be sequentially traversed when a serial payload comes in.
+	
+	std::map< std::type_index, MessageCreator > MessageTypes;
 
-  template< class MessageType >
-  static bool ForwardMessage( const Theron::Actor * TheActor, 
-		   const Theron::PresentationLayer::SerializedPayload & Payload,
-		   const Theron::Address Sender  )
-  {
-    try
-    {
-      // We create the message based on the payload and if this does not lead
-      // to an exception, we send the message to this actor (self) and report
-      // a success.
-      
-      MessageType Message( Payload );
-      TheActor->GetFramework().Send( Message, Sender, TheActor->GetAddress() );
-      return true;
-    }
-    catch ( std::invalid_argument TheException )
-    {
-      // Creating the message from the given payload failed, and we should 
-      // try with a different message format.
-      
-      return false;
-    }
-  }
+  // Since Theron allows multiple handlers to be registered for the same 
+  // it is necessary to keep a count of handlers. This in order to be able 
+  // to remove the message type once the last handler function is de-registered.
+	// The normal way would have been to bundle this with the value type in the 
+	// above map, but since the message types are parsed every time a message 
+	// arrives while the handler count is only updated when a handler is 
+	// registered, the counters are kept in a parallel map.
 
-  // The forwarding function must be instantiated for each supported message
-  // that can be de-serialised, and these forwarding functions are kept in 
-  // a list of function pointers. 
-  
-  typedef  std::list<  
-	   std::function< bool( const Actor *,
-			  const PresentationLayer::SerializedPayload &,
-			  const Address ) > >  MessageForwardingList;
-  
-  
-  // One should take care when inheriting from an actor that does already 
-  // support message de-serialisation to ensure that all messages from all 
-  // level of the inheritance three are defined in the message structure for 
-  // the most derived object. Hence it should be possible to say something 
-  // similar to the following concept
-  // Derived::MessageTypes( <initialiser list> ).insert( 
-  //  	Derived::MessageTypes.begin(),
-  // 	Base::MessageList.begin(), Base::MessageList.end() )
-  //
-  // Note however that it might be necessary to construct a temporary list, 
-  // and then initiate the real list from this, like indicated in 
-  // http://stackoverflow.com/questions/780805/populate-a-static-member-container-in-c
-  // 
-  // The crux to achieve inheritable initialisation is to define this list as 
-  // a dedicated class. Classes derived from the Deserializing Actor should 
-  // derive from this class and define the supported message formats in its 
-  // constructor. This will ensure that serialised messages supported by a 
-  // base class will also be defined and supported by any derived type. 
-  // Consider the following example:
-  //  	Base : public DeserializingActor
-  //    Derived : public Base
-  //    Derived2 : public Derived
-  // In this case the serialised messages supported by Base, Derived and 
-  // Derived2 must all be supported by an instance of the Derived2 class. This
-  // will happen when Derived2 declares a static variable which is derived 
-  // from the message type structure since this will call the constructors of
-  // its base defined in Derived, which will again call the constructor in Base
-  // which will again call the constructor of the following class object.
-  //
-  // The constructor will typically contain a sequence of push_back calls for
-  // the various message types directly supported by the class, e.g.
-  // 
-  // static Derived2::Messages : public Derived::Messages
-  // { 
-  //   public:
-  // 	Derived2::Messages( void ) : Derived::Messages()
-  //    {
-  // 	  push_back( ForwardMessage< Derived2::Message1 > );
-  //      push_back( ForwardMessage< Derived2::Message2 > );
-  //    }
-  // }
-  //
-  // Since actors by default are supposed to execute in parallel, there is a 
-  // guarantee that each actor will have unique access to its own data. 
-  // However, the message structure is supposed to be static and therefore 
-  // shared among all instances of an actor type. The Theron framework may 
-  // execute two actors at the same time in different threads, and therefore 
-  // two actors can receive messages at the same time and access the message
-  // type list. Hence there is a need to have a lock (mutex) for serialising 
-  // access to the message construction functions. This mutex is a standard 
-  // element of the static message type structure, and the de-serialising 
-  // actor is given direct access to this element.
+	std::map< std::type_index, unsigned int > HandlerCount;
+	
+	// Messages are registered with a message specific creator function that 
+	// will forward the message to the right message handler provided that 
+	// the message was correctly de-serialised. Note that there is no test to 
+	// check that the message can be serialised since this test is best done 
+	// prior to invoking this function.
+	
+	template< class MessageType >
+	void RegisterMessageType( void )
+	{
+		static_assert( std::is_default_constructible< MessageType >::value,
+							   "A Serializeable message must have a default constructor" );
 
-  class MessageTypeStructure : public MessageForwardingList
-  {
-  private:
+		auto InsertResult =
+		MessageTypes.emplace( typeid( MessageType ), 
+								 [this]( const PresentationLayer::SerializedPayload & Payload,
+												 const Address & Sender )->bool
+			 {
+					MessageType BinaryMessage; 
+					
+					if ( BinaryMessage.Deserialize( Payload ) )
+					{
+						Send( BinaryMessage, Sender, GetAddress() );
+						return true;
+					}
+					else 
+						return false; 
+			 } // End of lambda
+		);   // End of map emplace
 
-    std::mutex MessageGuard;
-    friend class DeserializingActor;
-    
-  public:
-    
-    MessageTypeStructure( void ) 
-    : DeserializingActor::MessageForwardingList(), MessageGuard()
-    { }
-  };
-  
-  // The generalised handler for serialised messages must be able to step 
-  // through the elements (messages) in this structure, and it is therefore 
-  // a virtual function that must return a pointer to the static structure 
-  // applicable for the particular actor type.
-  
-  virtual MessageTypeStructure * MessageTypes( void ) = 0;
-  
-  // There is a standard message handler for the serialised payload. If the 
-  // general framework is used, it should not be necessary to overload this 
-  // but if a derived actor wants to provide its own version, it is declared as 
-  // virtual function.
-  //
-  // In particular, this function should learn over time which messages that 
-  // are most frequently used, and move the forwarding functions for these 
-  // messages forward in the structure. There are several known strategies 
-  // known from the literature. The most famous one is to move the created 
-  // message to the front of the list. However, this runs the risk that if the 
-  // list is in an organised state, a simple access to one of the infrequently 
-  // sent messages will will destroy the organisation and it will take many 
-  // messages before the list is again organised. Alternatively, the received 
-  // message can be moved k elements forward in the list. A compromise between
-  // these two is to move the element to position k+1 if it it is in the end 
-  // part of the list (move almost to front), and the transpose the element 
-  // with the element in front if it is in the 2..k positions of the list. 
-  // This heuristic is known as the POS(k) rule. Two different strategies 
-  // are suggested in Oommen et al. (1990): "Deterministic optimal and 
-  // expedient move-to-rear list organizing strategies", Theoretical Computer 
-  // Science, Vol. 74, No. 2, pp. 183-197. Their first and optimal 
-  // strategy implies keeping a counter for each element, and then move the 
-  // accessed element to the rear of the list once it has been accessed T times.
-  // Their expedient strategy implies moving the element to the rear of the 
-  // list when it has been accessed T consecutive times. The implementation 
-  // cost of the first rule would be similar to keeping a map sorted on the 
-  // number of times each message has arrived - and this map will obviously be 
-  // exact. Waiting for T consecutive accesses for an element may again be 
-  // too slow. The transposition rule suggested by Ronald Rivest (1976): "On 
-  // self-organizing sequential search heuristics", Communications of the ACM, 
-  // Vol. 19, No. 2, pp. 63-67 is much more efficient. Here a successfully 
-  // constructed message will be swapped with the element immediately in front
-  // unless the element is already at the start of the list. This approach is 
-  // taken in the implementation of the handler for serialised messages.
+		// If a new record was created for this message type, the hander count 
+		// should be initialised to unity, otherwise it should just be increased.
+
+		if ( InsertResult.second )
+			HandlerCount[ typeid( MessageType ) ] = 1;
+		else
+			HandlerCount[ typeid( MessageType ) ]++;			
+	}
+	
+	// Processing an incoming serial payload is then simply trying to construct 
+	// the messages until one message type is successfully constructed. If no
+	// messages are registered or if the end of the message type map is reached
+	// with no successful construction, a runtime error is thrown.
+	
+  void SerialialMessageHandler (
+		   const Theron::PresentationLayer::SerializedPayload & Payload, 
+		   const Theron::Address Sender )
+	{
+		if ( MessageTypes.empty() )
+		{
+			std::ostringstream ErrorMessage;
 			
-  virtual void SerializedMessageHandler (
-		  const Theron::PresentationLayer::SerializedPayload & Payload, 
-		  const Theron::Address Sender )
-  {
-    // Getting the pointer to the message type structure is a safe operation 
-    // even before the lock is acquired since the elements of the structure 
-    // is not accessed before the lock is effective, and the structure itself 
-    // is static so its memory location will never be changed. The message 
-    // lock object's destructor will release the lock once the function 
-    // terminates.
-    
-    MessageTypeStructure * AvailableMessages = MessageTypes();
-    std::unique_lock<std::mutex> MessageLock( AvailableMessages->MessageGuard );
-    
-    // The messages are parsed in order using iterators since the list 
-    // optimisation would need to swap two elements, and this can conveniently 
-    // be done by iterators. For each message type, we call its forwarding 
-    // function with the payload and the sender, and if this function returns 
-    // positively (true), then we apply Rivest' transposition rule.
-    
-    auto Message = AvailableMessages->begin();
-    
-    for ( ; Message != AvailableMessages->end(); ++Message )
-      if ( (*Message)( this, Payload, Sender ) )
-      { 
-				// Optimise the list pushing this message type forward one position if 
-				// this is not already the most popular message type.
+			ErrorMessage << __FILE__ << " on line " << __LINE__ << " : "
+									 << "Serial message received but no serial message types "
+									 << "are registered";
+									 
+		  throw std::runtime_error( ErrorMessage.str() );
+		}
+		else
+		{
+			auto MessageCandidate = MessageTypes.begin();
+			
+			while ( ( MessageCandidate != MessageTypes.end() ) &&
+							( MessageCandidate->second( Payload, Sender ) != true )	)
+				++MessageCandidate;
+			
+			// If the payload did not correspond to any of the available messages,
+			// an exception will be thrown as this situation should not occur. 
+			
+			if ( MessageCandidate == MessageTypes.end() )
+		  {
+				std::ostringstream ErrorMessage;
 				
-				if ( Message != AvailableMessages->begin() )
-				  std::iter_swap( Message, std::prev(Message) );
-				
-				// The Payload should correspond to one message type only, so there is 
-				// no reason to continue testing more messages and we can safely return.
-				
-				return;
-      }
-      
-    // If the search terminated with no message type found that corresponds to
-    // the presented payload, there is a serious problem and this is indicated
-    // by throwing a general run-time exception.
-    
-    if ( Message == AvailableMessages->end() )
-    {
-      std::ostringstream Error;
-      
-      Error << "Agent " << GetAddress().AsString() << " has received payload \""
-            << Payload << "\" from agent " << Sender.AsString() 
-				    << " not corresponding to any message type";
-	    
-      throw std::runtime_error( Error.str() );
-    }
-  }
+				ErrorMessage << __FILE__ << " on line " << __LINE__ << " : "
+										 << "The received payload [" << Payload
+										 << "] did not de-serialise to a known message";
+										 
+			  throw std::invalid_argument( ErrorMessage.str() );
+			};
+		}
+	}
 
-  // ---------------------------------------------------------------------------
-  // Constructor and destructor
-  // ---------------------------------------------------------------------------
+	// Given that there must be a message handler for all messages an actor can 
+	// receive, the different message types can be captured when the message 
+	// handler is registered. Consequently, the actor's register handler is 
+	// overloaded with a version first registering the message type before 
+	// forwarding the registration to the normal handler registration.
+	//
+	// This extended definition is only enabled if the message type is derived 
+	// from the serial message class, and consequently the normal message handler
+	// registration will be used for other messages
+	
+protected:
+	
+	template< class ActorType, class MessageType, 
+						typename std::enable_if< 
+											 std::is_base_of< PresentationLayer::Serializeable, 
+																			  MessageType >::value >::value >
+  inline bool RegisterHandler( ActorType  * const TheActor, 
+							 void ( ActorType::* TheHandler)(	const MessageType & TheMessage, 
+																								const Address From ) )
+	{
+		RegisterMessageType< MessageType >();
+		Actor::RegisterHandler( TheActor, TheHandler );
+	}
+
+	// It is necessary also to implement the remove handler, which will first 
+	// ask the actor the remove the corresponding handler, and if the actor did 
+	// remove a handler function, then the count of handlers for this message 
+	// type will be decremented. 
+	
+	template< class ActorType, class MessageType >
+	inline bool DeregisterHandler( ActorType  * const HandlingActor, 
+							    void (ActorType::* TheHandler)(const MessageType & TheMessage, 
+																								 const Address From ) )
+	{
+		if ( Actor::DeregisterHandler( HandlingActor, TheHandler ) )
+			if ( --( HandlerCount[ typeid ( MessageType ) ] ) == 0 )
+				 MessageTypes.erase( typeid( MessageType ) );
+	}
+	
+  // The constructor is simply registering this handler for the framework to 
+  // be ready for use directly.
 
 public:
   
-  // The constructor is simply registering this handler for the framework to 
-  // be ready for use directly.
-  
-  DeserializingActor( Framework & TheFramework, 
-								      const std::string name = std::string() )
-  : Actor( TheFramework, name.empty() ? nullptr : name.data() ),
-    StandardFallbackHandler( TheFramework, GetAddress().AsString() )
+  DeserializingActor( const std::string name = std::string() )
+  : Actor( name ),
+    StandardFallbackHandler( GetAddress().AsString() )
   {
-    RegisterHandler(this, &DeserializingActor::SerializedMessageHandler );		
+    RegisterHandler(this, &DeserializingActor::SerialialMessageHandler );		
   }
   
   // And we need a virtual destructor to ensure that everything will be 
   // cleaned correctly.
   
   virtual ~DeserializingActor()
-  { }
+  { }	
 };
-} 	// End of namespace Theron  
+
+} 			// End of namespace Theron  
 #endif 	// THERON_PRESENTATION_LAYER
