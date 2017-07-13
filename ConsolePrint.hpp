@@ -37,7 +37,7 @@ Revisions:
 #include <type_traits>											// For compile time checks
 #include <stdexcept>												// Standard exceptions
 
-#include <Theron/Theron.h>									// The Theron framework
+#include "Actor.hpp"												// The Theron++ framework
 #include "StandardFallbackHandler.hpp"			// Debugging and error handling
 
 #undef max
@@ -60,22 +60,6 @@ namespace Theron
 class ConsolePrintServer : public virtual Actor,
 													 public virtual StandardFallbackHandler
 {
-  // Other actors in the system will need to know the address of the print 
-  // server event without knowing where the print server is located. One could 
-  // imagine to have a global Theron::Address defined for this purpose. 
-  // Unfortunately, this is not possible since no Theron object can be defined 
-  // before the framework.
-  // 
-  // The solution is to store the symbolic name of the print server as a string, 
-  // and then generate the Theron::Address when needed. Since there address 
-  // function should be callable without a reference to the print server, the 
-  // function must be static. This implies that also the name of the print 
-  // server must be static.
-
-private:
-
-  static std::string ServerName;
-    
 public:
 
   // The print object could have been an actor in its own right, but often it 
@@ -137,27 +121,14 @@ private:
       if ( TerminationPhase )
 	      Send( true, TerminationPhase->GetAddress() );
   };
-
-public:
-      
-  // The constructor initialises the actor, and registers the 
-  // server function. It takes an optional actor name, and if this is not 
-  // given the framework will automatically generate a unique name. It is 
-  // strongly recommended that a name is given for debugging purposes. Note
-  // that in order to capture an automatically constructed actor address, the 
-  // global server name is initialised from the actor's own address.
-
-  ConsolePrintServer ( Theron::Framework & TheFramework, 
-								       std::ostream * Output = &std::cout,
-								       const std::string & TheName = std::string() )
-  : Actor( TheFramework, ( TheName.empty() ? nullptr : TheName.data() ) ),
-    StandardFallbackHandler( TheFramework, Actor::GetAddress().AsString() ),
-    OutputStream( Output )
-  {
-    if ( ServerName.empty() )
-	    ServerName = Actor::GetAddress().AsString();
-		else
-		{
+	
+	// Initialiser to avoid duplicating functionality in the constructor and the 
+	// compatibility constructor.
+	
+	inline void Initialise( void )
+	{
+		if ( TheServer != nullptr )
+ 		{
 			std::ostringstream ErrorMessage;
 			
 			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
@@ -167,8 +138,36 @@ public:
 		}
 		
     TheServer = this;
-    RegisterHandler(this, &ConsolePrintServer::PrintString );
+    RegisterHandler(this, &ConsolePrintServer::PrintString );		
+	}
+
+public:
+    
+  // The constructor initialises the actor, and registers the 
+  // server function. It takes an optional actor name, and if this is not 
+  // given the framework will automatically generate a unique name. It is 
+  // strongly recommended that a name is given for debugging purposes. Note
+  // that in order to capture an automatically constructed actor address, the 
+  // global server name is initialised from the actor's own address.	
+	
+  ConsolePrintServer ( std::ostream * Output = &std::cout,
+								       const std::string & TheName = std::string() )
+  : Actor( TheName ),
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    OutputStream( Output )
+  {
+		Initialise();
   };
+
+  ConsolePrintServer ( Theron::Framework & TheFramework, 
+								       std::ostream * Output = &std::cout,
+								       const std::string & TheName = std::string() )
+  : Actor( TheFramework, ( TheName.empty() ? nullptr : TheName.data() ) ),
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    OutputStream( Output )
+	{ 
+		Initialise();
+	}
 
   // If there are outstanding messages pending, the destructor must create 
   // the terminator receiver and wait for it to receive the information 
@@ -182,7 +181,6 @@ public:
       TerminationPhase->Wait();
     
     TheServer = nullptr;
-    ServerName.clear();
   }
 };
 

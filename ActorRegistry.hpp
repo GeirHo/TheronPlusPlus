@@ -31,7 +31,7 @@ Lisence: LGPL 3.0
 #include <set>
 #include <string>
 #include <stdexcept>
-#include <Theron/Theron.h>
+#include "Actor.hpp"
 #include "StandardFallbackHandler.hpp"
 
 /******************************************************************************

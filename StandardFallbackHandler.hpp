@@ -35,7 +35,7 @@ License: LGPL 3.0
 #include <string>					  // To name the actor
 
 #include <iostream>
-#include <Theron/Theron.h>	// Theron Actor framework
+#include "Actor.hpp"			  // Theron++ Actor framework
 
 namespace Theron
 {

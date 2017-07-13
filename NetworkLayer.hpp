@@ -35,7 +35,7 @@
 #include <stdexcept>
 #include <ostream>
 
-#include <Theron/Theron.h>
+#include "Actor.hpp"
 #include "StandardFallbackHandler.hpp"
 
 #include "NetworkEndPoint.hpp"

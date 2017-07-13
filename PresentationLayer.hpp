@@ -1,16 +1,9 @@
 /*=============================================================================
   Presentation Layer
-  
-  Before a message can be sent over the network, it must be serialised. Even if 
-  the remote side is binary compatible the message must be sent as a series of 
-  bytes, although the serialisation in this case is trivial. In the general case
-  the message must be translated into a byte string that will be well understood
-  by the receiver and that allows the receiver to reassemble the data structure
-  that has been sent.
-  
-  A message must be Serializable for it to be able to be sent across the 
+    
+  A message must be a Serial Message for it to be able to be sent across the 
   network. In terms of this framework it means that the message must inherit 
-  the Serializable base class defined here, and implement the virtual function
+  the Serial Message base class, and implement the virtual function
   std::string Serialize() from that base class. It will be called by the 
   Presentation Layer to pack up the message before it is transmitted
     
@@ -18,7 +11,7 @@
   communication. The Presentation Layer is a proxy for the remote agent, and 
   it receives messages to and from the network. Consider the following small 
   example: There are three actor of the same type A, B, and C exchanging data 
-  in a complex message format (class). A and B are on the same EndPoint, 
+  in a complex message format (class). A and B are on the same endpoint, 
   i.e. network node, whereas C runs remotely. A will use the same send request 
   irrespective of the destination actor. In the case the receiver is B, then 
   the message will be put in the message queue of B. However, if the receiver 
@@ -46,49 +39,20 @@
   call the actor's message handler for this binary message.
   
   In order to allow the actor to have a string handler for normal peer to peer
-  communication, the special class SerializedPayload is used for the message 
-  format so that the actor can distinguish between strings that that contains 
-  serialised binary structures and normal strings. The actual initialisation of 
-  a binary message from a string should be done by the Deserialize method that 
-  must be implemented for each message that should be transferable over the 
-  network.
+  communication, the special class SerialMessage::Payload is used for the 
+  message format so that the actor can distinguish between strings that that 
+  contains serialised binary structures and normal strings. The actual 
+  initialisation of a binary message from a string should be done by the 
+  Deserialize method that must be implemented for each message that should be 
+  transferable over the network.
   
   To continue the above example: When a message arrives from C, the Presentation 
-  Layer will receive a SerializedMessage with C as the sender and, say, B as the 
-  receiver. The payload will be stored as a SerializedPayload and then forwarded
-  to as if it comes from C, and B's handler for SerializedPayloads will receive 
-  the message, convert it to the right binary format, and call B's handler for 
-  the given message binary message type. 
-  
-  How to serialise a binary structure is up to the developer, and it is a topic 
-  that has achieved quite some attention. The core problem is outlined by Oliver 
-  Coudert [1], and there are several good C++ libraries that should be 
-  considered to facilitate the serialisation: One of the first was 
-  Boost::Serialization [2], although it has an issue with the serialisation of 
-  std::shared_ptr [3]. Another approach that can work independent of the 
-  programming languages used at either end is Google's Protocol Buffers [4]. Its
-  messages can be larger than strictly necessary, and Yet Another Serialization
-  (YAS) [5] aims to be faster than Boost::Serialization. Finally, Cereal [6] is
-  a library that also supports binary encoding in addition to XML and JSON [7].
-  There may be good libraries available for given message formats, like 
-  JsonCpp [8], which generally receives good reviews for completeness and 
-  performance, or the more elegant library for JSON [9], and then use JSON 
-  messages among the actors. It is strongly recommended to implement the 
-  serialising message handler using one of these libraries and not to implement 
-  the serialisation mechanism in a non-standard way.
-  
-  REFERENCES:
-  
-  [1] http://www.ocoudert.com/blog/2011/07/09/a-practical-guide-to-c-serialization/
-  [2] http://www.boost.org/doc/libs/1_55_0/libs/serialization/doc/index.html
-  [3] http://stackoverflow.com/questions/8115220/how-can-boostserialization-be-used-with-stdshared-ptr-from-c11
-  [4] https://developers.google.com/protocol-buffers/
-  [5] https://github.com/niXman/yas
-  [6] http://uscilab.github.io/cereal/index.html
-  [7] http://www.json.org/
-  [8] https://github.com/open-source-parsers/jsoncpp
-  [9] https://github.com/nlohmann/json
- 
+  Layer will receive a serial message with C as the sender and, say, B as the 
+  receiver. The payload will be stored as a Payload and then forwarded
+  to as if it comes from C, and B's handler for Payloads will receive 
+  the message, convert it to the right binary format, and resend the message to
+  B's handler for the given message binary message type. 
+   
   REVISION: This file is NOT compatible with standard Theron - the new actor 
             implementation of Theron++ MUST be used.
  
@@ -114,6 +78,7 @@
 #include "Actor.hpp"
 #include "StandardFallbackHandler.hpp"
 #include "NetworkEndPoint.hpp"
+#include "SerialMessage.hpp"
 
 // The Presentation Layer is defined to be a part of the Theron name space 
 
@@ -133,9 +98,9 @@ class PresentationLayer : public virtual Actor,
 													public virtual StandardFallbackHandler
 {
 public:
-  
+
   // --------------------------------------------------------------------------
-  // Serialised message format
+  // Remote message format
   // --------------------------------------------------------------------------
   //
 	// The general mechanism of serialisation is discussed above. Transparent
@@ -152,18 +117,18 @@ public:
 	// involved addresses and the payload string. This class is also what will 
 	// be forwarded to the protocol engine to be sent out on the network.
   
-  class SerialMessage
+  class RemoteMessage
   {
   private:
     
     Address From, To;
-    std::string Payload;
+    SerialMessage::Payload Message;
     
   public:
     
-    SerialMessage( const Address & TheSender, const Address & TheReceiver, 
-								   const std::string & ThePayload )
-    : From( TheSender ), To( TheReceiver ), Payload( ThePayload )
+    RemoteMessage( const Address & TheSender, const Address & TheReceiver, 
+								   const SerialMessage::Payload & ThePayload )
+    : From( TheSender ), To( TheReceiver ), Message( ThePayload )
     {};
     
     // Interface functions 
@@ -178,57 +143,11 @@ public:
       return To;
     }
     
-    inline std::string GetPayload( void ) const
+    inline SerialMessage::Payload GetPayload( void ) const
     {
-      return Payload;
+      return Message;
     }
 
-  };
-  
-  // When a string is received from a remote actor, it is forwarded as a 
-  // special class (identical to a string) so that the receiving object can 
-  // de-serialise the message.
-  
-  class SerializedPayload : public std::string
-  {
-  public:
-    
-    SerializedPayload( const std::string & Payload ) 
-    : std::string( Payload )
-    { }
-  };
-  
-  // A message that can be serialised must be derived from the Serializeable 
-  // message base class, implicitly forcing the class to implement a function 
-  // to serialise the message. Derived classes should provide constructors 
-  // to build the binary message format from the serialised payload class above.
-  // There is also a function to initialise the message from a serialised 
-  // payload, and this returns a boolean to indicate true if the serialised 
-  // payload correspond to the message structure and the initialisation was
-  // successful.
-  //
-  // Note that the function to serialise a message will not change the original
-  // message and it is therefore declared a constant so that it can be called 
-  // on constant message objects.
-  
-  class Serializeable
-  {
-  public: 
-    
-    // First we indicate to the compiler that this message can be serialised
-    
-    typedef std::true_type IsSerializeable;
-    
-    // Then we can define the functions to deal with serialisation.
-    
-    virtual std::string Serialize( void ) const = 0;
-    virtual bool        Deserialize( const SerializedPayload & Payload ) = 0; 
-		
-		// Messages that can serialised must provide a default constructor as
-		// as the de-serialisation function will be used to initialise the 
-		// message after construction.
-		
-		Serializeable ( void ) = default;
   };
   
   // --------------------------------------------------------------------------
@@ -274,19 +193,19 @@ protected:
 		{
 			// Note that the test is made to see if the message is from the Session 
 			// Layer to this Presentation Layer as this implies an incoming message 
-			// to an actor on this endpoint that should be of type Serial Message.
+			// to an actor on this endpoint that should be of type Remote Message.
 			// The real sending actor the real destination actor are encoded in the 
-			// serial message.
+			// remote message.
 			
 			auto InboundMessage = 
-					 std::dynamic_pointer_cast< Message< SerialMessage > >( TheMessage );
+					 std::dynamic_pointer_cast< Message< RemoteMessage > >( TheMessage );
 					 
 		  // If the message conversion was successful, then this can be forwarded
 		  // to the local destination actor as if it was sent from the remote 
 		  // sender.
 					 
 		  if ( InboundMessage )
-				Send( SerializedPayload( InboundMessage->TheMessage->GetPayload() ), 
+				Send( InboundMessage->TheMessage->GetPayload(), 
 							InboundMessage->TheMessage->GetSender(), 
 							InboundMessage->TheMessage->GetReceiver() );
 			else
@@ -294,33 +213,37 @@ protected:
 				std::ostringstream ErrorMessage;
 				
 				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-										 << "Inbound message to the Presentation Layer is " 
-										 << " not a Serial Message";
+										 << "Inbound message to the Presentation Layer from "
+										 << TheMessage->From.AsString() << " with receiver " 
+										 << TheMessage->To.AsString()
+										 << " is not a Serial Message";
 				
 				throw std::invalid_argument( ErrorMessage.str() );
 			}
 		}
 		else
 		{
-			// The message should be outbound and it should be convertible to a 
-			// serialised message
+			// The outbound message should in this case support serialisation, and 
+			// the payload is created first.
 			
-			auto OutboundMessage = 
-					 std::dynamic_pointer_cast< Message< Serializeable > >( TheMessage );
-					 
-		  // A valid message will in this case be forwarded as a serial message 
+			SerialMessage * OutboundMessage( TheMessage->GetSerialMessagePointer() );
+			
+		  // A valid message will in this case be forwarded as a remote message 
 		  // to the Session Layer server.
-					 
-		  if ( OutboundMessage )
-				Send( SerialMessage( TheMessage->From, TheMessage->To, 
-														 OutboundMessage->TheMessage->Serialize() ), 
+			
+			if ( OutboundMessage != nullptr )
+				Send( RemoteMessage( TheMessage->From, TheMessage->To, 
+														 OutboundMessage->Serialize() ), 
 							SessionServer );
 			else
 			{
 				std::ostringstream ErrorMessage;
 				
 				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-										 << "Outbound message is not Serializeable";
+										 << "Outbound message to the Presentation Layer from "
+										 << TheMessage->From.AsString() << " with receiver "
+										 << TheMessage->To.AsString() 
+										 << " does not support serialisation";
 				
 				throw std::invalid_argument( ErrorMessage.str() );
 			}
@@ -341,7 +264,7 @@ public:
 
   // The Presentation Layer class sends and receives messages from the Session
   // Layer class, and vice versa. This makes it impossible that both classes can 
-  // receive the other class' address as an argument to their constructors. The 
+  //K receive the other class' address as an argument to their constructors. The 
   // binding must be done explicitly once both classes have been created, and 
   // there is a support function to register the address of the protocol engine
   // in the corresponding variable.
@@ -359,8 +282,18 @@ public:
   // address. Hence, as long as the default names are used for the actors,
   // this no further initialisation is needed.
   
+  PresentationLayer( const std::string ServerName = "PresentationLayer"  ) 
+  : Actor( ServerName ),
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    SessionServer()
+  {
+		Actor::SetPresentationLayerServer( this );
+  }
+    
+  // The compatibility constructor requires a pointer to the network endpoint
+  
   PresentationLayer( NetworkEndPoint * TheHost,
-								     std::string ServerName = "PresentationLayer"  ) 
+								     const std::string ServerName = "PresentationLayer"  ) 
   : Actor( ServerName ),
     StandardFallbackHandler( TheHost->GetFramework(), ServerName.data() ),
     SessionServer()
@@ -468,7 +401,7 @@ private:
 	// the message to the normal message handler.
 	
 	using MessageCreator = std::function< bool( 
-															 const PresentationLayer::SerializedPayload &,
+															 const Theron::SerialMessage::Payload &,
 														   const Address & ) >;
 	
 	// The messages supporting serialisation is kept in a standard map since it 
@@ -496,16 +429,27 @@ private:
 	void RegisterMessageType( void )
 	{
 		static_assert( std::is_default_constructible< MessageType >::value,
-							   "A Serializeable message must have a default constructor" );
+							   "A serial message must have a default constructor" );
 
+		// The function to construct this message is defined as a lambda passed 
+		// and stored in the map for this type of messages.
+		
 		auto InsertResult =
 		MessageTypes.emplace( typeid( MessageType ), 
-								 [this]( const PresentationLayer::SerializedPayload & Payload,
+								 [this]( const SerialMessage::Payload & Payload,
 												 const Address & Sender )->bool
 			 {
 					MessageType BinaryMessage; 
+		
+					// There is a small issue with access. The Deserializing Actor is a 
+					// friend of the serial message, but in general it cannot access 
+					// protected members of derived message types. Hence the function to 
+					// de-serialise the message must be called on a serial message, and 
+					// then using the implementation of the derived class.
 					
-					if ( BinaryMessage.Deserialize( Payload ) )
+					SerialMessage * NewMessage( &BinaryMessage );
+					
+					if ( NewMessage->Deserialize( Payload ) )
 					{
 						Send( BinaryMessage, Sender, GetAddress() );
 						return true;
@@ -530,7 +474,7 @@ private:
 	// with no successful construction, a runtime error is thrown.
 	
   void SerialialMessageHandler (
-		   const Theron::PresentationLayer::SerializedPayload & Payload, 
+		   const Theron::SerialMessage::Payload & Payload, 
 		   const Theron::Address Sender )
 	{
 		if ( MessageTypes.empty() )
@@ -538,8 +482,9 @@ private:
 			std::ostringstream ErrorMessage;
 			
 			ErrorMessage << __FILE__ << " on line " << __LINE__ << " : "
-									 << "Serial message received but no serial message types "
-									 << "are registered";
+									 << "Actor " << GetAddress().AsString() << " received"
+									 << "serial message from " << Sender.AsString()
+									 << " but no serial message types are registered";
 									 
 		  throw std::runtime_error( ErrorMessage.str() );
 		}
@@ -559,8 +504,9 @@ private:
 				std::ostringstream ErrorMessage;
 				
 				ErrorMessage << __FILE__ << " on line " << __LINE__ << " : "
-										 << "The received payload [" << Payload
-										 << "] did not de-serialise to a known message";
+										 << "Actor " << GetAddress().AsString() << " received"
+										 << "payload [" << Payload << "] from " << Sender.AsString()
+										 << " which did not de-serialise to a known message";
 										 
 			  throw std::invalid_argument( ErrorMessage.str() );
 			};
@@ -573,37 +519,44 @@ private:
 	// overloaded with a version first registering the message type before 
 	// forwarding the registration to the normal handler registration.
 	//
-	// This extended definition is only enabled if the message type is derived 
-	// from the serial message class, and consequently the normal message handler
-	// registration will be used for other messages
+	// The message type test is known at compile time and the optimiser should 
+	// remove the if statement if the test fails leaving this as a simple 
+	// instantiation of the actor's register handler. 
+	//
+	// Please note that the "if constexpr" is a C++17 feature, which may not yet
+	// be supported by all compilers or at least produce a warning.
 	
 protected:
 	
-	template< class ActorType, class MessageType, 
-						typename std::enable_if< 
-											 std::is_base_of< PresentationLayer::Serializeable, 
-																			  MessageType >::value >::value >
+	template< class ActorType,  class MessageType >
   inline bool RegisterHandler( ActorType  * const TheActor, 
 							 void ( ActorType::* TheHandler)(	const MessageType & TheMessage, 
 																								const Address From ) )
 	{
-		RegisterMessageType< MessageType >();
-		Actor::RegisterHandler( TheActor, TheHandler );
+		if constexpr ( std::is_base_of<SerialMessage, MessageType>::value )
+			RegisterMessageType< MessageType >();
+		
+		return Actor::RegisterHandler( TheActor, TheHandler );
 	}
 
 	// It is necessary also to implement the remove handler, which will first 
 	// ask the actor the remove the corresponding handler, and if the actor did 
 	// remove a handler function, then the count of handlers for this message 
-	// type will be decremented. 
+	// type will be decremented, and if it was the last handler for this message 
+	// type, the type will be erased from the registry.
 	
 	template< class ActorType, class MessageType >
 	inline bool DeregisterHandler( ActorType  * const HandlingActor, 
 							    void (ActorType::* TheHandler)(const MessageType & TheMessage, 
 																								 const Address From ) )
 	{
-		if ( Actor::DeregisterHandler( HandlingActor, TheHandler ) )
+		bool ReturnValue = Actor::DeregisterHandler( HandlingActor, TheHandler );
+		
+		if ( ReturnValue )
 			if ( --( HandlerCount[ typeid ( MessageType ) ] ) == 0 )
 				 MessageTypes.erase( typeid( MessageType ) );
+			
+		return ReturnValue;
 	}
 	
   // The constructor is simply registering this handler for the framework to 
@@ -617,7 +570,14 @@ public:
   {
     RegisterHandler(this, &DeserializingActor::SerialialMessageHandler );		
   }
+
+  // Backward compatibility constructor
   
+  DeserializingActor( Framework & TheFramework, 
+											const std::string name = std::string() )
+	: DeserializingActor( name )
+	{	}
+    
   // And we need a virtual destructor to ensure that everything will be 
   // cleaned correctly.
   
@@ -625,5 +585,5 @@ public:
   { }	
 };
 
-} 			// End of namespace Theron  
+} 			// End of name space Theron  
 #endif 	// THERON_PRESENTATION_LAYER

@@ -70,7 +70,7 @@
 #include <boost/bimap/unordered_set_of.hpp>
 #include <boost/bimap/tags/tagged.hpp>
 
-#include <Theron/Theron.h>
+#include "Actor.hpp"
 #include "StandardFallbackHandler.hpp"
 
 #include "LinkMessage.hpp"
@@ -993,7 +993,7 @@ protected:
   
 public:
   
-  void OutboundMessage( const PresentationLayer::SerialMessage & TheMessage,
+  void OutboundMessage( const PresentationLayer::RemoteMessage & TheMessage,
 												const Address From                     )
   {
     ExternalMessage LinkMessage;
@@ -1088,11 +1088,11 @@ protected:
   
   class InboundIDResolver 
   : virtual public Actor, 
-    public AddressResolver< PresentationLayer::SerialMessage >
+    public AddressResolver< PresentationLayer::RemoteMessage >
   {
   public:
     
-    typedef AddressResolver< PresentationLayer::SerialMessage > ResolverType;
+		using  ResolverType = AddressResolver< PresentationLayer::RemoteMessage >;
     
   private:
     
@@ -1107,9 +1107,9 @@ protected:
     // The cached messages are sent to the Presentation Layer server once 
     // the resolved ID is known.
     
-    void SendCachedMessage( PresentationLayer::SerialMessage & TheMessage )
+    void SendCachedMessage( PresentationLayer::RemoteMessage & TheMessage )
     {
-			PresentationLayer::SerialMessage 
+			PresentationLayer::RemoteMessage 
 			ForwardMessage( ResolverType::RemoteActorID, TheMessage.GetReceiver(),
 										  TheMessage.GetPayload()		);
 			
@@ -1201,7 +1201,7 @@ public:
       // message for de-serialisation.
       
       if ( RemoteID != KnownActors.left.end() )
-				Send( PresentationLayer::SerialMessage( 
+				Send( PresentationLayer::RemoteMessage( 
 				      RemoteID->second, ReceiverActor, Payload ), PresentationServer );
       else
       {

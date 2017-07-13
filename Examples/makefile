@@ -43,8 +43,8 @@ DEPENDENCY_FLAGS = -MMD -MP
 
 # Options 
 
-GENERAL_OPTIONS = -c -Wall -std=c++11 -ggdb -D_DEBUG
-INCLUDE_DIRECTORIES = -I. -I/usr/include -I ${THERON} -I${OLD_THERON}
+GENERAL_OPTIONS = -c -Wall -std=c++1z -ggdb -D_DEBUG
+INCLUDE_DIRECTORIES = -I. -I/usr/include -I $(THERON)
 
 # Putting it together as the actual options given to the compiler and the 
 # linker. Note that pthread is needed on Linux systems since it seems to 
@@ -59,11 +59,12 @@ LDFLAGS = -Wl,--allow-multiple-definition -ggdb -D_DEBUG -pthread
 # Note also that the communication protocol is not included as it is not 
 # generally needed.
 
-THERON_HEADERS = Actor.hpp LinkMessage.hpp NetworkLayer.hpp \
-	         SessionLayer.hpp PresentationLayer.hpp\
-	         ConsolePrint.hpp EventHandler.hpp
+THERON_HEADERS = Actor.hpp LinkMessage.hpp SerialMessage.hpp \
+		 NetworkLayer.hpp SessionLayer.hpp PresentationLayer.hpp \
+	         ConsolePrint.hpp EventHandler.hpp ActorRegistry.hpp
 THERON_SOURCE  = $(THERON)/ConsolePrint.cpp \
 	         $(THERON)/EventHandler.cpp \
+		 $(THERON)/ActorRegistry.cpp \
 		 $(THERON)/NetworkEndPoint.cpp \
 		 $(THERON)/Actor.cpp
 THERON_OBJECTS = ${THERON_SOURCE:.cpp=.o}
@@ -95,6 +96,9 @@ clean:
 
 HelloWorld : HelloWorld.o $(THERON_OBJECTS)
 	$(CC) HelloWorld.o $(ALL_MODULES) $(LDFLAGS) -o HelloWorld
+
+Serialisation : Serialisation.o $(THERON_OBJECTS)
+	$(CC) Serialisation.o $(ALL_MODULES) $(LDFLAGS) -o Serialisation
 
 #
 # DEPENDENCIES

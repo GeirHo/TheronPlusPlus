@@ -5,7 +5,7 @@
 The [Actor programming model](https://en.wikipedia.org/wiki/Actor_model) is a mathematical model of concurrent programming that is proven to be deadlock free as long as the actors only communicates with messages, and each actor only operates on its private memory. The actor model thereby avoids the complexity involved with implementing parallel and multi-threaded applications.
 
 Theron++ is an actor framework compliant with the [Theron](http://www.theron-library.com/) Application Programming Interface (API), and it has been developed in line with the following objectives:
-1. Do not implement what [C++11](https://isocpp.org/wiki/faq/cpp11) offers as standard
+1. Do not implement what [C++11](https://isocpp.org/wiki/faq/cpp11) or later revisions offer as standard
 2. Do not duplicate what the operating system offers
 3. Respect the Theron API for the actors
 4. Make the implementation as simple as possible
@@ -40,7 +40,9 @@ Theron is the best actor model library for C++ with an elegant C++ API; arguably
 
 ## Installation
 
-The Theron++ framework is fully implemented in the Actor header and source file. The Presentation Layer header file is needed to compile the Actor source file. There is no installation required, and these files can either be placed with the other source files of a project, or in a separate directory. 
+The code uses the `if constexpr` feature of C++17, and a compliant compiler is required.
+
+The Theron++ framework is fully implemented in the Actor header and source file. The Presentation Layer header file is needed to compile the Actor source file, and the Serial Message header is needed by the Presentation Layer. There is no installation required, and these files can either be placed with the other source files of a project, or in a separate directory. 
 
 All other files in this project are _utility actors_ supporting various functionality often implemented in actor systems. Four classes are related to the support of _transparent communication_ soon to be described in the project's wiki. The XMPP classes requires the [Swiften](http://swift.im/swiften.html) library.
 

@@ -517,7 +517,7 @@ void Theron::Actor::DispatchMessages( void )
 				// the list. It is necessary to use a separate swap iterator to ensure 
 				// that the current handler iterator points to the next handler not 
 				// affected by the swap operation. 
-.
+
 				auto SuccessfulHandler = CurrentHandler++;
 				
 				if( SuccessfulHandler != MessageHandlers.begin() )

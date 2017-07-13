@@ -56,7 +56,7 @@
 
 // Generic frameworks - Theron for actors and Swiften for XMPP
 
-#include <Theron/Theron.h>   							// Actors
+#include "Actor.hpp"   										// Theron++ Actors
 #include "StandardFallbackHandler.hpp"
 
 // The generic frameworks used  - it should be noted that Swiften uses the 

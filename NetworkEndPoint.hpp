@@ -32,7 +32,7 @@
 
 #include <iostream> 				//TEST
 
-#include <Theron/Theron.h>	// The Theron actor framework
+#include "Actor.hpp"			 // The Theron++ actor framework
 
 namespace Theron {
 

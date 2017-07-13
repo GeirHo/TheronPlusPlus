@@ -30,7 +30,7 @@ License: LGPL 3.0
 
 #include <type_traits>									// To check a type at compile time
 
-#include <Theron/Theron.h>						  // The actor framework
+#include "Actor.hpp"						  			// The Theron++ actor framework
 #include "StandardFallbackHandler.hpp"  // Debugging and error recovery
 
 #include <iostream>

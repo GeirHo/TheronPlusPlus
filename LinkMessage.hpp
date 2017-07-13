@@ -27,7 +27,8 @@
 #define THERON_LINK_MESSAGE
 
 #include <string>
-#include <Theron/Theron.h>
+
+#include "Actor.hpp"
 
 namespace Theron
 {

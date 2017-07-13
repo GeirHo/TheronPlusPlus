@@ -44,6 +44,9 @@ License: LGPL 3.0
 #include <atomic>							// Thread protected variables
 #include <stdexcept>				  // To throw standard exceptions
 #include <sstream>						// To provide nice exception messages
+#include <type_traits>				// For meta-programming
+
+#include "SerialMessage.hpp"  // Messages that can be serialised
 
 #include <iostream>					  // For debugging
 
@@ -78,7 +81,7 @@ class EndPoint;
 // pointer is set to the local actor that has registered as the Presentation 
 // Layer. The presentation layer is responsible for serialising and 
 // de-serialising message that can then be transmitted as text strings to 
-// remote network endpoints. This actor type must be forward declared.
+// remote network endpoints. This actor type must be forward declared. 
 
 class PresentationLayer;
 
@@ -618,6 +621,22 @@ public:
 	: From(), To()
 	{ }
 	
+	// The copy constructor simply relay the construction to the standard 
+	// constructor
+	
+	inline GenericMessage( const GenericMessage & OtherMessage )
+	: GenericMessage( OtherMessage.From, OtherMessage.To )
+	{ }
+	
+	// Serialisation is supported through a virtual function returning a pointer 
+	// to the serial message. This is overloaded by the typed message class below
+	// if the message type does support serialisation.
+	
+	virtual SerialMessage * GetSerialMessagePointer( void )
+	{
+		return nullptr;
+	}
+	
 	// It is important to make this class polymorphic by having at least one 
 	// virtual method, and it must in order to ensure proper destruction of the 
 	// derived messages.
@@ -626,6 +645,10 @@ public:
 	{ }
 };
 
+// -----------------------------------------------------------------------------
+// Message queue
+// -----------------------------------------------------------------------------
+//
 // Each actor has a queue of messages and add new messages to the end and 
 // consume from the front of the queue. It can therefore be implemented as a 
 // standard queue. Other Actors will place messages for this actor into this
@@ -745,6 +768,11 @@ protected:
 
 using MessageCount = MessageQueue::size_type;
 
+//
+// -----------------------------------------------------------------------------
+// Specific message type
+// -----------------------------------------------------------------------------
+//
 // The type specific message will define the function to process the message 
 // by first trying to cast the handler to the handler templated for the 
 // actual message type, and if successful, it will invoke the handler function.
@@ -761,10 +789,37 @@ public:
 	: GenericMessage( From, To ), TheMessage( MessageCopy )
 	{ }
 	
+	Message( const Message< MessageType > & OtherMessage )
+	: GenericMessage( OtherMessage ), TheMessage( OtherMessage.TheMessage )
+	{ }
+	
+	// A message that can be serialised must be derived from the Serial Message 
+	// type, and a check for this can be done at compile time. The "if constexpr"
+	// is a C++17 feature that allow the compiler to compute the condition at 
+	// compile time and not generate code if the condition is false. Prior to
+	// this it would require all branches to compile, and it would have been 
+	// necessary to use std::enable_if on a template representing the two 
+	// branches.
+	
+	virtual SerialMessage *	GetSerialMessagePointer( void )
+	{
+		if constexpr ( std::is_base_of< SerialMessage, MessageType >::value )
+			return TheMessage.get();
+		else
+			return nullptr;
+	}
+	
+	// The virtual destructor is just a place holder 
+	
 	virtual ~Message( void )
 	{ }
 };
 
+//
+// -----------------------------------------------------------------------------
+// Message functions
+// -----------------------------------------------------------------------------
+//
 // Messages are queued a dedicated function that obtains a unique lock on the 
 // queue guard before adding the message. The return type could be used to 
 // indicate issues with the queuing, but the function should really throw
@@ -1687,7 +1742,8 @@ public:
 	Receiver( EndPoint & endPoint, const char *const name = 0 )
 	: Actor( name ), Unconsumed(0), CounterGuard(), OneMessageArrived()
 	{ }
-};
+}; 
 
-}				// Name space Theron
+}	// Name space Theron
+
 #endif  // THERON_REPLACEMENT_ACTOR

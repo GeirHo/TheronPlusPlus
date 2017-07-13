@@ -13,11 +13,6 @@
 
 namespace Theron {
   
-// The first variable is the server name, which is left empty until the console
-// print server is constructed.
-
-std::string ConsolePrintServer::ServerName;
-
 // There is also a pointer to the execution framework of the console print 
 // server to be used when the console print stream is used outside of an actor
 // and where it can be difficult to provide an execution framework.
