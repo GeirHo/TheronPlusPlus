@@ -5,11 +5,7 @@
 The [Actor programming model](https://en.wikipedia.org/wiki/Actor_model) is a mathematical model of concurrent programming that is proven to be deadlock free as long as the actors only communicates with messages, and each actor only operates on its private memory. The actor model thereby avoids the complexity involved with implementing parallel and multi-threaded applications.
 
 Theron++ is an actor framework compliant with the [Theron](http://www.theron-library.com/) Application Programming Interface (API), and it has been developed in line with the following objectives:
-<<<<<<< 025a1d0a011f1908d8b600920d8634fcb72baa87
-1. Do not implement what [C++11](https://isocpp.org/wiki/faq/cpp11) or later revisions off the as standard
-=======
 1. Do not implement what [C++11](https://isocpp.org/wiki/faq/cpp11) or later revisions of the C++ standard
->>>>>>> f131b88fb4ce50d8f61f70154a252fa3dcdcbcfe
 2. Do not duplicate what the operating system offers
 3. Respect the Theron API for the actors
 4. Make the implementation as simple as possible
