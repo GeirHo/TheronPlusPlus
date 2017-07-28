@@ -1521,7 +1521,7 @@ public:
 // The Framework has a set of parameters mainly concerned with the the 
 // scheduling of actors, which is here left for the operating system entirely
 
-class Framework : public Actor
+class Framework : virtual public Actor
 {
 public: 
 	

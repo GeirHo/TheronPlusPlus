@@ -816,9 +816,7 @@ protected:
   // need to create an outbound resolver if this is required because the remote
   // actor ID is unknown by the session layer.
   
-  virtual Address CreateOutboundResolver( 
-    const Address & UnknownActorID, const Address & NetworkServerActor,
-    const Address & SessionServerActor  );
+  virtual Address CreateOutboundResolver( const Address & UnknownActorID  );
 
   // --------------------------------------------------------------------------
   // Inbound: message handling
@@ -852,10 +850,8 @@ protected:
   // logical error if there is a request to create a new inbound resolver, and
   // the function will therefore just throw a standard logic_error exception 
   
-  virtual Address CreateInboundResolver( 
-																		const ExternalAddress & UnknownActorAddress,
-																		const Address & PresentationLayerActor,
-																		const Address & SessionLayerActor )
+  virtual 
+  Address CreateInboundResolver( const ExternalAddress & UnknownActorAddress )
   {
     std::ostringstream ErrorMessage;
 		
@@ -879,9 +875,7 @@ public:
 								      const std::string & ServerName = "SessionLayer" );
   
   virtual ~XMPPProtocolEngine()
-  {
-    DeregisterHandler( this, &XMPPProtocolEngine::RemotePeer );
-  }
+  {}
   
 }; // End - XMPP Protocol Engine
 

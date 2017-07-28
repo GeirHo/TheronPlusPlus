@@ -871,14 +871,14 @@ Address XMPPProtocolEngine::ResolveUndefined( const JabberID & ExAddress )
 {
   Address RemoteID( ExAddress.getNode().data() );
   
-  if ( Host->IsLocalActor( RemoteID ) )
+  if ( RemoteID.IsLocalActor() )
   {
     std::ostringstream ErrorMessage;
     
     ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
 						     << "Unable to construct actor ID for " << ExAddress
 								 << " since an actor with ID " << RemoteID.AsString()
-								 << " already exists on " << Host->GetName();
+								 << " already exists on this endpoint";
 		 
     throw std::invalid_argument( ErrorMessage.str() );
   }
@@ -895,14 +895,11 @@ Address XMPPProtocolEngine::ResolveUndefined( const JabberID & ExAddress )
 // when its operation is due, so it is intentional to create an actor and 
 // forget about it!
 
-Address XMPPProtocolEngine::CreateOutboundResolver(
-  const Address& UnknownActorID, 
-  const Address& NetworkServerActor, 
-  const Address& SessionServerActor)
+Address XMPPProtocolEngine::CreateOutboundResolver( 
+														const Address & UnknownActorID )
 {
   OutboundAddressResolver * Resolver
-   = new OutboundAddressResolver( GetFramework(), UnknownActorID, 
-				  NetworkServerActor, SessionServerActor );
+												   = new OutboundAddressResolver( UnknownActorID );
   
   return Resolver->GetAddress();
 }
@@ -919,10 +916,6 @@ Address XMPPProtocolEngine::CreateOutboundResolver(
 
 std::string XMPPProtocolEngine::DecodeMessage( const OutsideMessage & Datagram )
 {
-  //Theron::Address RemoteID( Datagram.GetSender().getResource().data() );
-  
-  //StoreActorAddresses( RemoteID, Datagram.GetSender() );
-  
   return Datagram.GetPayload();
 }
 
@@ -975,28 +968,7 @@ void Manager::Initialiser::BindServerActors( void )
 
   GetNodePointer()->Pointer< XMPP::Link >( NetworkEndPoint::Layer::Network )
 	  ->SetSessionLayerAddress( 
-	    GetNodePointer()->GetAddress( NetworkEndPoint::Layer::Session )   );
-  
-  // The Session Layer needs the address of both the Network Layer and the 
-  // Presentation Layer, so we better obtain the pointer only once and set the 
-  // two needed addresses using this pointer.
-    
-  auto ProtocolEnginePointer = 
-       GetNodePointer()->Pointer< XMPP::XMPPProtocolEngine >( 
-	  NetworkEndPoint::Layer::Session );
-       
-  ProtocolEnginePointer->SetNetworkLayerAddress( 
-			 GetNodePointer()->GetAddress( 
-			 NetworkEndPoint::Layer::Network ));
-  ProtocolEnginePointer->SetPresentationLayerAddress( 
-			 GetNodePointer()->GetAddress( 
-			 NetworkEndPoint::Layer::Presentation ));
-  
-  // Finally the Presentation Layer needs the address of the Session Layer.
-  
-  GetNodePointer()->Pointer< Theron::PresentationLayer >( 
-    NetworkEndPoint::Layer::Presentation )->SetSessionLayerAddress( 
-      GetNodePointer()->GetAddress( NetworkEndPoint::Layer::Session ));
+	    GetNodePointer()->GetAddress( NetworkEndPoint::Layer::Session )   );  
 }
   
 } // End namespace XMPP  

@@ -24,6 +24,13 @@
 
 Theron::NetworkEndPoint::FrameworkParameters 
 								 Theron::NetworkEndPoint::Parameters;
+								 
+// The pointers to the OSI stack layer servers are kept in a static map in order
+// for other actors to get the relevant addresses to register and de-register 
+// with these servers if necessary.
+								 
+std::map< Theron::NetworkEndPoint::Layer , std::shared_ptr< Theron::Actor > > 
+				  Theron::NetworkEndPoint::CommunicationActor;
 
 /*=============================================================================
 

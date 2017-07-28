@@ -11,9 +11,10 @@
   fundamentally merge into the same mechanism hosting actors and taking care 
   of their communication. This is the purpose of this class. 
   
-  It encompasses the Network Layer Server and the Session Layer Server to 
-  ensure that they are confirming to the communication protocol of the 
-  actor system.
+  It encompasses the Network Layer Server, the Session Layer Server and the 
+  Presentation Layer server to ensure that they are confirming to the 
+  communication protocol of the actor system. In addition, there can be only 
+  one network endpoint actor at each node.
 
   Author: Geir Horn, University of Oslo, 2015-2017
   Contact: Geir.Horn [at] mn.uio.no
@@ -36,7 +37,8 @@
 
 namespace Theron {
 
-class NetworkEndPoint : public EndPoint, public Framework
+class NetworkEndPoint : virtual public Actor, 
+												public EndPoint, public Framework
 {
   // ---------------------------------------------------------------------------
   // Domain framework
@@ -176,8 +178,12 @@ private:
   // to implement dedicated functions for each of the three actors, e.g. to 
   // obtain the Theron Address of the actor. They can be accessed by the 
   // function they have, and the pointers are therefore kept in a map.
+	//
+	// Since there can be only one network end point, this map is a static member
+	// so that the addresses for the actors can be obtained without having a 
+	// pointer to the network end point class.
   
-  std::map< Layer, std::shared_ptr< Actor > > CommunicationActor;
+  static std::map< Layer, std::shared_ptr< Actor > > CommunicationActor;
   
   // The actual communication actors are depending on the protocol, and in 
   // order to access functions on these classes, the pointers must be cast 
@@ -244,7 +250,7 @@ public:
   // access function returns the actor address provided that the 
   // corresponding actor has been created.
   
-  inline Address GetAddress( Layer Role )
+  inline static Address GetAddress( Layer Role )
   {
     std::shared_ptr< Actor > TheServer = CommunicationActor[Role];
     
@@ -254,23 +260,6 @@ public:
       return Theron::Address::Null();
   }
   
-  // There is also a function to check if an address exists at the local 
-  // endpoint. This is typically used when a message arrives from a remote 
-  // endpoint searching for the endpoint knowing a particular actor. It will
-  // use the EndPoint's lookup function to check if the provided address 
-  // corresponds to a local actor. The function requires a message queue 
-  // index, which will be non-zero if the queue for this actor exists at this
-  // endpoint (node), but it is simply ignored since the actor presence is 
-  // indicated by the boolean return value of the lookup function.
-  
-/*
-  bool IsLocalActor( const Address & RequestedActorID )
-  {
-    Detail::Index MessageQueue;
-    return Lookup( Detail::String( RequestedActorID.AsString() ), 
-								   MessageQueue );		
-  }
-*/  
   // ---------------------------------------------------------------------------
   // Shut down management
   // ---------------------------------------------------------------------------
@@ -600,9 +589,10 @@ public:
   
  NetworkEndPoint( const std::string & Name, const std::string & Location,
 								  InitialiserType TheInitialiser )
-  : EndPoint( Name.data(), Location.data(), Parameters),
+  : Actor( Name ),
+    EndPoint( Name.data(), Location.data(), Parameters),
     Framework( *this, Name.data(), Parameters ),
-    Domain( Location ), CommunicationActor()
+    Domain( Location )
   {
     
     TheInitialiser->TheNode = this;
