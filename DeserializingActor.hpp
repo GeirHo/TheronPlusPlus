@@ -266,6 +266,50 @@ protected:
 		return ReturnValue;
 	}
 	
+	// External address mapping is done by the Session Layer actor, and if actors
+	// on other endpoints are to address this actor, the Session Layer on this 
+	// endpoint must tell the other session layers that the actor is on this 
+	// endpoint. An actor supporting external communication must be derived 
+	// from this the de-serialising actor type, and it is therefore sufficient 
+	// that the session layer registration is automatically managed by the 
+	// constructor of the de-serialising actor. 
+	//
+	// However, this implicitly puts a constraint on the order of actor creation 
+	// since the session layer actor (and the Network End Point) must be 
+	// instantiated before any de-serialising actors. It could possibly be 
+	// application scenarios where this would be impossible. Furthermore, the 
+	// idea of transparent communication is that application code should not be 
+	// changed when the actor system is distributed across several computing 
+	// nodes. It is therefore very likely that an application is developed and 
+	// tested without any network endpoint class and without any session layer 
+	// class, and that these classes will be added later when the application's 
+	// behaviour has been verified.
+	//
+	// These considerations indicate that it is not possible to consider it an 
+	// error if the session layer does not exist at the time a de-serialising 
+	// actor is constructed. Hence, no exception should be thrown if there is no 
+	// session layer actor available at construction. Furthermore, the 
+	// application code should be allowed to do the registration at some later 
+	// convenient point, instead of doing it during the actor construction. 
+	//
+	// Consequently, a special registration function is provided. Note that this 
+	// is protected to ensure that only derived classes can use it, and that
+	// it is a concious decision by the application developer to use the method.
+	
+	inline bool RegisterWithSessionLayer( void )
+	{
+		Address SessionLayerAddress( 
+						NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+		
+		if ( SessionLayerAddress )
+		{
+			Send( SessionLayerMessages::RegisterActorCommand(), SessionLayerAddress	);
+			return true;
+		}	
+		else
+			return false;
+	}
+	
   // The constructor is defined in the code file because it will register the 
   // actor with the session layer to create an external presence for this actor.
   // The philosophy is that in order to be able to participate in network 
@@ -283,8 +327,7 @@ public:
   {
     RegisterHandler(this, &DeserializingActor::SerialialMessageHandler );
 		
-		Send( SessionLayerMessages::RegisterActorCommand(), 
-					NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+		RegisterWithSessionLayer();
   }
 
   // Backward compatibility constructor
@@ -295,12 +338,17 @@ public:
 	{	}
     
   // And we need a virtual destructor to ensure that everything will be 
-  // cleaned correctly.
+  // cleaned correctly. It should also inform the session layer actor 
+  // on this endpoint that this actor will no longer be available and that 
+  // no messages for this actor should be accepted.
   
   virtual ~DeserializingActor()
   { 
-		Send( SessionLayerMessages::RemoveActorCommand(), 
-					NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+		Address SessionLayerAddress( 
+						NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+		
+		if ( SessionLayerAddress )
+			Send( SessionLayerMessages::RemoveActorCommand(), SessionLayerAddress );
 	}	
 };
 
