@@ -68,24 +68,9 @@ private:
 	
 public:
 	
-	// The public constructor takes a reference to the framework and register
-	// the standard handler for this actor. It takes the actor name as a string,
-	// which is default empty, for which it leaves the assignment of the actor 
-	// name to the Theron framework.
-	//
-	// The same handler is registered also as the actor's fall back handler
-	
-	StandardFallbackHandler( Framework & TheFramework, 
-													 const std::string & ActorName = std::string() )
-	: Actor( TheFramework, ActorName.empty() ? nullptr : ActorName.data() )
-	{
-		SetDefaultHandler( this, &StandardFallbackHandler::FallbackHandler );
-		
-		TheFramework.SetFallbackHandler( this, 
-																		 &StandardFallbackHandler::FallbackHandler);
-	}
-	
-	// The new constructor for Theron++
+	// The public constructor register the standard handler for this actor. 
+	// It takes the actor name as a string, which is default empty leaving the 
+	// assignment of the actor name to the Theron framework.
 	
 	StandardFallbackHandler( const std::string & ActorName = std::string() )
 	: Actor( ActorName )

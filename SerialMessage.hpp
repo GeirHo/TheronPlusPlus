@@ -70,12 +70,15 @@ public:
 	
 	using Payload = std::string;
   
-  // Then we can define the functions to deal with serialisation.
+  // Then we can define the functions to deal with serialisation. This is 
+	// public so that everyone can check the serialised version of a message,
+	// which is also useful for detecting protocol errors.
+	
+	virtual Payload Serialize( void ) const = 0;
 	
 protected:
 	
-  virtual std::string Serialize( void ) const = 0;
-  virtual bool        Deserialize( const Payload & TheMessage ) = 0; 
+  virtual bool Deserialize( const Payload & TheMessage ) = 0; 
 	
 	// These functions should be callable from the presentation layer and from
 	// actors that needs to de-serialise incoming messages.

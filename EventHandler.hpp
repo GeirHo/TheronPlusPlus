@@ -746,11 +746,9 @@ public:
 	// of this class, or potentially throws the standard logic error if there 
 	// is already an event handler registered.
 	
-	EventHandler( Framework & ExecutionFramework, 
-								const std::string & HandlerName = std::string() )
-	: Actor( ExecutionFramework,
-					 HandlerName.empty() ? nullptr : HandlerName.data() ),
-	  StandardFallbackHandler( ExecutionFramework, GetAddress().AsString() ),
+	EventHandler( const std::string & HandlerName = std::string() )
+	: Actor( HandlerName ),
+	  StandardFallbackHandler( GetAddress().AsString() ),
 	  EventClock< EventTime >( &CurrentTime ),
 		NowSubscribers(), ConsistentTime( new TimeDistribution() )
 	{
@@ -1099,12 +1097,11 @@ public:
   //    
   // The constructor register the message handler for queuing events.
 
-  DiscreteEventManager( Framework & TheFramework, 
-										    std::string name = std::string() ) 
-    : Actor( TheFramework, name.empty() ? nullptr : name.data() ),
-      StandardFallbackHandler( TheFramework, GetAddress().AsString() ),
+  DiscreteEventManager( std::string name = std::string() ) 
+    : Actor( name ),
+      StandardFallbackHandler( GetAddress().AsString() ),
       EventData(), EventClock< EventTime >( &CurrentTime ),
-      EventHandler< EventTime >( TheFramework, GetAddress().AsString() ),
+      EventHandler< EventTime >( GetAddress().AsString() ),
       EventQueue()
   {
 		RegisterHandler( this, 

@@ -85,8 +85,8 @@
 namespace Theron
 {
 	
-class PresentationLayer : public virtual Actor,
-													public virtual StandardFallbackHandler
+class PresentationLayer : virtual public Actor,
+													virtual public StandardFallbackHandler
 {
 private:
 
@@ -179,8 +179,9 @@ private:
 
 protected:
 	
-	virtual
-	bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage )
+	virtual 
+	bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage ) 
+	override
 	{
 		if ( TheMessage->To == GetAddress() )
 		{
@@ -227,7 +228,7 @@ protected:
 			if ( OutboundMessage != nullptr )
 				Send( RemoteMessage( TheMessage->From, TheMessage->To, 
 														 OutboundMessage->Serialize() ), 
-							NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+							Network::GetAddress( Network::Layer::Session ) );
 			else
 			{
 				std::ostringstream ErrorMessage;
@@ -270,9 +271,11 @@ public:
 		Actor::SetPresentationLayerServer( this );
   }
     
-  // The compatibility constructor requires a pointer to the network endpoint
+  // The compatibility constructor accepts a pointer to the framework which 
+  // in classical Theron should be the same as the network end point. It just
+  // delegates to the above constructor and forgets about the framework pointer.
   
-  PresentationLayer( NetworkEndPoint * TheHost,
+  PresentationLayer( Framework * TheHost,
 								     const std::string ServerName = "PresentationLayer"  ) 
   : PresentationLayer( ServerName )
   { }

@@ -82,7 +82,6 @@ this will therefore be unique to each instance of an actor supporting
 serialisation. Hopefully, the number of messages supported by an actor is 
 not very large, and not too much memory will be wasted by this approach.
 
-
 Author and Copyright: Geir Horn, 2017
 License: LGPL 3.0
 =============================================================================*/
@@ -299,7 +298,7 @@ protected:
 	inline bool RegisterWithSessionLayer( void )
 	{
 		Address SessionLayerAddress( 
-						NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+						Network::GetAddress( Network::Layer::Session ) );
 		
 		if ( SessionLayerAddress )
 		{
@@ -321,7 +320,7 @@ protected:
 
 public:
   
-  DeserializingActor( const std::string name = std::string() )
+  DeserializingActor( const std::string & name = std::string() )
   : Actor( name ),
     StandardFallbackHandler( GetAddress().AsString() )
   {
@@ -345,7 +344,7 @@ public:
   virtual ~DeserializingActor()
   { 
 		Address SessionLayerAddress( 
-						NetworkEndPoint::GetAddress( NetworkEndPoint::Layer::Session ) );
+						Network::GetAddress( Network::Layer::Session ) );
 		
 		if ( SessionLayerAddress )
 			Send( SessionLayerMessages::RemoveActorCommand(), SessionLayerAddress );

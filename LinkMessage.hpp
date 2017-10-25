@@ -26,9 +26,10 @@
 #ifndef THERON_LINK_MESSAGE
 #define THERON_LINK_MESSAGE
 
-#include <string>
+#include <string>                // Standard strings
 
-#include "Actor.hpp"
+#include "Actor.hpp"             // The Theron++ actor framework
+#include "SerialMessage.hpp"     // Messages supporting serialisation
 
 namespace Theron
 {
@@ -38,17 +39,16 @@ class LinkMessage
 {
 public:
   
-  typedef ExternalAddress AddressType;
+  using AddressType = ExternalAddress;
 
   // Default dummy constructor   
   
-  LinkMessage( void )
-  { };
+  LinkMessage( void ) = default;
   
   // One should be able to obtain or set the payload string on the message.
   
-  virtual std::string GetPayload( void ) const = 0;
-  virtual void SetPayload( const std::string & Payload ) = 0;
+  virtual SerialMessage::Payload GetPayload( void ) const = 0;
+  virtual void SetPayload( const SerialMessage::Payload & Payload ) = 0;
   
   // There are similar functions to obtain or set the sender and the receiver of 
   // this message.
@@ -64,14 +64,14 @@ public:
   // the parameters in the order of the Theron Framework's Send function 
   // starting with the payload and then give the sender and receiver.
   
-  virtual void operator() ( const std::string     & ThePayload, 
-			    const ExternalAddress & From,
-			    const ExternalAddress & To )
+	inline void operator() ( const SerialMessage::Payload & ThePayload, 
+										       const ExternalAddress & From, 
+													 const ExternalAddress & To )
   {
     SetPayload  ( ThePayload );
     SetSender   ( From );
     SetRecipient( To );
-  };
+  };	
 };
     
 };			// namespace Theron

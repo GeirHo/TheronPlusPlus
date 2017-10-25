@@ -21,17 +21,22 @@ Author and Copyright: Geir Horn, 2017
 License: LGPL 3.0
 =============================================================================*/
 
-#include <sstream>										// Various string stream operations
-#include <random>					  					// To roll a dice
-#include <chrono>										  // To seed the random generators
-#include <mutex>										  // To protect the random generator
-#include <vector>											// To hold the wise words
+#include <sstream>										 // Various string stream operations
+#include <random>					  					 // To roll a dice
+#include <chrono>										   // To seed the random generators
+#include <mutex>										   // To protect the random generator
+#include <vector>											 // To hold the wise words
 
-#include <boost/algorithm/string.hpp> // To convert to upper-case 
+#include <boost/algorithm/string.hpp>  // To convert to upper-case 
 
-#include "Actor.hpp"									// The Actor framework
-#include "PresentationLayer.hpp"	  	// The presentation layer actor extension
-#include "ConsolePrint.hpp"						// Sequential output
+#include "Actor.hpp"									 // The Actor framework
+#include "StandardFallbackHandler.hpp" // Reporting wrongly sent messages
+#include "NetworkEndPoint.hpp"         // The network endpoint
+#include "SerialMessage.hpp"           // Serial message format
+#include "LinkMessage.hpp"             // Message to be sent on the link
+#include "NetworkLayer.hpp"            // The link layer protocol server
+#include "PresentationLayer.hpp"	  	 // The presentation layer actor extension
+#include "ConsolePrint.hpp"						 // Sequential output
 
 /*=============================================================================
 
@@ -44,14 +49,24 @@ License: LGPL 3.0
 // noted that the user would never define a session layer or a presentation 
 // layer, and the latter's remote message is a protocol for transferring 
 // messages between the two networking layers. 
+//
+// It is defined as a replacement for the one provided by Theron++ and since 
+// the remote message defined by the presentation layer is a part of the 
+// communication layer protocol between the presentation layer and the session
+// layer, it is accessible only for the session layer of Theron++. Hence, the 
+// session layer must be defined in the Theron name space, and provide a method
+// for sending serialised messages as if they arrive from the network.
 
-class SimpleSessionLayer : public Theron::Actor
+namespace Theron{
+
+template< class ExternalMessage >
+class SessionLayer : public Theron::Actor
 {
 public:
 	
   void OutboundMessage( 
-		   const Theron::PresentationLayer::RemoteMessage & TheMessage,
-			 const Theron::Address From                     )
+		   const PresentationLayer::RemoteMessage & TheMessage,
+			 const Address From                     )
 	{
 		Theron::ConsolePrint LogMessage;
 		
@@ -60,13 +75,95 @@ public:
 							 
 	}
 	
+	// A remote message is generated when a serial payload arrives from the 
+	// network and it is forwarded to the presentation layer.
+	
+	void ForwardNetworkMessage( Address From, Address To, 
+															const SerialMessage::Payload & ThePayload )
+	{
+		Send( PresentationLayer::RemoteMessage( From, To, ThePayload ), 
+				  Network::GetAddress( Network::Layer::Presentation ) );
+	}
+	
 	// The constructor simply registers this message handler.
 	
-	SimpleSessionLayer( const std::string name = std::string() ) 
+	SessionLayer( const std::string name = std::string() ) 
 	: Actor( name )
 	{
-		RegisterHandler( this, &SimpleSessionLayer::OutboundMessage );
+		RegisterHandler( this, &SessionLayer::OutboundMessage );
 	}
+};
+	
+}
+
+/*=============================================================================
+
+ Network endpoint initialiser
+
+=============================================================================*/
+//
+// The network endpoint encapsulates the three communication layers of every 
+// node: The link layer, the session layer, and the presentation layer. A dummy
+// link layer is defined for this test as there is no real physical transmission
+// being done
+
+class DummyLinkLayer
+: virtual public Theron::Actor, 
+  virtual public Theron::StandardFallbackHandler,
+  public Theron::NetworkLayer< Theron::LinkMessage< std::string > >
+{
+	
+	// In order for this to be instantiated it must provide some virtual functions
+	// that do nothing 
+	
+protected:
+	
+	virtual void ResolveAddress( const ResolutionRequest & TheRequest, 
+														   const Address TheSessionLayer ) override
+  { }
+  
+  virtual void ActorRemoval( const RemoveActor & TheCommand, 
+														 const Address TheSessionLayer ) override
+  { }
+  
+  // The outbound message should take an external message as argument, and 
+  // the external message type is the template argument for the network layer
+  
+  virtual void OutboundMessage( 
+						   const Theron::LinkMessage< std::string > & TheMessage, 
+							 const Address From ) override
+	{ }
+  
+public:
+	
+	// The constructor ensures that the base classes are correctly constructed
+	// using default arguments
+	
+	DummyLinkLayer( void )
+	: Actor(), StandardFallbackHandler(),
+	  Theron::NetworkLayer< Theron::LinkMessage< std::string > >()
+	{ }
+	
+	// The destructor should be virtual because the base classes are virtual 
+	// and because the class has virtual functions.
+	
+	virtual ~DummyLinkLayer( void )
+	{ }
+};
+
+// In order to support freely user defined classes an initialiser class must 
+// be defined and the network endpoint will call two methods of this class
+// in order: first the function to create the application specific layer classes
+// and then the function to bind the classes. The last function will be empty 
+// if there is no particular binding actions to do.
+// 
+// This is defined as a class derived from the endpoint class
+
+class TestNode 
+: virtual public Theron::Actor,
+  Theron::NetworkEndPoint
+{
+	
 };
 
 /*=============================================================================
@@ -242,9 +339,7 @@ private:
 			else 
 				return false;
 		}
-		
-		// Serialised messages needs a default constructor. 
-		
+			
 	public:
 		
 		// The requested number of rolls are provided by an interface function
@@ -555,9 +650,10 @@ std::mutex Worker::SixDice::GeneratorAccess;
 
 int main(int argc, char **argv) 
 {
-	Theron::ConsolePrintServer TheConsole( &std::cout, "ConsolePrintServer");
-	SimpleSessionLayer 				 SessionServer( "SessionServer" );
-	Theron::PresentationLayer  ThePresentationLayer;
+	Theron::ConsolePrintServer           TheConsole( &std::cout, 
+																									 "ConsolePrintServer");
+	Theron::SessionLayer< std::string >  SessionServer( "SessionServer" );
+	Theron::PresentationLayer            ThePresentationLayer;
 	
 	// Binding the sessions server to the presentation layer server
 	
@@ -565,7 +661,8 @@ int main(int argc, char **argv)
 	
 	// In this toy example two workers are defined
 	
-	Worker FirstWorker( "First_Worker" ), SecondWorker( "Second_Worker" );
+	Worker FirstWorker(  "First_Worker"  ), 
+				 SecondWorker( "Second_Worker" );
 	
 	// Then binary messages are tested. Each worker asks the other for a word 
 	// of wisdom and as many rolls of the dices as there are letters in the
@@ -587,31 +684,18 @@ int main(int argc, char **argv)
 	// worker as a binary message since the presentation layer does not need to 
 	// serialise the given message since the first worker's address is know as 
 	// a local actor.
-	//
-	// Note that the long explicit send form is used where both the sender and 
-	// receiver address must be given. This is because the short form sending 
-	// from the given actor is protected and can only be used by the actor itself.
-	//
-	// Note also that the messages are mimicked as coming from the session layer,
-	// i.e. coming from a remote actor.
 	
-	SessionServer.Send( 
-			Theron::PresentationLayer::RemoteMessage( FirstWorker.GetAddress(), 
-																								SecondWorker.GetAddress(), 
-																								"AskGuru" ), 
-		  SessionServer.GetAddress(), ThePresentationLayer.GetAddress() );
+	SessionServer.ForwardNetworkMessage( FirstWorker.GetAddress(), 
+																			 SecondWorker.GetAddress(), 
+																			 "AskGuru" );
 	
-	SessionServer.Send( 
-			Theron::PresentationLayer::RemoteMessage( FirstWorker.GetAddress(), 
-																								SecondWorker.GetAddress(), 
-																								"RollDice 5" ), 
-		  SessionServer.GetAddress(), ThePresentationLayer.GetAddress() );
+	SessionServer.ForwardNetworkMessage( FirstWorker.GetAddress(), 
+																			 SecondWorker.GetAddress(), 
+																			 "RollDice 5" );
 
-	SessionServer.Send( 
-			Theron::PresentationLayer::RemoteMessage( 
-				Theron::Address("Remote_Actor"), FirstWorker.GetAddress(), 
-				"Faces 1 2 3 4 5 6 " ), 
-		  SessionServer.GetAddress(), ThePresentationLayer.GetAddress() );
+	SessionServer.ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
+																			 FirstWorker.GetAddress(), 
+																			 "Faces 1 2 3 4 5 6 " );
 	
 	// That was a test of the de-serialisation made at the worker actor
 	// showing that the binary messages were correctly constructed from the 
@@ -624,16 +708,13 @@ int main(int argc, char **argv)
 	// This time the request for the words of wisdom goes to the first worker 
 	// actor and  the request to roll the dice goes to the second worker actor.
 	
-	SessionServer.Send( 
-			Theron::PresentationLayer::RemoteMessage( 
-				Theron::Address("Remote_Actor"), FirstWorker.GetAddress(), "AskGuru" ), 
-		  SessionServer.GetAddress(), ThePresentationLayer.GetAddress() );
+	SessionServer.ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
+																			 FirstWorker.GetAddress(), 
+																			 "AskGuru" );
 	
-	SessionServer.Send( 
-			Theron::PresentationLayer::RemoteMessage( 
-				Theron::Address("Remote_Actor"), SecondWorker.GetAddress(), 
-				"RollDice 8" ), 
-		  SessionServer.GetAddress(), ThePresentationLayer.GetAddress() );
+	SessionServer.ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
+																			 SecondWorker.GetAddress(), 
+																			 "RollDice 8" );
 
 	// Then it is just to wait for all messages to be handled as the actor system 
 	// can terminate when there are no more pending messages. This is necessary to 

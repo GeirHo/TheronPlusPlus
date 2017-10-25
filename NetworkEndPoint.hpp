@@ -30,145 +30,98 @@
 #include <set>							// For shut down management
 #include <type_traits>			// For advanced meta-programming
 #include <initializer_list> // For structured initialisation
+#include <sstream>          // For readable error messages
+#include <stdexcept>        // For error reporting
+#include <thread>			      // To wait for all messages to be served
+#include <chrono>			      // To wait if there are unhanded messages
+#include <algorithm>	      // To accumulate unhanded messages
 
 #include <iostream> 				//TEST
 
 #include "Actor.hpp"			 // The Theron++ actor framework
+#include "StandardFallbackHandler.hpp"
 
 namespace Theron {
+	
+// The base classes for the various layers are declared as known symbols
+	
+template< class ExternalMessage >
+class NetworkLayer;
 
-class NetworkEndPoint : virtual public Actor, 
-												public EndPoint, public Framework
+template < class ExternalMessage >
+class SessionLayer;
+
+class PresentationLayer;
+
+/*==============================================================================
+
+ Network Layers
+
+==============================================================================*/
+//
+// A network is served by three layers: The network layer taking care of the 
+// link level protocol with other nodes in the system, the session layer taking
+// care of the address mapping between the local actor addresses and their 
+// external addresses typically including information about the endpoint's 
+// network address (like actorX@nodeY), and the presentation layer ensuring 
+// that messages are correctly serialised on sending and de-serialised on 
+// arrival (see the serial message header). The three servers for these layers
+// are implemented as actors, and they must all be up and running and correctly
+// connected before the network end point operational. 
+//
+// This creates a problem in that the actual implementations of the server 
+// actors can be network type dependent. Hence the constructors for the actors 
+// can require technology specific parameters. At the same time the network 
+// endpoint class constructor must ensure that the network endpoint is 
+// operational and all server classes are running. A classical approach would 
+// be to define pure virtual functions on the network endpoint class to create 
+// and initialise each server type, and then leave to a network technology 
+// dependent sub-class to implement the actual server construction. However,
+// this is not possible because the virtual function table is not initialised 
+// with the derived class' functions before the constructor of the base class, 
+// i.e. the network endpoint terminates. It is therefore not possible for the 
+// network endpoint constructor to ensure that the network endpoint is 
+// operational when terminating. The danger is that the base class fails to 
+// start a server.
+//
+// It is therefore required to have a class defining the network layer servers
+// that can be inherited by a technology dependent network layer. This class 
+// is then passed as a template parameter to the network endpoint class, and 
+// will serve as a base class for the network endpoint class. This implies 
+// that the network endpoint class' constructor will execute after the 
+// constructor of the technology specific network layer, and the virtual 
+// functions will be correctly initialised depending on the used network layers
+// protocol stack.
+//
+// The network layer class is a virtual actor to allow it to register the 
+// handler for the shut down message whose functionality must be implemented 
+// by the endpoint.
+
+class Network
+: virtual public Actor
 {
-  // ---------------------------------------------------------------------------
-  // Domain framework
-  // ---------------------------------------------------------------------------
-
-private:
-  
-  // The parameters provided describing the location of this end point is 
-  // stored for future reference by communication specific derived classes
-  
-  std::string  Domain;
-  
 public:
-  
-  // Functions to access the information about the endpoint to make this 
-  // read-only
-  
-  inline std::string GetDomain( void ) const
-  {
-    return Domain;
-  }
-  
-  inline Framework & GetFramework( void ) 
-  {
-    return *this;
-  }
-  
+	
   // ---------------------------------------------------------------------------
-  // Framework parameters
+  // Network layers
   // ---------------------------------------------------------------------------
-  // The Theron framework parameters is provided in a C-like fashion, and not
-  // changeable after the Framework creation - although there are functions to 
-  // express change goals. To improve the interface to these, there is a 
-  // static object that allows to set the framework parameters prior to the 
-  // creation of the Network End Point. The address of this class is passed 
-  // to the Framework's constructor
-  //
-  // Currently the end point parameters are empty, but included for future 
-  // expansion. 
-  
-  static class FrameworkParameters : protected EndPoint::Parameters,
-																		 protected Framework::Parameters
-  {
-	public:
-		
-		// Yield types are encapsulated to force them to be explicit. The 
-		// conditional strategy means that inactive threads are suspended making it
-		// somewhat slower to restart a worker thread, but at the benefit of not 
-		// consuming any power when the threads are mostly idle. The spin strategy 
-		// is probably better for real-time response systems since it keeps all 
-		// worker threads active at all times, even when they will not be used by
-		// any actor. The hybrid strategy is a compromise which tries to avoid the 
-		// rampant consumption of spare CPU cycles caused by busy-waiting, while 
-		// still avoiding condition variables, by yielding to other threads with a 
-		// time out after some period of spinning.
-		
-		enum class YieldType
-		{
-			Conditional = YIELD_STRATEGY_CONDITION,
-			Spin		    = YIELD_STRATEGY_SPIN,
-			Hybrid			= YIELD_STRATEGY_HYBRID
-		};
-		
-		// Thread related functions. The first sets the number of worker threads 
-		// to use to execute the actors of the framework. The second sets the 
-		// yield strategy. There is also a parameter for thread priority, but 
-		// the effect of this is undocumented and it is therefore not provided.
-		
-		inline void WorkerThreadCount( const uint32_t Count )
-		{
-			mThreadCount = Count;
-		}
-		
-		inline void Yield( const YieldType Strategy )
-		{
-			mYieldStrategy = static_cast< YieldStrategy >( Strategy );
-		}
-		
-		// Non-Uniform Memory Architecture (NUMA) is a cluster computer architecture
-		// where each node has its own set of processors and each node has its
-		// own memory, and each processor has its own cache. Thus one can gain 
-		// significant performance by allocating the worker threads to the same 
-		// nodes and the same processors. Theron provides experimental support for 
-		// such restrictions by masks for nodes and processors.
-		
-		inline void NUMANodeMask( const uint32_t Mask )
-		{
-			mNodeMask = Mask;
-		}
-		
-		inline void NUMAProcessorMask( const uint32_t Mask )
-		{
-			mProcessorMask = Mask;
-		}
-		
-		// The constructor is simply a place holder to ensure that the default 
-		// values are used for the endpoint and framework parameter classes.
-		
-		FrameworkParameters( void )
-		: EndPoint::Parameters(), Framework::Parameters()
-		{ }
-		
-		// In order to allow the constructor to pass the base classes to the 
-		// end point and the framework, access to the protected parameter classes
-		// must be allowed by the Network End Point constructor.
-		
-		friend class NetworkEndPoint;
-		
-	} Parameters;
-  
-  // ---------------------------------------------------------------------------
-  // Actors: Network Endpoint Layers
-  // ---------------------------------------------------------------------------
-  // The core functionality is to encapsulate the necessary communication 
-  // actors: The Network Layer server dealing with the physical link exchange 
-  // and sockets; the Session Layer taking care of the the mapping of external
-  // actor addresses and actor addresses on this framework; and the Presentation
-  // layer server allowing actors to send messages transparently to actors on 
-  // remote endpoints. These unique layers are defined according to the OSI 
-  // model.
-  
-  enum class Layer 
+	//
+	// The network layers are defined as an enumerated type defined according to 
+	// the OSI model (https://en.wikipedia.org/wiki/OSI_model)
+	
+  enum class Layer
   {
     Network,
     Session,
     Presentation
   };
-    
+
 private:
-  
+	
+  // ---------------------------------------------------------------------------
+  // Network layer servers
+  // ---------------------------------------------------------------------------
+	//
   // Independent on how the servers are implemented, we know that they must be 
   // actors, and hence we can keep a pointer to them as actors. Note that the 
   // pointer must be shared to allow the access to these pointers from derived 
@@ -184,7 +137,263 @@ private:
 	// pointer to the network end point class.
   
   static std::map< Layer, std::shared_ptr< Actor > > CommunicationActor;
+	
+	// However, the network endpoint should be allowed to access these servers
+	// and it should therefore be granted access independent of which network 
+	// type it has. Note that the protection of the map is essential because it 
+	// prevents a derived technology specific network type to directly set the 
+	// servers, and forces the use of the virtual functions.
+	
+	template< class NetworkType, class Enable >
+	friend class NetworkEndPoint;
+
+  // ---------------------------------------------------------------------------
+  // Getting Network Endpoint Layers
+  // ---------------------------------------------------------------------------
+  // The core functionality is to encapsulate the necessary communication 
+  // actors: The Network Layer server dealing with the physical link exchange 
+  // and sockets; the Session Layer taking care of the the mapping of external
+  // actor addresses and actor addresses on this framework; and the Presentation
+  // layer server allowing actors to send messages transparently to actors on 
+  // remote endpoints. 
+	//
+  // In some cases it can be necessary to directly address these actors,
+  // for extended initialisation messages to provided handlers. The following 
+  // access function returns the actor address provided that the 
+  // corresponding actor has been created.
+	
+public: 
+	
+  inline static Address GetAddress( Layer Role )
+  {
+    std::shared_ptr< Actor > TheServer = CommunicationActor[ Role ];
+    
+    if ( TheServer )
+      return TheServer->GetAddress();
+    else
+      return Address::Null();
+  }
   
+  // In some cases it could be desired to get the address of the network 
+  // end point itself. This would correspond to calling the get address on 
+  // the network endpoint object. However, since there is only one network 
+  // endpoint the address could be a global variable, or better there could 
+  // be a static function returning the address similar to the previous 
+  // function. This requires that there is a static variable holding the pointer
+  // to this endpoint, which is initialised by the constructor when the 
+  // network endpoint is created.
+  
+private:
+	
+	static Actor * ThisNetworkEndpoint;
+	
+public:
+	
+	inline static Address GetAddress( void )
+	{
+		if ( ThisNetworkEndpoint != nullptr )
+			return ThisNetworkEndpoint->Actor::GetAddress();
+		else
+			return Address::Null();
+	}
+  
+  // ---------------------------------------------------------------------------
+  // Creating the layers
+  // ---------------------------------------------------------------------------
+	//
+	// Another difficulty is to ensure that a given class is really derived from 
+	// the expected protocol layer base class. This is ensured by a special 
+	// template to create a server. This template will make a test to see if 
+	// the given server type is derived from the correct base class. This test 
+	// is based on defining the network layer as a private parameter of the base
+	// class. In order to allow this to be tested it is required that a derived 
+	// network technology specific class uses a template function to create the
+	// servers. The creator method takes the function of the actor to be created 
+  // as first argument, and then the other arguments are forwarded to the 
+  // actor's constructor.
+  //
+  // The arguments are passed using the forwarding mechanism to be able to 
+  // handle all kind of different arguments, see the excellent answer at
+  // http://stackoverflow.com/questions/3582001/advantages-of-using-forward
+  // for details. Note that when unrolling the argument list the forward 
+  // template is iterated over all arguments (types and values) This iteration
+  // taken from http://eli.thegreenplace.net/2014/variadic-templates-in-c/
+
+protected:
+	
+  template< Layer Role, class ServerClass, typename ... ArgumentTypes >
+  inline void CreateServer( ArgumentTypes && ... ConstructorArguments )
+  {
+		// Testing if it is derived from the right base class
+
+		if constexpr ( Role == Layer::Network )
+			static_assert( 
+				std::is_base_of< NetworkLayer< typename ServerClass::MessageType >, 
+												 ServerClass >::value, 
+				"Network: Server must be derived from the Network Layer base class" );
+		else if constexpr ( Role == Layer::Session )
+			static_assert( 
+				std::is_base_of< SessionLayer< typename ServerClass::MessageType >, 
+												 ServerClass >::value, 
+				"Network: Server must be derived from Session Layer base class" );
+		else if constexpr ( Role == Layer::Presentation )
+			static_assert( std::is_base_of< PresentationLayer, ServerClass >::value, 
+		  "Network: Server must be derived from the Presentation Layer base class");
+
+		// The server is derived from the correct base class, which implicitly 
+		// makes it an actor, and it can be stored as one of the network layers. 
+		// The emplace function ensures that the server is stored only once, and 
+		// trying to register a second server for the same role should result in 
+		// an exception.
+		
+		if (! CommunicationActor.emplace( Role, 
+						new ServerClass( 
+						 std::forward< ArgumentTypes >(ConstructorArguments)... ) ).second )
+		{
+			const std::map< Layer, std::string > LayerStrings = {
+				{ Layer::Network, "network" },
+				{ Layer::Session, "session" },
+				{ Layer::Presentation, "presentation"}
+			};
+	
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "A network layer server for the "
+									 << LayerStrings.at( Role ) 
+									 << " layer is already defined."
+									 << " Duplicate server definitions are not allowed";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
+  }
+  
+  // The virtual functions to create each type of server must use this create 
+  // server function for the server to be properly stored in the map.
+
+  virtual void CreateNetworkLayer( void ) = 0;
+	virtual void CreateSessionLayer( void ) = 0;
+	virtual void CreatePresentationLayer( void ) = 0;
+	
+	// Finally, there could be a need to link the various servers in some way 
+	// depending on the communication technology, and there is a function to 
+	// bind the servers. Note that this function will be called by the network 
+	// endpoint class constructor after the creation functions, and after checking
+	// that all layers have been properly defined. By default it does nothing.
+	
+	virtual void BindServers( void )
+	{ }
+
+	// ---------------------------------------------------------------------------
+  // Domain
+  // ---------------------------------------------------------------------------
+  //
+  // The location of this end point is stored for future reference by 
+  // communication specific derived classes, if this is needed at the time of 
+  // construction
+  
+  const std::string Domain;
+
+	// ---------------------------------------------------------------------------
+  // Shut down management
+  // ---------------------------------------------------------------------------
+  //
+  // The network end point must provide a handler for a shut down message
+  
+public:
+	
+	class ShutDownMessage
+	{
+	public:
+		
+		ShutDownMessage( void )
+		{ }
+		
+	};
+	
+protected:
+	
+	// Derived classes must provide a handler for shut down messages and make 
+	// sure that the network closes properly when this message is received.
+
+	virtual void StartShutDown( const Network::ShutDownMessage & TheMessage, 
+														  const Address Sender ) = 0;
+	
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
+	//
+  // The default constructor is made protected to ensure that only the network 
+	// endpoint can call it, and hence any derived class cannot be instantiated 
+	// even though it defines the proper virtual functions. The copy constructor 
+	// is explicitly deleted for the same reasons.
+	
+	Network( const std::string Location )
+	: Actor( Location ), Domain( Location )
+	{
+		ThisNetworkEndpoint = this;
+		RegisterHandler( this, &Network::StartShutDown );
+	}
+	
+	Network( void ) = delete;
+	Network( const Network & Other ) = delete;
+
+	// The destructor is public and virtual to allow the proper destruction of 
+	// the derived classes
+	
+public:
+	
+	virtual ~Network( void )
+	{ }
+};
+	
+/*==============================================================================
+
+ Network endpoint
+
+==============================================================================*/
+//
+// The network endpoint class is a template taking a network type class as 
+// parameter. The details about this will be explained below under 
+// initialisation, and it is necessary to ensure that the network endpoint 
+// is consistent when its constructor terminates, i.e. that all the three 
+// layer actors are properly initialised. Hence, the given network type must 
+// be derived from the Network base class for the network endpoint class to 
+// compile.
+
+template< class NetworkType, 
+	typename = std::enable_if_t< std::is_base_of<Network, NetworkType>::value > >
+class NetworkEndPoint 
+: virtual public Actor,
+  virtual public StandardFallbackHandler,
+  public NetworkType
+{
+public:
+	
+  // ---------------------------------------------------------------------------
+  // Network layers
+  // ---------------------------------------------------------------------------
+	//
+	// Since it is known that the network type is a network, it does define the 
+	// enumeration of the network layers.
+	
+	using typename NetworkType::Layer;
+	
+private:
+	
+	// The map of the various actors is defined to be a part of this class too 
+	// so it can be accessed by user level interface functions.
+		
+	using NetworkType::CommunicationActor;
+		
+  // ---------------------------------------------------------------------------
+  // Network layer server pointer 
+  // ---------------------------------------------------------------------------
+	// 
+	// In some situations one would need a pointer to one of the layer servers, 
+	// and this access can only be given by the network end point as it ensures 
+	// that the layers have been created and are up and running. 
+	//
   // The actual communication actors are depending on the protocol, and in 
   // order to access functions on these classes, the pointers must be cast 
   // to the pointers of the right class type. This is the purpose of the 
@@ -200,7 +409,7 @@ public:
   std::shared_ptr< ServerClass > Pointer( Layer Role )
   {
     std::shared_ptr< ServerClass > ThePointer = 
-	  std::dynamic_pointer_cast< ServerClass >( CommunicationActor[Role] );
+	  std::dynamic_pointer_cast< ServerClass >( CommunicationActor[ Role ] );
 	  
     if ( ThePointer )
       return ThePointer;
@@ -214,50 +423,6 @@ public:
 			throw std::logic_error( ErrorMessage.str() );
 		}
       
-  }
-  
-  // It is the responsibility of the constructor of the communication specific 
-  // derived class to ensure that these actors are created by calling the 
-  // following functions with the correct class type. The first argument to 
-  // the constructor of these actors should be a pointer to this Network 
-  // End Point that can be understood as an endpoint or a framework as 
-  // necessary. The other parameters must be given to the creator function 
-  // below. The creator method takes the function of the actor to be created 
-  // as first argument, and then the other arguments are forwarded to the 
-  // actor's constructor.
-  //
-  // The arguments are passed using the forwarding mechanism to be able to 
-  // handle all kind of different arguments, see the excellent answer at
-  // http://stackoverflow.com/questions/3582001/advantages-of-using-forward
-  // for details. Note that when unrolling the argument list the forward 
-  // template is iterated over all arguments (types and values) This iteration
-  // taken from http://eli.thegreenplace.net/2014/variadic-templates-in-c/
-
-  template< class ServerClass, typename ... ArgumentTypes >
-  inline void Create( Layer Role, ArgumentTypes && ... ConstructorArguments )
-  {
-    static_assert( std::is_base_of< Actor, ServerClass >::value,
-    "Network End Point: Network servers must be Actors!");
-    
-    CommunicationActor[Role] = std::shared_ptr< Actor >( 
-      new ServerClass( this, 
-										   std::forward< ArgumentTypes >(ConstructorArguments)... 
-      ));
-  }
-
-  // In some cases it can be necessary to directly address these actors,
-  // for extended initialisation messages to provided handlers. The following 
-  // access function returns the actor address provided that the 
-  // corresponding actor has been created.
-  
-  inline static Address GetAddress( Layer Role )
-  {
-    std::shared_ptr< Actor > TheServer = CommunicationActor[Role];
-    
-    if ( TheServer )
-      return TheServer->GetAddress();
-    else
-      return Theron::Address::Null();
   }
   
   // ---------------------------------------------------------------------------
@@ -297,25 +462,6 @@ public:
   // for it to receive the shut down message, and one Shut Down method that 
   // can be called by the main actor when the system is ready for shut down
   // as the message exchange dries up.
-  
-public:
-	
-	class ShutDownMessage
-	{
-	private:
-		
-		std::string Description;
-		
-	public:
-		
-		ShutDownMessage( void )
-		{
-			Description = "Network End Point: Shut down message";
-		}
-		
-	};
-	
-  // The receiver object has a handler for this message
 	
 private:
 	
@@ -327,8 +473,14 @@ private:
 		
 		// The termination message handler
 		
-		void StartTermination( const ShutDownMessage & TheRequest, 
-													 const Address Sender );
+		void StartTermination( const Network::ShutDownMessage & TheRequest, 
+													 const Address Sender )
+		{
+			while ( std::any_of( GuardedActors.begin(), GuardedActors.end(), 
+										 [](const Theron::Actor * TheActor)->bool{ 
+											  return TheActor->GetNumQueuedMessages() > 0;  }) )
+				std::this_thread::sleep_for( std::chrono::seconds(1) );
+		}
 		
 	public:
 		
@@ -355,23 +507,26 @@ private:
 	// the message as if it was from that actor. It throws if there is no shut 
 	// down receiver allocated.
 	
-public:
-	
-	void SendShutDownMessage( const Address & Sender );
-	
-	// There is also a variant that will send the message as if it is from the 
-	// network layer actor.
-	
-	void SendShutDownMessage( void )
+	void StartShutDown( const Network::ShutDownMessage & TheMessage, 
+										  const Address Sender )
 	{
-		SendShutDownMessage( GetAddress( Layer::Network ) );
+		if ( ShutDownReceiver )
+			Send( Network::ShutDownMessage(), 
+						Sender, ShutDownReceiver->GetAddress() );
+		else
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "Sending a shut down message requires a shut down " 
+									 << "receiver";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
 	}
 	
-	// One may get the address of the shut down receiver. This function will 
-	// also throw if the receiver does not exist.
-	
-	Address ShutDownAddress( void );
-	
+public:
+		
 	// The shut down receiver and object is created and obtained by a creator 
 	// function that takes a list of actors that can be converted to actor 
 	// pointers and passed to the termination receiver. Note that it adds the 
@@ -406,199 +561,74 @@ public:
 	}
 	
   // ---------------------------------------------------------------------------
-  // Constructor and Initialiser
+  // Constructor
   // ---------------------------------------------------------------------------
-  // The constructor simply stores the arguments and ensures consistency between
-  // the endpoint and the framework. First the arguments for the end point are
-  // given and then the arguments for the framework are accepted. It would be 
-  // tempting to initialise the various network layer actors from the 
-  // constructor, but this creates a fundamental problem: Imagine the situation
-  // where a class is derived from this class and then a second class is 
-  // derived from that class again:
-  //
-  // class DerivedFirst : public NetworkEndPoint
-  // class DerivedSecond : public DerivedFirst
   // 
-  // DerivedFirst may not know about DerivedSecond, and create the types of 
-  // actors it has been designed for. DerivedSecond will also create the actors
-  // it has been designed for, and this will be at best inefficient since it 
-  // deletes the actors created by derived first.
+  // The constructor first creates the layer servers by calling the given 
+  // network type's creator functions. These are properly initialised at the 
+  // time of calling since the endpoint has the network type as a base class.
+  // Even though all functions are required, there is no guarantee that they 
+  // actually do call the network's create server function, and thus the
+  // pointers to the various layers might not exist, or they are default 
+  // initialised. An extensive test is therefore carried out to ensure that 
+  // the network endpoint will be operational after construction. It should 
+  // be noted that this is just testing the validity of the various 
+  // network layer classes and not that they behave as expected for the given 
+  // network protocol to be used by the actor system.
   //
-  // It does not help creating virtual functions for creating these actors! 
-  // A virtual function is a placeholder for another function's address, and 
-  // even if DerivedSecond and DerivedFirst defines virtual functions, the 
-  // DerivedSecond functions are not initialised before its constructor executes
-  // (because DerivedFirst should obviously be assured to call its own
-  // virtual functions)
-  //
-  // It is also not possible to pass a pointer to an initialisation function 
-  // because this function must be a derived class member in order to access 
-  // the Create function, and it needs to know the parameters to pass to the 
-  // constructor of the communication layer server it creates.
-  //
-  // The way to circumvent this problem is combining some of the very nice 
-  // features of C++: We define an initialiser object with a virtual 
-  // function to initialise the  communication layer classes. This class must 
-  // be a friend of the derived classes so that the initialiser can access 
-  // the create function of the Network End Point (this class). Then this 
-  // object is taken as a template argument to the constructor, and derived 
-  // classes can have default values for this initialiser. This initialiser 
-  // is then instantiated by the base class constructor with the base class
-  // as argument, and then the initialisation function is called. 
-  //
-  // There is an issue that the initialiser class will use the create function
-  // and the pointer function above from a base class pointer, but since the 
-  // initialisers will embedded classes in a derived class they have no access
-  // to protected members of the Network End Point, and the classes cannot be 
-  // declared friends of the base class. Hence, the only solution is to make
-  // the Create and Pointer functions above public members.
-  
-protected:
-  
-  friend class Initialiser;
-  
-  class Initialiser
-  {
-  private:
-      
-    // Access to the functions of the base class is done through this pointer
-    // since this object's this pointer is not very useful
-    
-    NetworkEndPoint * TheNode;
-
-    // There is fundamental problem of ordering. The functions creating the 
-    // servers and binding them can only be called from the base network 
-    // endpoint class' constructor. Hence this can be ensured by only
-    // instantiating the class in the the base endpoint class' constructor. 
-    // However, the functions to set the default parameters for the Theron 
-    // Endpoint and Framework base classes of the Network End Point base class
-    // must be invoked before the base endpoint class constructor is executed.
-    // If base classes should be allowed to re-define these, an object must 
-    // be created prior to invoking the any of these functions for the normal 
-    // polymorphism to work. Hence the initialiser class must be constructed
-    // before the base endpoint class, and it can therefore not take the pointer
-    // to the base endpoint class as a parameter to the constructor. The base
-    // class is therefore declared as a friend in order to set the node pointer
-
-    friend class NetworkEndPoint;
-    
-  protected:
-    
-    // There is an interface function allowing a derived initialiser to use 
-    // the node pointer, essentially giving read only access.
-    
-    inline NetworkEndPoint * GetNodePointer( void )
-    {
-      return TheNode;
-    }
-    
-  public:
-    
-    // The initialisation is split into two parts: The first is to create the 
-    // classes implementing the various networking interface layers. This is 
-    // very much protocol dependent, and other classes deriving from this 
-    // network endpoint must provide a function to create the classes using 
-    // the templated creator function found in the network end point class.
-    
-    virtual void CreateServerActors ( void ) = 0;
-    
-    // After the creation of the classes, they will be bound together. The 
-    // default implementation is to bind
-    // 		Network Layer <-> Session Layer <-> Presentation Layer
-    // but any kind of binding can be offered using any methods defined for 
-    // the actors serving the different layers.
-    
-    virtual void BindServerActors ( void ) = 0;
-
-    // The constructor simply ensures that we capture a true base class pointer
-    // when this initialiser is instantiated by the base class. If any of the 
-    // virtual functions attempts to dynamically cast this pointer to anything
-    // else, an exception should be thrown.
-    
-    Initialiser( void )
-    {
-      TheNode = nullptr;
-    }
-    
-    // There is also a virtual destructor doing nothing, but important for the 
-    // correct inheritance.
-    
-    virtual ~Initialiser( void )
-    { }
-  };
+  // Given that the network type may require some additional parameters for 
+  // the technology dependent network functionality, it is possible to give 
+  // more parameters than the two required, and these are forwarded to the 
+  // network type constructor directly. 
   
 public:
-  
-  // The constructor could then templated on the the initialiser class which is 
-  // instantiated in the constructor. This ensures that only the base class 
-  // initialises the communication classes (unless some derived class does it
-  // explicitly). 
-  //
-  // There is one hatch though: Even though a constructor can be templated, 
-  // the template parameters are supposed to be for the types of the constructor
-  // arguments, and not to be used explicitly. In other words, one can cannot 
-  // make a derived constructor like:
-  // 	Derived( ... ) : Base< A >(....)
-  // even though the base class constructor is a template. However, it is 
-  // possible to define the base constructor as
-  // 	template < A > Base( A parameter ) 
-  // and then the 'parameter' can be of any useful type. 
-  // 
-  // The consequence of this is that we need to pass the initialiser class as
-  // a constructor argument type, but we should not allow this argument to do
-  // anything useful. There is a good proposed solution in 
-  // http://stackoverflow.com/questions/2786946/c-invoke-explicit-template-constructor
-  // by first defining a dedicated class that does nothing but defining its
-  // type (and this should never be used)
-  //
-  // Furthermore, there is an issue with some compilers that they do not accept
-  // variadic template arguments after default values have been defined for 
-  // some arguments because default values should always come at the end. To 
-  // remedy this, a template function is used to create the initialiser taking
-  // optional arguments that may be needed by derived initialisers. It returns
-  // a shared pointer so that the object is deallocated as soon as the 
-  // initialisation is over, and this is a type defined first.
-  
-  typedef std::shared_ptr< Initialiser > InitialiserType;
-  
-  // Then the creator function can be defined. It is defined as static as it 
-  // does not require a 'this' pointer since it does not access any class 
-  // members, and declaring it static will allow it to be used without first 
-  // creating the network end point (which would defeat the purpose)
-  
-  template< class InitialiserClass, typename ... InitialiserArgumentTypes >
-  static InitialiserType SetInitialiser( 
-			  InitialiserArgumentTypes && ... InitialiserArugments )
+ 
+ template< typename ... NetworkParameterTypes >
+ NetworkEndPoint( const std::string & Name, const std::string & Location, 
+									NetworkParameterTypes && ... NetworkParameterValues )
+  : Actor( Name ), StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    NetworkType( 
+	    Name, Location, 
+		  std::forward< NetworkParameterTypes >(NetworkParameterValues)... )
   {
-    static_assert( std::is_base_of< Initialiser, InitialiserClass >::value,
-    "Network End Point: The initialiser must be derived from class Initialiser");
+    NetworkType::CreateNetworkLayer();
+		NetworkType::CreateSessionLayer();
+		NetworkType::CreatePresentationLayer();
+		
+		// The validity of these constructions is tested to ensure that a server 
+		// has been defined for each layer
 
-    return InitialiserType( new InitialiserClass( 
-    std::forward< InitialiserArgumentTypes >( InitialiserArugments )... )   );
-  }
-
- // The constructor takes the right initialiser and uses it first to set the 
- // parameters for the Theron Endpoint and Framework, before it is bound to 
- // this endpoint and the network server classes are created and bound. 
- // 
- // A minor implementation note: The initialiser cannot be a constant since 
- // the constructor will set the node pointer to this (i.e. change the object)
- // and that means it cannot be a reference to a temporary object, but must be
- // a copy. However, what is copied is the shared pointer, not the initialiser,
- // and therefore the overhead should be negligible. 
-  
- NetworkEndPoint( const std::string & Name, const std::string & Location,
-								  InitialiserType TheInitialiser )
-  : Actor( Name ),
-    EndPoint( Name.data(), Location.data(), Parameters),
-    Framework( *this, Name.data(), Parameters ),
-    Domain( Location )
-  {
-    
-    TheInitialiser->TheNode = this;
-    
-    TheInitialiser->CreateServerActors();
-    TheInitialiser->BindServerActors();
+		const std::map< Layer, std::string > LayerStrings = {
+				{ Layer::Network, "network" },
+				{ Layer::Session, "session" },
+				{ Layer::Presentation, "presentation"}
+		};
+		
+		for ( const auto & TheLayer : LayerStrings )
+			try 
+			{
+				auto Server = CommunicationActor.at( TheLayer.first );
+				
+				// Then a check that the server has been allocated
+				
+				if ( ! Server )
+					throw std::out_of_range( "No valid network layer server" );
+			} 
+			catch ( std::out_of_range & error )
+			{
+				std::ostringstream ErrorMessage;
+				
+				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+										 << "Network end point: Now layer server for the "
+										 << TheLayer.second
+										 << " layer has been defined. Improper initialisation!";
+										 
+			  throw std::logic_error( ErrorMessage.str() );
+			}
+		
+		// All servers OK, so it makes sense to bind them
+		
+		NetworkType::BindServers();
   }
   
   // The destructor is also not doing anything particular since the managed 
