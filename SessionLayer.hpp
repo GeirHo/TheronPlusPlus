@@ -388,11 +388,6 @@ private:
 				       Peer != KnownActors.right.end(); ++Peer )
 		  ExistingPeers.insert( Peer->first );
 		
-		std::cout << "Subscribing Actor " << RequestingActor.AsString() << " gets ";
-		for( auto & address : ExistingPeers )
-			std::cout << address.AsString() << " ";
-		std::cout << std::endl;
-	 
     Send( ExistingPeers, RequestingActor );
   }
   
