@@ -328,8 +328,8 @@ protected:
 	// even though it defines the proper virtual functions. The copy constructor 
 	// is explicitly deleted for the same reasons.
 	
-	Network( const std::string Location )
-	: Actor( Location ), Domain( Location )
+	Network( const std::string & Name, const std::string & Location )
+	: Actor( Name ), Domain( Location )
 	{
 		ThisNetworkEndpoint = this;
 		RegisterHandler( this, &Network::StartShutDown );

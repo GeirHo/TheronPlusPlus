@@ -229,6 +229,23 @@ public:
   virtual std::string GetSubject( void ) const
   { return Subject; }
   
+  // It may also be necessary to recover the actor address from a JabberID, 
+  // and it should be based on the resource string if the address has a 
+  // resource, otherwise it will be based on the string representation of the 
+  // whole Jabber ID. Normal actors must have the resource name set to the 
+  // actor name, and this should be unique to the whole distributed actor 
+  // system.
+  
+  virtual Address ActorAddress( const JabberID & ExternalActor ) const override
+  {
+		std::string TheAddress( ExternalActor.getResource() );
+		
+		if ( TheAddress.empty() )
+			return Address( ExternalActor.toString() );
+		else
+			return Address( TheAddress );
+	}
+  
 	virtual ~OutsideMessage( void )
 	{ }
 };
@@ -533,7 +550,7 @@ private:
   //
 	// When the a new actor is created the session layer will send a resolution 
 	// request for its address. It will then create the client for the actor, 
-	// connect the actor to the server and return its address.
+	// connect the actor to the server and return its external address.
 
 protected:
 		
@@ -630,7 +647,7 @@ protected:
 					 const std::string & Password,
 					 const JabberID & AnotherPeer = JabberID() )
   : Actor( Name ),
-    Theron::Network( Location ),
+    Theron::Network( Name, Location ),
     ServerPassword( Password ), InitialRemoteEndpoint( AnotherPeer )
   { }
   

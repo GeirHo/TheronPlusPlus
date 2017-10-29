@@ -232,7 +232,7 @@ public:
 // endpoint address under the given network layer protocol. It has to respond 
 // to resolution requests coming on the external interface from session layer
 // servers on other endpoints, and it will also participate to the resolution
-// of external actors' addresses if they are needed by local actors.
+// of external actors' addresses.
 // 
 // In order to fulfil this core task it has 
 //
@@ -445,11 +445,12 @@ private:
   // When the resolved address comes back it will be associated with the 
   // already recorded actor address. Note that this can also be used to update
   // a previously stored address if the link protocol can change the address 
-  // autonomously. 
+  // autonomously. It can also be that this is a response to a request to store 
+  // the address of a remote actor whose global address has been resolved. 
   //
-  // It can also be that this is a response to a request to store the address 
-  // of a remote actor whose global address has been resolved. Any cached 
-  // messages must be forwarded in this case
+  // Any cached messages must be forwarded if the external address was a new 
+  // external address and there are cached outbound messages for this remote 
+  // actor
   
   void StoreExternalAddress( 
 		   const typename 
@@ -572,32 +573,76 @@ private:
   // Inbound messages
   // --------------------------------------------------------------------------
   // 
-  // Messages arriving from the Network Layer should be derived from the Link
-  // message and the payload can therefore be directly extracted and forwarded
-  // to the presentation layer as the Presentation Layer's remote message. 
-  // It is important to note that the remote actor's address must be decoded 
-  // by the network layer before the message is sent with the alias send 
-  // as being from this actor. 
-  //
   // If a message does not have a local receiving actor, it will simply be 
   // ignored. This is necessary in the case where the local actor shuts down 
   // at the same time as a remote actor sends a message. The information that 
-  // the actor is closing may cross with the message from the sender, and 
+  // the actor is closing may cross with the message from the remote sender, and 
   // the message cannot be delivered.In order to ensure the delivery in a 
   // distributed setting an acknowledgement protocol should be implemented 
-  // among the actors. 
+  // among the actors.
+  //
+  // Inbound messages from registered senders is perfectly possible, but creates 
+  // a philosophical problem. It could be that these senders have not been 
+  // registered by the remote endpoint because they are not supposed to receive
+  // any messages. Remember that the registration is done by the Deserializing
+  // actor, and it is only necessary to inherit the Deserializing actor if the 
+  // actor is receiving messages from actors on remote endpoints. If the actors
+  // implement a publish-subscribe pattern, only the subscribing actors will 
+  // receive messages, and the pattern is not symmetric. The endpoint hosting 
+  // the subscribing actor may thus not know about the sender of the message, 
+  // and it has to set the actor address of the sender to a string 
+  // representation of the external address. The question is should it also 
+  // register this sender as a known actor?
+  //
+  // The risk is that storing the sender in a situation where remote sender 
+  // actors are frequently created and destroyed will cause the known actor 
+  // registry to grow very large. These automatically registered actors will 
+  // never be removed since they are not explicitly registered by the remote 
+  // endpoint, and therefore when the remote actor closes, its external address
+  // is not removed from peer endpoints by the session layer on the node 
+  // hosting the sender.
+  //
+  // It is therefore taken that remote senders that should be stored as known 
+  // actors must be explicitly registered by the network layer protocol using 
+  // messages to the session layer's store external address function. The 
+  // drawback is when the local receiver actor responds to an incoming message 
+  // from an un-registered remote sender. In this case, the outbound message 
+  // will be cached while the external address of the remote actor is being 
+  // resolved, and the cached messages will only be forwarded once the network 
+  // layer protocol has stored the external address of the remote actor.
   
   void InboundMessage( const ExternalMessage & TheMessage, 
-											 const Address RemoteActor )
+											 const Address TheNetworkLayer )
 	{
 		auto ReceiverRecord = KnownActors.left.find( TheMessage.GetRecipient() );
 		
 		if ( ReceiverRecord != KnownActors.left.end() )
+		{
+			// The actor address of the sender must be set for the message to be 
+			// valid. It can either be stored in the actor registry if the remote 
+			// actor has already been registered, or it can be set to a temporary 
+			// remote actor address.
+			
+			Address RemoteActor;
+		
+			// The sender's actor address is resolved if it is registered.
+			
+			auto SenderRecord = KnownActors.left.find( TheMessage.GetSender() );
+			
+			if ( SenderRecord != KnownActors.left.end() )
+				RemoteActor = SenderRecord->second;
+			else
+				RemoteActor = TheMessage.ActorAddress( TheMessage.GetSender() );
+			
+			// The sender's actor address is now valid, and the message can be 
+			// forwarded to the presentation layer to be de-serialised.
+			
 			Send( PresentationLayer::RemoteMessage( RemoteActor, 
 																							ReceiverRecord->second, 
 																					    TheMessage.GetPayload()  ), 
 						Network::GetAddress( Network::Layer::Presentation ) 
 					);
+		}
 	}
   
   // --------------------------------------------------------------------------
@@ -610,12 +655,12 @@ private:
   // is is immediately passed on to be forwarded by the link layer.
   
   void OutboundMessage( const PresentationLayer::RemoteMessage & TheMessage,
-												const Address Sender )
+												const Address ThePresentationLayer )
 	{
 		// The receiver and the senders are looked up by their actor addresses
 		
 		auto TheReceiver = KnownActors.right.find( TheMessage.GetReceiver() ),
-		     TheSender   = KnownActors.right.find( Sender );
+		     TheSender   = KnownActors.right.find( TheMessage.GetSender() );
 
 		// It is a philosophically difficult problem if the sender does not 
 		// exists as a known actor since this means that the actor has not 

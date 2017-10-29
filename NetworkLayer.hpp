@@ -186,7 +186,7 @@ public:
 	// The constructor initialises the base classes and registers the the 
 	// outbound message handler.
 	
-	NetworkLayer( std::string ServerName = "NetworkLayer" )
+	NetworkLayer( std::string ServerName = "NetworkLayerServer" )
 	: Actor( ServerName ), StandardFallbackHandler( ServerName )
 	{
 		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolveAddress  );

@@ -4,7 +4,7 @@ Actor Registry
 A general problem is to know when all actors have finished processing and 
 the program can terminate. The Actor Registry class maintains a set of 
 addresses to the actors registering with it by a registration message and 
-waits for deregistration messages when the actors terminate. The registry actor
+waits for de-registration messages when the actors terminate. The registry actor
 may itself terminate when the set of active actors is empty.
 
 The whole idea with this class is to keep the main thread alive until all
@@ -16,13 +16,13 @@ terminate.
 
 The actor registry is based on two principles: a registry agent which is 
 itself a named actor, hence a global entity, and a set of termination receivers
-that are typically instansiated in each main process on each of the computers
+that are typically instantiated in each main process on each of the computers
 involved with executing the agent framework. Each terminator will receive 
 one and only one message from the ActorRegistry, sent when the the last actor
-unregister. 
+de-register. 
 
-Authoor: Geir Horn, 2013-2017
-Lisence: LGPL 3.0
+Author: Geir Horn, 2013-2017
+License: LGPL 3.0
 =============================================================================*/
 
 #ifndef ACTOR_REGISTRY
@@ -113,11 +113,9 @@ public:
   // The default constructor initialises the structures and registers the
   // message handler
 
-  ActorRegistry( Theron::Framework & LocalFramework, 
-								 const std::string & RegistryName = "ActorRegistry" ) 
-	  : Actor( LocalFramework, 
-						 RegistryName.empty() ? nullptr : RegistryName.data() ),
-	    StandardFallbackHandler( LocalFramework, GetAddress().AsString() ),
+  ActorRegistry( const std::string & RegistryName = "ActorRegistry" ) 
+	  : Actor( RegistryName.empty() ? nullptr : RegistryName.data() ),
+	    StandardFallbackHandler( GetAddress().AsString() ),
 	    ActiveActors(), Terminators()
   {
 		if ( Name.empty() )
@@ -247,5 +245,5 @@ public:
 	};
 };
 
-}       // End namespace Theron
+}       // End name space Theron
 #endif  // ACTOR_REGISTRY

@@ -1,4 +1,4 @@
-/*=============================================================================
+﻿/*=============================================================================
 Serialisation example
 
 The aim of this example is to show how messages can be sent transparently over
@@ -33,6 +33,7 @@ License: LGPL 3.0
 #include "StandardFallbackHandler.hpp" // Reporting wrongly sent messages
 #include "NetworkEndPoint.hpp"         // The network endpoint
 #include "SerialMessage.hpp"           // Serial message format
+#include "DeserializingActor.hpp"      // To de-serialise messages
 #include "LinkMessage.hpp"             // Message to be sent on the link
 #include "NetworkLayer.hpp"            // The link layer protocol server
 #include "PresentationLayer.hpp"	  	 // The presentation layer actor extension
@@ -40,114 +41,152 @@ License: LGPL 3.0
 
 /*=============================================================================
 
- Simple Session Layer
+ Outside message
 
 =============================================================================*/
 //
-// The simple session layer provides a message handler to receive outbound 
-// messages in serialised format, and then prints the message. It should be 
-// noted that the user would never define a session layer or a presentation 
-// layer, and the latter's remote message is a protocol for transferring 
-// messages between the two networking layers. 
-//
-// It is defined as a replacement for the one provided by Theron++ and since 
-// the remote message defined by the presentation layer is a part of the 
-// communication layer protocol between the presentation layer and the session
-// layer, it is accessible only for the session layer of Theron++. Hence, the 
-// session layer must be defined in the Theron name space, and provide a method
-// for sending serialised messages as if they arrive from the network.
+// The network layer and the session layers are exchanging messages based on 
+// the link layer message format. In this test case it is simply a class 
+// holding a string for the sender address and a string for the receiver address
+// and the payload of the message. It must be derived from the link message
+// whose template parameter is the external address class, which is here a 
+// a string.
 
-namespace Theron{
-
-template< class ExternalMessage >
-class SessionLayer : public Theron::Actor
+class OutsideMessage : public Theron::LinkMessage< std::string >
 {
 public:
 	
-  void OutboundMessage( 
-		   const PresentationLayer::RemoteMessage & TheMessage,
-			 const Address From                     )
-	{
-		Theron::ConsolePrint LogMessage;
-		
-		LogMessage << "[ OUTBOUND: ] \"" << TheMessage.GetPayload() << "\" From: "
-		           << TheMessage.GetSender().AsString() << std::endl;
-							 
-	}
+	using ExternalAddress = std::string;
 	
-	// A remote message is generated when a serial payload arrives from the 
-	// network and it is forwarded to the presentation layer.
+private:
 	
-	void ForwardNetworkMessage( Address From, Address To, 
-															const SerialMessage::Payload & ThePayload )
-	{
-		Send( PresentationLayer::RemoteMessage( From, To, ThePayload ), 
-				  Network::GetAddress( Network::Layer::Presentation ) );
-	}
+	ExternalAddress Sender, Receiver;
+	Theron::SerialMessage::Payload ThePayload;
 	
-	// The constructor simply registers this message handler.
+public:
 	
-	SessionLayer( const std::string name = std::string() ) 
-	: Actor( name )
-	{
-		RegisterHandler( this, &SessionLayer::OutboundMessage );
-	}
+	// Getting and setting the payload
+	
+  virtual Theron::SerialMessage::Payload GetPayload( void ) const override
+  { return ThePayload; }
+  
+  virtual 
+  void SetPayload( const Theron::SerialMessage::Payload & Payload ) override
+  { ThePayload = Payload; }
+  
+  // Getting and setting the addresses
+  
+  virtual ExternalAddress GetSender   ( void ) const override
+  { return Sender; }
+  
+  virtual ExternalAddress GetRecipient( void ) const override
+  { return Receiver;	}
+  
+  virtual void SetSender   ( const ExternalAddress & From ) override
+  { Sender = From; }
+  
+  virtual void SetRecipient( const ExternalAddress & To   ) override
+  { Receiver = To; };
+
+  // The message must provide a way to convert an external address to an 
+  // address and in this case it is simple since the external address is
+  // a string
+
+  virtual Theron::Address 
+  ActorAddress( const ExternalAddress & ExternalActor ) const override
+  { 
+    return Theron::Address( ExternalActor );
+  }
+
+  // The constructor simply initialises the fields in the same order as the 
+  // initialisation operator of the link message
+  
+  OutsideMessage( const Theron::SerialMessage::Payload & GivenPayload, 
+									const ExternalAddress & From, const ExternalAddress & To )
+	: Theron::LinkMessage< ExternalAddress >(),
+	  Sender( From ), Receiver( To ), ThePayload( GivenPayload )
+	{	}
+
+	virtual ~OutsideMessage( void )
+	{ }
 };
-	
-}
 
 /*=============================================================================
 
- Network endpoint initialiser
+ Network endpoint 
 
 =============================================================================*/
 //
 // The network endpoint encapsulates the three communication layers of every 
-// node: The link layer, the session layer, and the presentation layer. A dummy
-// link layer is defined for this test as there is no real physical transmission
-// being done
+// node: The Network layer, the session layer, and the presentation layer. A 
+// dummy network layer is defined for this test as there is no real physical 
+// transmission being done
 
-class DummyLinkLayer
+class DummyNetworkLayer
 : virtual public Theron::Actor, 
   virtual public Theron::StandardFallbackHandler,
-  public Theron::NetworkLayer< Theron::LinkMessage< std::string > >
-{
-	
-	// In order for this to be instantiated it must provide some virtual functions
-	// that do nothing 
-	
+  public Theron::NetworkLayer< OutsideMessage >
+{	
 protected:
+
+	// Since the external address of an actor is simply a string, it can be 
+	// set to the string representation of the actor ID, which is readily 
+	// returned. 
 	
 	virtual void ResolveAddress( const ResolutionRequest & TheRequest, 
 														   const Address TheSessionLayer ) override
-  { }
+  {
+		Send( ResolutionResponse( TheRequest.NewActor.AsString(), 
+															TheRequest.NewActor ), TheSessionLayer );
+	}
+  
+  // The request for removing an actor will have no effect as there are no 
+  // remote communication partners to inform about this event and no local 
+  // actions to implement.
   
   virtual void ActorRemoval( const RemoveActor & TheCommand, 
 														 const Address TheSessionLayer ) override
   { }
   
   // The outbound message should take an external message as argument, and 
-  // the external message type is the template argument for the network layer
+  // the external message type is the template argument for the network layer.
+  // In this simple test the content is simply printed.
   
-  virtual void OutboundMessage( 
-						   const Theron::LinkMessage< std::string > & TheMessage, 
-							 const Address From ) override
-	{ }
+  virtual void OutboundMessage( const OutsideMessage & TheMessage, 
+																const Address From ) override
+	{
+		Theron::ConsolePrint LogMessage;
+		
+		LogMessage << "[ OUTBOUND: ] \"" << TheMessage.GetPayload() 
+							 << "\" From: " << TheMessage.GetSender() << std::endl;
+	}
   
 public:
+
+	// A remote message is generated when a serial payload arrives from the 
+	// network and it is forwarded to the presentation layer.
 	
+	void ForwardNetworkMessage( const Address & From, const Address & To, 
+											        const Theron::SerialMessage::Payload & 
+											        ThePayload )
+	{
+		Send( OutsideMessage( ThePayload, From.AsString(), To.AsString() ), 
+				  Theron::Network::GetAddress( Theron::Network::Layer::Session ) );
+	}
+
 	// The constructor ensures that the base classes are correctly constructed
 	// using default arguments
 	
-	DummyLinkLayer( void )
-	: Actor(), StandardFallbackHandler(),
-	  Theron::NetworkLayer< Theron::LinkMessage< std::string > >()
+	DummyNetworkLayer( void )
+	: Actor( "NetworkLayerServer" ), 
+	  StandardFallbackHandler( GetAddress().AsString() ),
+	  Theron::NetworkLayer< OutsideMessage >( GetAddress().AsString() )
 	{ }
 	
 	// The destructor should be virtual because the base classes are virtual 
 	// and because the class has virtual functions.
 	
-	virtual ~DummyLinkLayer( void )
+	virtual ~DummyNetworkLayer( void )
 	{ }
 };
 
@@ -157,13 +196,62 @@ public:
 // and then the function to bind the classes. The last function will be empty 
 // if there is no particular binding actions to do.
 // 
-// This is defined as a class derived from the endpoint class
+// This is defined as a class derived from the network class.
 
-class TestNode 
+class SerialisationTest 
 : virtual public Theron::Actor,
-  Theron::NetworkEndPoint
+  public Theron::Network
 {
+protected:
 	
+	// There are three methods to create the layer servers. The standard session
+	// and network layers can readily be reused for this test network.
+	
+	virtual void CreateNetworkLayer( void ) override
+	{
+		CreateServer< Layer::Network, DummyNetworkLayer >();
+	}
+	
+	virtual void CreateSessionLayer( void ) override 
+	{
+	  CreateServer< Layer::Session, Theron::SessionLayer< OutsideMessage > >();
+	}
+	
+	virtual void CreatePresentationLayer( void ) override
+	{
+		CreateServer< Layer::Presentation, Theron::PresentationLayer >();
+	}
+	
+	// Then there is a handler for a message to tell the network to shut down 
+	// when all other actors are done with their work. Here it just prints a 
+	// message.
+	
+	virtual void StartShutDown( const Network::ShutDownMessage & TheMessage, 
+													    const Address Sender ) override
+	{
+		Theron::ConsolePrint LogMessage;
+		LogMessage << "Shut down message received... " << std::endl;
+	}
+
+	// The constructor needs to take the location of this node and pass it on 
+	// as the domain to the generic base class.
+	
+	SerialisationTest( const std::string & Name, const std::string & Location )
+	: Actor( Name ), Network( Name, Location )
+	{	}
+	
+	// The default and copy constructors are explicitly deleted
+	
+	SerialisationTest( void ) = delete;
+  SerialisationTest( const SerialisationTest & Other ) = delete;
+
+  // The destructor is public and virtual to allow the base class to be 
+  // correctly destroyed.
+
+public:
+	
+	virtual ~SerialisationTest( void )
+	{ }
 };
 
 /*=============================================================================
@@ -261,7 +349,8 @@ private:
 	{
 	protected:
 		
-		virtual std::string Serialize( void ) const
+		virtual Theron::SerialMessage::Payload 
+		Serialize( void ) const override
 		{
 			return std::string("AskGuru");
 		}
@@ -269,7 +358,8 @@ private:
 		// De-serialising means just to check if the payload equals the expected
 		// class type.
 		
-		virtual bool Deserialize( const Theron::SerialMessage::Payload & Payload )
+		virtual bool 
+		Deserialize( const Theron::SerialMessage::Payload & Payload ) override
 		{
 			std::string Command( Payload );
 			boost::to_upper( Command );
@@ -309,7 +399,8 @@ private:
 		
 	protected:
 		
-		virtual std::string Serialize( void ) const
+		virtual Theron::SerialMessage::Payload 
+		Serialize( void ) const override
 		{
 			std::ostringstream Message;
 			
@@ -323,7 +414,7 @@ private:
 		// matching.
 		
 		virtual bool Deserialize( 
-						const Theron::SerialMessage::Payload & Payload )
+						const Theron::SerialMessage::Payload & Payload ) override
 		{				
 			std::istringstream Message( Payload );
 			std::string 			 Command;
@@ -384,7 +475,7 @@ private:
 	
 		// Writing the message as a string is trivial
 		
-		virtual std::string Serialize( void ) const
+		virtual Theron::SerialMessage::Payload Serialize( void ) const override
 		{
 			return std::string("WordsOfWisdom ") + *this;
 		}
@@ -393,7 +484,8 @@ private:
 		// message received is really a Words of Wisdom message, and then set the 
 		// content string
 		
-		virtual bool Deserialize( const Theron::SerialMessage::Payload & Payload )
+		virtual bool 
+		Deserialize( const Theron::SerialMessage::Payload & Payload ) override
 		{
 			std::istringstream Message( Payload );
 			std::string 		   Command;
@@ -451,7 +543,7 @@ private:
 		// the length of the vector since the values are added as long as there 
 		// are more values to read.
 		
-		virtual std::string Serialize( void ) const
+		virtual Theron::SerialMessage::Payload Serialize( void ) const override
 		{
 			std::ostringstream Message;
 			
@@ -467,7 +559,8 @@ private:
 		// to verify the type of message and then read the values as long as there
 		// are values available.
 		
-		virtual bool Deserialize( const Theron::SerialMessage::Payload & Payload )
+		virtual bool 
+		Deserialize( const Theron::SerialMessage::Payload & Payload ) override
 		{
 			std::istringstream Message( Payload );
 			std::string   	   Command;
@@ -599,7 +692,6 @@ public:
 		Send( RollDice( NumberOfRolls ), Casino );
 	}
 	
-	
   // ---------------------------------------------------------------------------
 	// Constructor
 	// ---------------------------------------------------------------------------
@@ -650,15 +742,18 @@ std::mutex Worker::SixDice::GeneratorAccess;
 
 int main(int argc, char **argv) 
 {
-	Theron::ConsolePrintServer           TheConsole( &std::cout, 
-																									 "ConsolePrintServer");
-	Theron::SessionLayer< std::string >  SessionServer( "SessionServer" );
-	Theron::PresentationLayer            ThePresentationLayer;
+	// Applications supporting communication must declare a network endpoint to
+	// host the communication layer servers. The template argument to the network
+	// endpoint is a technology dependent class derived from the Network. 
 	
-	// Binding the sessions server to the presentation layer server
+	Theron::NetworkEndPoint< SerialisationTest > 
+		TheEndPoint( "EndPoint", "localhost" );
 	
-	ThePresentationLayer.SetSessionLayerAddress( SessionServer.GetAddress() );
-	
+	// The Console Print Server ensures that the output from the actors is being 
+	// serialised and arrives in order on the console screen.
+		
+	Theron::ConsolePrintServer TheConsole( &std::cout,"CoutServer" );
+
 	// In this toy example two workers are defined
 	
 	Worker FirstWorker(  "First_Worker"  ), 
@@ -671,7 +766,7 @@ int main(int argc, char **argv)
 	
 	FirstWorker.RequestWisdom ( SecondWorker.GetAddress() );
 	SecondWorker.RequestWisdom( FirstWorker.GetAddress()  );
-	
+
 	FirstWorker.RequestFortune ( SecondWorker.GetAddress(), 
 															 FirstWorker.GetAddress().AsString().length() );
 	SecondWorker.RequestFortune( FirstWorker.GetAddress(), 
@@ -683,19 +778,23 @@ int main(int argc, char **argv)
 	// de-serialisation, and respond with a message that will reach the first 
 	// worker as a binary message since the presentation layer does not need to 
 	// serialise the given message since the first worker's address is know as 
-	// a local actor.
+	// a local actor. First a pointer to the session server must be obtained 
+	// from the endpoint. 
 	
-	SessionServer.ForwardNetworkMessage( FirstWorker.GetAddress(), 
-																			 SecondWorker.GetAddress(), 
-																			 "AskGuru" );
+	auto TheNetwork = 	TheEndPoint.Pointer< DummyNetworkLayer >
+											( Theron::Network::Layer::Network );
 	
-	SessionServer.ForwardNetworkMessage( FirstWorker.GetAddress(), 
-																			 SecondWorker.GetAddress(), 
-																			 "RollDice 5" );
+	TheNetwork->ForwardNetworkMessage( FirstWorker.GetAddress(), 
+																     SecondWorker.GetAddress(), 
+																     "AskGuru" );
+	
+	TheNetwork->ForwardNetworkMessage( FirstWorker.GetAddress(), 
+																		 SecondWorker.GetAddress(), 
+																		 "RollDice 5" );
 
-	SessionServer.ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
-																			 FirstWorker.GetAddress(), 
-																			 "Faces 1 2 3 4 5 6 " );
+	TheNetwork->ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
+																		 FirstWorker.GetAddress(), 
+																		 "Faces 1 2 3 4 5 6 " );
 	
 	// That was a test of the de-serialisation made at the worker actor
 	// showing that the binary messages were correctly constructed from the 
@@ -708,30 +807,36 @@ int main(int argc, char **argv)
 	// This time the request for the words of wisdom goes to the first worker 
 	// actor and  the request to roll the dice goes to the second worker actor.
 	
-	SessionServer.ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
-																			 FirstWorker.GetAddress(), 
-																			 "AskGuru" );
+	TheNetwork->ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
+																		 FirstWorker.GetAddress(), 
+																		 "AskGuru" );
 	
-	SessionServer.ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
-																			 SecondWorker.GetAddress(), 
-																			 "RollDice 8" );
+	TheNetwork->ForwardNetworkMessage( Theron::Address("Remote_Actor"), 
+																		 SecondWorker.GetAddress(), 
+																		 "RollDice 8" );
 
 	// Then it is just to wait for all messages to be handled as the actor system 
 	// can terminate when there are no more pending messages. This is necessary to 
 	// ensure that main does not terminate and end the process and kills all 
 	// actors even if some actors are not done with their message processing.	
-	//
+	// 
 	// Beware! This technique only works on actor systems on a single network
 	// endpoint. If there are remote actors on other endpoints they can still 
 	// generate messages for actors on this endpoint, and no pending messages on 
 	// this endpoint is therefore no guarantee that the actor sub-system on this 
 	// endpoint can be closed. In distributed settings it is necessary to 
 	// implement an application level protocol between the endpoints to ensure 
-	// that all actors on all endpoints have finished processing.
+	// that all actors on all endpoints have finished processing. This is why 
+	// the technology dependent network class (here Serialisation Test) has 
+	// to provide a shut down message handler.
 	
-	Theron::Actor::WaitForGlobalTermination();
-	
-	// Everything should be OK, and so it is just to exit happily.
+	 Theron::Actor::WaitForGlobalTermination();
+	 
+	// Everything should be OK, and so it is just to exit happily after a brief 
+  // wait because it could be that an actor has served all messages, but other
+  // IO operations has not been completed.
+	 
+  std::this_thread::sleep_for( std::chrono::seconds(1) );
 	
 	return EXIT_SUCCESS;
 }

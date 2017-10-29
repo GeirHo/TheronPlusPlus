@@ -58,7 +58,19 @@ public:
   
   virtual void SetSender   ( const ExternalAddress & From ) = 0;
   virtual void SetRecipient( const ExternalAddress & To   ) = 0;
-  
+
+  // The link message provides a function to convert an external address to 
+  // an actor address. The issue is that when the session layer receives a 
+  // message from a sender that has not been registered, it must forward this
+  // to the local actor with the actor address of the remote sender as the 
+  // sender's address. This conversion is actually dependent on the external 
+  // address format. It could have been done by the external address, but that 
+  // would force that address to be a class, and so an implementation is 
+  // enforced here since the link message will always be a class.
+
+  virtual 
+  Address ActorAddress( const ExternalAddress & ExternalActor ) const = 0;
+
   // Finally there is an operator to take care of the initialisation in one 
   // go. It is by default defined by the other interface functions. It takes
   // the parameters in the order of the Theron Framework's Send function 

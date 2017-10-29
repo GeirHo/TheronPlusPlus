@@ -552,6 +552,8 @@ void Theron::Actor::DispatchMessages( void )
 				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
 										 << "No message handler for the message " 
 										 << typeid( RawMessagePointer ).name() 
+										 << " from " << RawMessagePointer.From.AsString()
+										 << " to " << RawMessagePointer.To.AsString()
 										 << " and no default message handler!";
 										 
 			  throw std::logic_error( ErrorMessage.str() );
