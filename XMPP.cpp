@@ -364,16 +364,12 @@ void Link::PresenceNotification( JabberID ClientID,
 								    PresenceReceived->getFrom() );
       break;
     case Swift::Presence::Available :
-      // Every endpoint in the network has a resource called "endpoint" 
-      // responsible for the first time connection to peers. This should not 
-      // be registered as an addressable actor at the session layer since 
-      // this actor address is not unique, and shall never be used by any 
-      // local actors.
+      // The remote actor is now available and it should be registered with 
+			// the session layer as an available actor.
       
-      if ( PresenceReceived->getFrom().getResource() != "endpoint" )
-			  Send( ResolutionResponse( PresenceReceived->getFrom(), 
+		  Send( ResolutionResponse( PresenceReceived->getFrom(), 
 						 						 Address( PresenceReceived->getFrom().getResource() ) ), 
-							Network::GetAddress( Network::Layer::Session ) );
+						Network::GetAddress( Network::Layer::Session ) );
       
       // Then the new actor should also be known to the client, and if  
       // messages have been buffered waiting for this actor to become active 
@@ -591,7 +587,6 @@ void Link::ResolveAddress( const ResolutionRequest & TheRequest,
 					  Send( OutsideMessage( XMPPMessage->getFrom(), XMPPMessage->getTo(),
 					                        XMPPMessage->getBody().value(), 
 					                        XMPPMessage->getSubject() ),
-									Address( XMPPMessage->getFrom().getResource() ),
 									Network::GetAddress( Network::Layer::Session )
 								);
 	      });

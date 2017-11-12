@@ -165,67 +165,45 @@ class OutsideMessage : public Theron::LinkMessage< JabberID >
 {
 private:
   
-  // The data fields store the "to" and "from" address and the payload. The 
-  // subject field can be used if the message needs one or is a command 
+  // The subject field can be used if the message needs one or is a command 
   // between low XMPP layers.
   
-  JabberID               SenderAddress, ReceiverAddress;
-  SerialMessage::Payload Payload;
-	std::string            Subject;
+	std::string Subject;
   
 public:
   
-  // There is a default constructor that just initialises the message.
+  // The standard constructor takes all the necessary fields and initialises 
+	// the base class link message accordingly.
   
-  OutsideMessage( void )
-  : SenderAddress(), ReceiverAddress(), Payload(), Subject()
+  inline OutsideMessage( const JabberID & From, const JabberID & To ,
+											   const std::string & ThePayload, 
+											   const std::string TheSubject = std::string()  )
+  : Theron::LinkMessage< JabberID >( From, To, ThePayload ), 
+    Subject( TheSubject )
   { };
   
-  // Then there is a message dealing with all the required information at 
-  // once. 
-  
-  OutsideMessage( const JabberID & From, const JabberID & To ,
-								  const std::string & ThePayload, 
-								  const std::string TheSubject = std::string()  )
-  : SenderAddress( From ), ReceiverAddress( To ), 
-    Payload( ThePayload ), Subject( TheSubject )
-  { };
-  
+	// The message can also be constructed from a basic link message, with the 
+	// subject optionally given.
+	
+	inline OutsideMessage( const Theron::LinkMessage< JabberID > & BasicMessage, 
+												 const std::string TheSubject = std::string() )
+	: OutsideMessage( BasicMessage.GetSender(), BasicMessage.GetRecipient(), 
+										BasicMessage.GetPayload(), TheSubject )
+	{ }
+	
   // A copy constructor is necessary to queue messages 
   
-  OutsideMessage( const OutsideMessage & TheMessage )
-  : SenderAddress  ( TheMessage.SenderAddress ),
-    ReceiverAddress( TheMessage.ReceiverAddress ),
-    Payload	   		 ( TheMessage.Payload ),
-    Subject        ( TheMessage.Subject )
+  inline OutsideMessage( const OutsideMessage & TheMessage )
+  : Theron::LinkMessage< JabberID >( TheMessage ),
+    Subject( TheMessage.Subject )
   { };
-  
-  // The virtual interface functions for setting the various fields
-  
-  virtual void SetPayload( const SerialMessage::Payload & ThePayload ) override
-  { Payload = ThePayload; };
-  
-  virtual void SetSender( const JabberID & From ) override
-  { SenderAddress = From; };
-  
-  virtual void SetRecipient( const JabberID & To   ) override
-  { ReceiverAddress = To; };
-  
-  virtual void SetSubject( const std::string & TheSubject )
+
+	// The subject can be defined on an already constructed message if needed, 
+	// and it can be read from the stored string.
+	
+  void SetSubject( const std::string & TheSubject )
   { Subject = TheSubject; }
 
-  // There are similar functions to obtain or set the sender and the receiver of 
-  // this message.
-      
-  virtual SerialMessage::Payload GetPayload( void ) const override
-  { return Payload; };
-  
-  virtual JabberID GetRecipient( void ) const override
-  { return ReceiverAddress; };
-  
-  virtual JabberID GetSender( void ) const override
-  { return SenderAddress; };
-  
   virtual std::string GetSubject( void ) const
   { return Subject; }
   

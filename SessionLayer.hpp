@@ -496,8 +496,10 @@ private:
 			
 			while ( Message != Range.second )
 		  {
-				Message->second.SetRecipient( AddressRecord.GlobalAddress );
-				Send( Message->second, TheNetworkLayer );
+				Send( ExternalMessage( Message->second.GetSender(), 
+															 AddressRecord.GlobalAddress, 
+															 Message->second.GetPayload() ), 
+							TheNetworkLayer );
 				MessageCache.erase( Message++ );
 			}
 		}
@@ -668,7 +670,10 @@ private:
 		// derived actors. In other words, the actor is not able to receive 
 		// serialised messages, and no message should be routed back to it. 
 		// Yet, it is probably correct to send it, but with an empty return 
-		// address.
+		// address. Hence, if the lookup fails it is assumed that the sender 
+	  // address is initialised to something that has a default value by the 
+	  // default constructor of the External message, and the sender field is 
+	  // not set.
 
 	  ExternalAddress SenderAddress;
 		
@@ -676,11 +681,13 @@ private:
 			SenderAddress = TheSender->second;
 			
 		// Then the datagram can be sent or queued depending on whether the 
-		// external address of the receiver is already known or not.
+		// external address of the receiver is already known or not. If it is 
+		// known then message can just be forwarded to the Network Layer server 
+		// for handling.
 		
 		if ( TheReceiver != KnownActors.right.end() )
-			Send( ExternalMessage( TheMessage.GetPayload(), 
-														 SenderAddress, TheReceiver->second ),
+			Send( ExternalMessage( SenderAddress, TheReceiver->second, 
+														 TheMessage.GetPayload() ),	
 						Network::GetAddress( Network::Layer::Network ) );
 		else
 		{
@@ -694,12 +701,13 @@ private:
 				      Network::GetAddress( Network::Layer::Network	)	);
 			
 			// Then the message is cached for delayed sending once the response comes
-			// back from the network layer.
+			// back from the network layer. In this case the receiver field is left 
+		  // uninitialised until the resolution response comes back from the 
+		  // Network Layer server.
 			
 			MessageCache.emplace( TheMessage.GetReceiver(), 
-														ExternalMessage( TheMessage.GetPayload(), 
-																						 SenderAddress, 
-																						 ExternalAddress() ) );
+														ExternalMessage( SenderAddress, ExternalAddress(), 
+																						 TheMessage.GetPayload() ) );
 		}
 	}
 
