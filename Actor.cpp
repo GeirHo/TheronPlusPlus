@@ -1,7 +1,7 @@
 /*=============================================================================
 Actor
 
-Author and Copyright: Geir Horn, 2017
+Author and Copyright: Geir Horn, 2017-2018
 License: LGPL 3.0
 =============================================================================*/
 
@@ -10,6 +10,13 @@ License: LGPL 3.0
 
 #include "Actor.hpp"							// The Actor definition
 #include "PresentationLayer.hpp"  // The Presentation Layer definition
+
+// In the case that this is compiled with a GNU compiler the actor's postman 
+// thread will be named with the actor's name.
+
+#ifdef _GNU_SOURCE
+	#include <pthread.h>
+#endif
 
 /*=============================================================================
 
@@ -635,9 +642,56 @@ void Theron::Actor::Identification::WaitForGlobalTermination( void )
 
 /*=============================================================================
 
- Destructor
+ Constructor and destructor
 
 =============================================================================*/
+
+// The constructor sets stores the name and starts the postman thread.
+
+Theron::Actor::Actor( const std::string & ActorName )
+: ActorID( Identification::Create( ActorName, this ) ), 
+  Mailbox(), MessageHandlers(), DefaultHandler(), Postman()
+{
+	// The flag indicating if the actor is running is set to true, and currently
+	// there is no message available.
+	
+	ActorRunning = true;
+	
+	// The default error handling policy is to throw on unhanded messages
+	
+	MessageErrorPolicy = MessageError::Throw;
+	
+	// Then the thread can be started. It will wait until it is signalled from 
+	// the Enqueue message function. 
+	
+	Postman = std::thread( &Actor::DispatchMessages, this );	
+	
+	// The postman thread should be named with the name of the actor to 
+	// facilitate debugging. However, there is no standard way of doing this and 
+	// the GNU extensions are used if they are available. Note that the name 
+	// must be shorter than 16 characters. The default Actor naming convention 
+	// will be used if this condition cannot be met by the given actor name. 
+	// Some ideas for how to implement the same for Windows can be found at
+	// https://stackoverflow.com/questions/10121560/stdthread-naming-your-thread
+	
+	#ifdef _GNU_SOURCE
+		if ( ActorID.AsString().size() < 16 )
+			pthread_setname_np( Postman.native_handle(), 
+													ActorID.AsString().data() );
+		else
+		{
+			std::ostringstream ThreadName;
+			
+			ThreadName << "Actor" << ActorID.AsInteger();
+			
+			pthread_setname_np( Postman.native_handle(), ThreadName.str().data() );
+		}
+	#endif
+}
+
+// The destructor wait for the mailbox to be drained and then set the flag 
+// for the postman to terminate. It is necessary to ensure that the postman 
+// terminates correctly and not from a wait state.
 
 Theron::Actor::~Actor()
 {

@@ -57,7 +57,7 @@ DEPENDENCY_FLAGS = -MMD -MP
 # Options 
 
 GENERAL_OPTIONS = -c -Wall -std=c++1z -ggdb -D_DEBUG
-INCLUDE_DIRECTORIES = -I. -I/usr/include -I $(THERON) $(ZMQ_INCLUDE)
+INCLUDE_DIRECTORIES = -I. -I/usr/include -I$(THERON) -I$(ZMQ_INCLUDE)
 
 # Putting it together as the actual options given to the compiler and the 
 # linker. Note that pthread is needed on Linux systems since it seems to 
@@ -109,6 +109,9 @@ clean:
 
 HelloWorld : HelloWorld.o $(THERON_OBJECTS)
 	$(CC) HelloWorld.o $(ALL_MODULES) $(LDFLAGS) -o HelloWorld
+
+ScheduledHelloWorld: Scheduled.o ScheduledHelloWorld.o $(THERON_OBJECTS)
+	$(CC) Scheduled.o ScheduledHelloWorld.o $(ALL_MODULES) $(LDFLAGS) -lgmpxx -lgmp -o ScheduledHelloWorld
 
 Serialisation : Serialisation.o $(THERON_OBJECTS)
 	$(CC) Serialisation.o $(ALL_MODULES) $(LDFLAGS) -o Serialisation

@@ -23,7 +23,7 @@ measure, and if the execution environment cannot cope with this policy a
 thread pool and a scheduling policy can be implemented, although it currently 
 contradicts the second design principle.
 
-Author and Copyright: Geir Horn, 2017
+Author and Copyright: Geir Horn, 2017-2018
 License: LGPL 3.0
 =============================================================================*/
 
@@ -1405,24 +1405,7 @@ inline static void WaitForGlobalTermination( void )
 // it will be assigned by default as "ActorNN" where NN is the numerical ID of 
 // the actor.
 
-inline Actor( const std::string & ActorName = std::string() )
-: ActorID( Identification::Create( ActorName, this ) ), 
-  Mailbox(), MessageHandlers(), DefaultHandler(), Postman()
-{
-	// The flag indicating if the actor is running is set to true, and currently
-	// there is no message available.
-	
-	ActorRunning = true;
-	
-	// The default error handling policy is to throw on unhanded messages
-	
-	MessageErrorPolicy = MessageError::Throw;
-	
-	// Then the thread can be started. It will wait until it is signalled from 
-	// the Enqueue message function. 
-	
-	Postman = std::thread( &Actor::DispatchMessages, this );	
-}
+Actor( const std::string & ActorName = std::string() );
 
 // The destructor needs to consider the situation where the actor is destroyed 
 // while there is an active wait for more messages. It must also wait until 
