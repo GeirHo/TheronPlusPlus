@@ -35,7 +35,7 @@ License: LGPL 3.0
 #include <string>					  // To name the actor
 
 #include <iostream>
-#include <Theron/Theron.h>	// Theron Actor framework
+#include "Actor.hpp"			  // Theron++ Actor framework
 
 namespace Theron
 {
@@ -49,42 +49,35 @@ private:
 	// explanation.
 	
 	void FallbackHandler( const void *const Data, 
-												const Theron::uint32_t Size, 
-												const Theron::Address From )
+												const uint32_t Size, 
+												const Address From )
 	{
 		std::ostringstream ErrorMessage;
 		const char * ByteString = reinterpret_cast< const char * >( Data );
 		
-		ErrorMessage << "Unhandled message "
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+								 << "*** ERROR  *** Unmanaged message "
 								 << " to " << GetAddress().AsString()
 								 << " from " << From.AsString() << " with data ";
 								 
-		for ( Theron::uint32_t i=0; i < Size; i++ )
+		for ( unsigned int i=0; i < Size; i++ )
 			ErrorMessage << ByteString[i] << " ";
 		
-		//throw std::runtime_error( ErrorMessage.str() );
-		std::cout << " *** ERROR  *** " << ErrorMessage.str() << std::endl;
+		throw std::runtime_error( ErrorMessage.str() );
 	}
 	
 public:
 	
-	// The public constructor takes a reference to the framework and register
-	// the standard handler for this actor. It takes the actor name as a string,
-	// which is default empty, for which it leaves the assignment of the actor 
-	// name to the Theron framework.
-	//
-	// The same handler is registered also as the actor's fall back handler
+	// The public constructor register the standard handler for this actor. 
+	// It takes the actor name as a string, which is default empty leaving the 
+	// assignment of the actor name to the Theron framework.
 	
-	StandardFallbackHandler( Framework & TheFramework, 
-													 const std::string & ActorName = std::string() )
-	: Actor( TheFramework, ActorName.empty() ? nullptr : ActorName.data() )
+	StandardFallbackHandler( const std::string & ActorName = std::string() )
+	: Actor( ActorName )
 	{
 		SetDefaultHandler( this, &StandardFallbackHandler::FallbackHandler );
-		
-		TheFramework.SetFallbackHandler( this, 
-																		 &StandardFallbackHandler::FallbackHandler);
 	}
-	
+		
 }; 	// End class standard fall back handler
 } 	// End name space Theron
 #endif

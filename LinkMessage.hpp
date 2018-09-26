@@ -14,11 +14,9 @@
   can be a string for IP adresses, but it can be anything that the link supports
   like an integer.
   
-  The link message is formatted by the ProtocolEngine and sent by the 
-  LinkServer. Incoming messages are received by the LinkServer and forwarded 
-  as a link message object to the ProtocolEngine. 
-  
-  TO DO: Interface based on ProtocolEngine::InboundMessage
+  The link message is formatted by the Session Layer and sent by the 
+  Network Layer. Incoming messages are received by the Network Layer and 
+  forwarded as a link message object to the Session Layer. 
   
   Author: Geir Horn, University of Oslo, 2015
   Contact: Geir.Horn [at] mn.uio.no
@@ -28,8 +26,10 @@
 #ifndef THERON_LINK_MESSAGE
 #define THERON_LINK_MESSAGE
 
-#include <string>
-#include <Theron/Theron.h>
+#include <string>                // Standard strings
+
+#include "Actor.hpp"             // The Theron++ actor framework
+#include "SerialMessage.hpp"     // Messages supporting serialisation
 
 namespace Theron
 {
@@ -37,42 +37,69 @@ namespace Theron
 template < class ExternalAddress >
 class LinkMessage
 {
+protected:
+	
+	// The message is only valid if it has a sender, a receiver and a payload 
+	// set. Hence these are parameters to the constructor, and read only fields 
+	// for derived messages. 
+	
+	const ExternalAddress        SenderAddress, ReceiverAddress;
+	const SerialMessage::Payload Payload;
+	
 public:
   
-  typedef ExternalAddress AddressType;
+  using AddressType = ExternalAddress;
 
-  // Default dummy constructor   
+  // One should be able to obtain the payload string of the message.
   
-  LinkMessage( void )
-  { };
-  
-  // One should be able to obtain or set the payload string on the message.
-  
-  virtual std::string GetPayload( void ) const = 0;
-  virtual void SetPayload( const std::string & Payload ) = 0;
+  inline SerialMessage::Payload GetPayload( void ) const
+  { return Payload; }
   
   // There are similar functions to obtain or set the sender and the receiver of 
   // this message.
   
-  virtual ExternalAddress GetSender   ( void ) const = 0;
-  virtual ExternalAddress GetRecipient( void ) const = 0;
+  inline ExternalAddress GetSender   ( void ) const
+  { return SenderAddress; }
   
-  virtual void SetSender   ( const ExternalAddress & From ) = 0;
-  virtual void SetRecipient( const ExternalAddress & To   ) = 0;
+  inline ExternalAddress GetRecipient( void ) const
+  { return ReceiverAddress; }
   
-  // Finally there is an operator to take care of the initialisation in one 
-  // go. It is by default defined by the other interface functions. It takes
-  // the parameters in the order of the Theron Framework's Send function 
-  // starting with the payload and then give the sender and receiver.
+  // The link message provides a function to convert an external address to 
+  // an actor address. The issue is that when the session layer receives a 
+  // message from a sender that has not been registered, it must forward this
+  // to the local actor with the actor address of the remote sender as the 
+  // sender's address. This conversion is actually dependent on the external 
+  // address format. It could have been done by the external address, but that 
+  // would force that address to be a class, and so an implementation is 
+  // enforced here since the link message will always be a class.
+
+  virtual 
+  Address ActorAddress( const ExternalAddress & ExternalActor ) const = 0;
+
+  // The standard constructor takes the Sender address, the Receiver address 
+	// and the payload and initialises the various fields accordingly.
+	
+	LinkMessage( const ExternalAddress & From, const ExternalAddress & To, 
+							 const SerialMessage::Payload ThePayload )
+	: SenderAddress( From ), ReceiverAddress( To ), Payload( ThePayload )
+	{ }
+	
+	// A message can also be copied from another message, in which case it 
+	// simply delegates the initialisation to the standard constructor.
+	
+	LinkMessage( const LinkMessage & Other )
+	: LinkMessage( Other.SenderAddress, Other.ReceiverAddress, Other.Payload )
+	{ }
+	
+	// The default constructor is explicitly deleted as it should not be used.
   
-  virtual void operator() ( const std::string     & ThePayload, 
-			    const ExternalAddress & From,
-			    const ExternalAddress & To )
-  {
-    SetPayload  ( ThePayload );
-    SetSender   ( From );
-    SetRecipient( To );
-  };
+  LinkMessage( void ) = delete;
+	
+	// The destructor is virtual to support correct deallocation of derived 
+	// classes, but it does not do anything in particular.
+	
+	virtual ~LinkMessage( void )
+	{ }
 };
     
 };			// namespace Theron

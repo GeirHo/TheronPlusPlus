@@ -37,7 +37,7 @@ Revisions:
 #include <type_traits>											// For compile time checks
 #include <stdexcept>												// Standard exceptions
 
-#include <Theron/Theron.h>									// The Theron framework
+#include "Actor.hpp"												// The Theron++ framework
 #include "StandardFallbackHandler.hpp"			// Debugging and error handling
 
 #undef max
@@ -60,51 +60,22 @@ namespace Theron
 class ConsolePrintServer : public virtual Actor,
 													 public virtual StandardFallbackHandler
 {
-  // Other actors in the system will need to know the address of the print 
-  // server event without knowing where the print server is located. One could 
-  // imagine to have a global Theron::Address defined for this purpose. 
-  // Unfortunately, this is not possible since no Theron object can be defined 
-  // before the framework.
-  // 
-  // The solution is to store the symbolic name of the print server as a string, 
-  // and then generate the Theron::Address when needed. Since there address 
-  // function should be callable without a reference to the print server, the 
-  // function must be static. This implies that also the name of the print 
-  // server must be static.
-
-private:
-
-  static std::string ServerName;
-    
 public:
 
-  static Address GetAddress( void )
-  {
-    if ( ServerName.empty() )
-      return Address::Null();
-    else
-      return Address( ServerName.data() );
-  }  
-  
-  // In the same way, it is necessary to provide an execution framework for 
-  // the console print stream class so that it can be used also from places 
-  // where the Theron framework is not readily available. Again, the actual 
-  // framework cannot be stored a static variable, and a pointer is needed.
+  // The print object could have been an actor in its own right, but often it 
+  // is constructed for a single line of output, and it will never receive any
+  // messages. Hence the overhead of an actor is significant for no benefits.
+  // The important thing is that the output string is sent to the console print
+  // server since some actors may send messages directly with with no Print 
+  // object. For this there is a pointer to the print server, and this is used 
+  // by the print object to access the send function on the server itself, i.e.
+  // messages from print objects will appear as sent by the server to itself.
   
 private:
   
-  static Framework * ExecutionFramework;
+  static ConsolePrintServer * TheServer;
   
-  // Then it is a classical function to get this framework simply dereferencing 
-  // the pointer. I runtime error should occur if this is done before the 
-  // server has been initialised, i.e. when the pointer is null.
-
-  static Framework & GetFramework( void )
-  {
-    return *ExecutionFramework;
-  }
-  
-  // Since the access to this framework should be restricted to the console 
+  // Since the access to this pointer should be restricted to the console 
   // print stream it is declared as a friend.
   
   friend class ConsolePrint;
@@ -145,36 +116,58 @@ private:
 
   void PrintString ( const std::string & message, const Address sender )
   {
-      *OutputStream << message << std::endl;
+      *OutputStream << message;
 
       if ( TerminationPhase )
 	      Send( true, TerminationPhase->GetAddress() );
   };
+	
+	// Initialiser to avoid duplicating functionality in the constructor and the 
+	// compatibility constructor.
+	
+	inline void Initialise( void )
+	{
+		if ( TheServer != nullptr )
+ 		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "Only one Console Print Server can be used";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
+		
+    TheServer = this;
+    RegisterHandler(this, &ConsolePrintServer::PrintString );		
+	}
 
 public:
-      
+    
   // The constructor initialises the actor, and registers the 
   // server function. It takes an optional actor name, and if this is not 
   // given the framework will automatically generate a unique name. It is 
   // strongly recommended that a name is given for debugging purposes. Note
   // that in order to capture an automatically constructed actor address, the 
-  // global server name is initialised from the actor's own address.
+  // global server name is initialised from the actor's own address.	
+	
+  ConsolePrintServer ( std::ostream * Output = &std::cout,
+								       const std::string & TheName = std::string() )
+  : Actor( TheName ),
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    OutputStream( Output )
+  {
+		Initialise();
+  };
 
   ConsolePrintServer ( Theron::Framework & TheFramework, 
 								       std::ostream * Output = &std::cout,
 								       const std::string & TheName = std::string() )
   : Actor( TheFramework, ( TheName.empty() ? nullptr : TheName.data() ) ),
-    StandardFallbackHandler( TheFramework, Actor::GetAddress().AsString() ),
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
     OutputStream( Output )
-  {
-    if ( ServerName.empty() )
-	    ServerName = Actor::GetAddress().AsString();
-		else
-			throw std::logic_error( "Only one Console Print Server can be used" );
-		
-    ExecutionFramework = &TheFramework;
-    RegisterHandler(this, &ConsolePrintServer::PrintString );
-  };
+	{ 
+		Initialise();
+	}
 
   // If there are outstanding messages pending, the destructor must create 
   // the terminator receiver and wait for it to receive the information 
@@ -187,22 +180,18 @@ public:
 		while ( GetNumQueuedMessages() > 0 )
       TerminationPhase->Wait();
     
-    ExecutionFramework = nullptr;
-    ServerName.clear();
+    TheServer = nullptr;
   }
 };
 
 /*****************************************************************************
-The ConsolePrint ostream
+The Console Print ostream
 
 Each actor that wants to do output to the console may instantiate an 
 object of this stream and write to it as any normal stream. It will buffer
 all received input into the associated string and when the application calls
-either the "endl" operator, the "flush" method, or deconstructs the object,
+either the "endl" operator, the "flush" method, or de-constructs the object,
 the content of the string will be forwarded as a message to the print server.
-
-The stream is created by "ConsolePrint MySteamName( GetFramework() );" so that 
-it will run in the same framework as its owner actor.
 
 Essentially, most of this is standard functionality of the ostream, so the only
 thing we need to care about is to improve the flush function and to make sure
@@ -210,29 +199,24 @@ we send the stream if its length is larger than zero.
 
 ******************************************************************************/
 
-class ConsolePrint : public virtual std::ostringstream, 
-										 public virtual Actor,
-										 public virtual StandardFallbackHandler
+class ConsolePrint : public virtual std::ostringstream
 {
 private:
-
-    // We cache the address of the print server - note that it is assumed
-    // that there is only one - so that we avoid a possibly more expensive 
-    // lookup if the stream is used for multiple messages.
-
-    Theron::Address TheConsole;
-
+	
+	// The address of the print server is cached to make it faster to send the 
+	// string to the server.
+	
+	Address TheConsole;
+	
 public:
 
     // The constructor is just empty since the actual messaging is handled
     // by the flush function or the destructor below.
 
-    ConsolePrint (Theron::Framework & TheFramework 
-																				  = ConsolePrintServer::GetFramework() ) 
-    : std::ostringstream(), Theron::Actor( TheFramework ),
-      StandardFallbackHandler( TheFramework, Actor::GetAddress().AsString() )
+    ConsolePrint (void ) 
+    : std::ostringstream()
     { 	
-			TheConsole = ConsolePrintServer::GetAddress();
+			TheConsole = ConsolePrintServer::TheServer->GetAddress();
     };
 
     // The flush method sends the content of the stream to the print 
@@ -243,7 +227,7 @@ public:
     {
 			if ( str().length() > 0 )
 			{
-			  Send( std::string( str() ), TheConsole );
+			  ConsolePrintServer::TheServer->Send( std::string( str() ), TheConsole );
 
 			  // Clear the string
 
@@ -260,7 +244,7 @@ public:
     virtual ~ConsolePrint ( void )
     {
 			if ( str().length() > 0 )
-			  Send( std::string( str() ), TheConsole );
+			  ConsolePrintServer::TheServer->Send( std::string( str() ), TheConsole );
     };
 };
 

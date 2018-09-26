@@ -15,8 +15,8 @@
 #ifndef THERON_ADDRESS_HASH
 #define THERON_ADDRESS_HASH
 
-#include <functional>		// For the standard hash functions
-#include <Theron/Address.h>	// For Theron Address
+#include <functional>				// For the standard hash functions
+#include "Actor.hpp"				// For Theron++ Address
 
 namespace std {
   
