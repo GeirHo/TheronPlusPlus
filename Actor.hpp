@@ -567,6 +567,14 @@ inline static bool IsLocalActor( const Address & RequestedActorID )
 {
 	return RequestedActorID.IsLocalActor();
 }
+
+// In the same way one may look up an actor name as a string. This will then 
+// first make an address for that actor and then check if it is local.
+
+inline static bool IsLocalActor( const std::string & ActorName )
+{
+	return Address( ActorName ).IsLocalActor();
+}
 	
 // The Presentation layer address needed to support external communication can 
 // be set with the a static function defined in the Identification class, but 

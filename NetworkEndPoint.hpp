@@ -619,9 +619,9 @@ public:
 				std::ostringstream ErrorMessage;
 				
 				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-										 << "Network end point: Now layer server for the "
+										 << "Network end point: No server for the network layer "
 										 << TheLayer.second
-										 << " layer has been defined. Improper initialisation!";
+										 << " has been defined. Improper initialisation!";
 										 
 			  throw std::logic_error( ErrorMessage.str() );
 			}
