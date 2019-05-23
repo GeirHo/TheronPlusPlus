@@ -77,8 +77,8 @@
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
-#include "NetworkEndPoint.hpp"
-#include "SerialMessage.hpp"
+#include "Communication/NetworkEndpoint.hpp"
+#include "Communication/SerialMessage.hpp"
 
 // The Presentation Layer is defined to be a part of the Theron name space
 
@@ -89,6 +89,22 @@ class PresentationLayer : virtual public Actor,
 													virtual public StandardFallbackHandler
 {
 private:
+
+  // --------------------------------------------------------------------------
+  // Shut down management
+  // --------------------------------------------------------------------------
+  //
+	// When the system is shutting down, the de-serializing actors should be
+	// blocked from sending more messages to the remote actors. This is done by
+	// a shut down message from the session layer, that sets a flag that
+	// prevents further messages.
+
+	bool ForwardOutboundMessages;
+
+	// The handler for the shut down message simply sets this flag to false
+
+	void Stop( const Network::ShutDown & StopMessage, const Address Sender )
+	{	ForwardOutboundMessages = false; }
 
   // --------------------------------------------------------------------------
   // Remote message format
@@ -196,24 +212,15 @@ protected:
 
 		  // If the message conversion was successful, then this can be forwarded
 		  // to the local destination actor as if it was sent from the remote
-		  // sender.
+		  // sender. Otherwise, the message should be treated as a normal message
+		  // to this presentation layer actor.
 
 		  if ( InboundMessage )
 				Send( InboundMessage->TheMessage->GetPayload(),
 							InboundMessage->TheMessage->GetSender(),
 							InboundMessage->TheMessage->GetReceiver() );
 			else
-			{
-				std::ostringstream ErrorMessage;
-
-				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-										 << "Inbound message to the Presentation Layer from "
-										 << TheMessage->From.AsString() << " with receiver "
-										 << TheMessage->To.AsString()
-										 << " is not a Serial Message";
-
-				throw std::invalid_argument( ErrorMessage.str() );
-			}
+				Actor::EnqueueMessage( TheMessage );
 		}
 		else
 		{
@@ -225,21 +232,24 @@ protected:
 		  // A valid message will in this case be forwarded as a remote message
 		  // to the Session Layer server.
 
-			if ( OutboundMessage != nullptr )
-				Send( RemoteMessage( TheMessage->From, TheMessage->To,
-														 OutboundMessage->Serialize() ),
-							Network::GetAddress( Network::Layer::Session ) );
-			else
-			{
-				std::ostringstream ErrorMessage;
+			if ( ForwardOutboundMessages )
+		  {
+				if ( OutboundMessage != nullptr )
+					Send( RemoteMessage( TheMessage->From, TheMessage->To,
+															 OutboundMessage->Serialize() ),
+								Network::GetAddress( Network::Layer::Session ) );
+				else
+				{
+					std::ostringstream ErrorMessage;
 
-				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-										 << "Outbound message to the Presentation Layer from "
-										 << TheMessage->From.AsString() << " with receiver "
-										 << TheMessage->To.AsString()
-										 << " does not support serialisation";
+					ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+											 << "Outbound message to the Presentation Layer from "
+											 << TheMessage->From.AsString() << " with receiver "
+											 << TheMessage->To.AsString()
+											 << " does not support serialisation";
 
-				throw std::invalid_argument( ErrorMessage.str() );
+					throw std::invalid_argument( ErrorMessage.str() );
+				}
 			}
 		}
 
@@ -262,12 +272,14 @@ public:
   // Address does not check that the actor exists when it is constructed on
   // a string. The check is only done when the fist message is sent to this
   // address. Hence, as long as the default names are used for the actors,
-  // this no further initialisation is needed.
+  // then no further initialisation is needed.
 
-  PresentationLayer( const std::string ServerName = "PresentationLayer"  )
+  PresentationLayer( const std::string & ServerName = "PresentationLayer"  )
   : Actor( ServerName ),
-    StandardFallbackHandler( Actor::GetAddress().AsString() )
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+		ForwardOutboundMessages( true )
   {
+		RegisterHandler( this, &PresentationLayer::Stop );
 		Actor::SetPresentationLayerServer( this );
   }
 

@@ -4,3 +4,4 @@
 /.sync.ffs_db
 *.project
 *.directory
+*.a

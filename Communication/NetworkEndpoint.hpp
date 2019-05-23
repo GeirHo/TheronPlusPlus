@@ -36,12 +36,11 @@
 #include <chrono>			      // To wait if there are unhanded messages
 #include <algorithm>	      // To accumulate unhanded messages
 
-#include <iostream> 				//TEST
-
 #include "Actor.hpp"			 // The Theron++ actor framework
 #include "Utility/StandardFallbackHandler.hpp"
 
-namespace Theron {
+namespace Theron
+{
 
 // The base classes for the various layers are declared as known symbols
 
@@ -98,7 +97,8 @@ class PresentationLayer;
 // by the endpoint.
 
 class Network
-: virtual public Actor
+: virtual public Actor,
+  virtual public StandardFallbackHandler
 {
 public:
 
@@ -145,7 +145,7 @@ private:
 	// servers, and forces the use of the virtual functions.
 
 	template< class NetworkType, class Enable >
-	friend class NetworkEndPoint;
+	friend class NetworkEndpoint;
 
   // ---------------------------------------------------------------------------
   // Getting Network Endpoint Layers
@@ -285,39 +285,65 @@ protected:
 	{ }
 
 	// ---------------------------------------------------------------------------
-  // Domain
+  // Shut-down management
   // ---------------------------------------------------------------------------
-  //
-  // The location of this end point is stored for future reference by
-  // communication specific derived classes, if this is needed at the time of
-  // construction
-
-  const std::string Domain;
-
-	// ---------------------------------------------------------------------------
-  // Shut down management
-  // ---------------------------------------------------------------------------
-  //
-  // The network end point must provide a handler for a shut down message
+	//
+	// With independent actors distributed across multiple nodes, it is impossible
+	// to say when the actor system has shut down and can close. Even though all
+	// actors on this node has finished processing and there are no further
+	// messages being processed locally, a message can be processed on a remote
+	// node and this generates a response to an actor on this node making the
+	// local actor system active again.
+	//
+	// It must therefore be a global shut-down protocol that must span all nodes
+	// and try to ensure that no messages are in transit when the nodes closes.
+	// For the local system this implies the following:
+	//
+	// 1. The session layer must inform all the de-serializing actors that the
+	//    node is shutting down. Any new de-serializing actors registering will
+  //    immediately receive the shut down message, and they will not be
+  //    registered with remote endpoints.
+  // 2. The Presentation layer will be asked to stop any outbound message and
+  //    just drop further messages quietly.
+	// 3. The de-serializing actors will each acknowledge the shut down message
+	//    by sending a remove actor message to the session layer. This will
+	//    inform the remote endpoints that these actors are gone.
+	// 4. When the last de-serializing actor asks for removal, the session layer
+	//    will tell the network layer to shut down.
+	// 5. The network layer should then disconnect from the peer endpoint overlay
+	//    network, possibly informing the remote peers that this endpoint
+	//    shuts down.
+	//
+	// This will ensure that the endpoint is disconnected. However the local actor
+	// system can still be alive and keep sending messages, and the network actors
+	// are also available to respond to messages. The local actor system can be
+	// disconnected when there are no more messages being processed by any actor,
+	// see the global Actor::WaitForTermination().
+	//
+	// It is application dependent behaviour how to handle the shut down message
+	// from a remote end point. Some may take such a message as a shut down signal
+	// to this local actor system, and some may just ignore it and accept that
+	// the remote system is gone. It is therefore recommended that the Network
+	// Layer server sends the shut down message to the Network Endpoint actor
+	// and the function handling this message can be overloaded to do more
+	// specific handling.
 
 public:
 
-	class ShutDownMessage
+	class ShutDown
 	{
 	public:
 
-		ShutDownMessage( void )
-		{ }
-
+		ShutDown( void ) = default;
+		ShutDown( const ShutDown & Other ) = default;
 	};
 
 protected:
 
-	// Derived classes must provide a handler for shut down messages and make
-	// sure that the network closes properly when this message is received.
-
-	virtual void StartShutDown( const Network::ShutDownMessage & TheMessage,
-														  const Address Sender ) = 0;
+	virtual void Stop( const ShutDown & StopMessage, const Address Sender )
+	{
+		Send( StopMessage, GetAddress( Layer::Session ) );
+	}
 
   // ---------------------------------------------------------------------------
   // Constructor and destructor
@@ -328,18 +354,19 @@ protected:
 	// even though it defines the proper virtual functions. The copy constructor
 	// is explicitly deleted for the same reasons.
 
-	Network( const std::string & Name, const std::string & Location )
-	: Actor( Name ), Domain( Location )
+	Network( const std::string & Name )
+	: Actor( Name ), StandardFallbackHandler( Actor::GetAddress().AsString() )
 	{
 		ThisNetworkEndpoint = this;
-		RegisterHandler( this, &Network::StartShutDown );
+		RegisterHandler( this, &Network::Stop );
 	}
 
 	Network( void ) = delete;
 	Network( const Network & Other ) = delete;
 
 	// The destructor is public and virtual to allow the proper destruction of
-	// the derived classes
+	// the derived classes. It also resets all the shared pointers for the layer
+	// servers, effectively killing these.
 
 public:
 
@@ -363,7 +390,7 @@ public:
 
 template< class NetworkType,
 	typename = std::enable_if_t< std::is_base_of<Network, NetworkType>::value > >
-class NetworkEndPoint
+class NetworkEndpoint
 : virtual public Actor,
   virtual public StandardFallbackHandler,
   public NetworkType
@@ -426,141 +453,6 @@ public:
   }
 
   // ---------------------------------------------------------------------------
-  // Shut down management
-  // ---------------------------------------------------------------------------
-  // A small problem in Theron is that there is no function to wait for
-  // termination. Each actor is in principle a state machine that will run
-  // forever exchanging messages. The thread that starts main and creates the
-  // network endpoint and the actors should be suspended until the actor system
-  // itself decides to terminate. The correct way to do this is to use a
-  // Receiver object that will get a last message when all the key actors in
-  // the system no longer have messages to process. Thus when this receiver
-  // terminates its wait, the main() will probably terminate calling the
-  // destroying the objects created within main().
-  //
-  // In larger systems there will be more actors than threads and, perhaps, more
-  // threads than cores. The result is that some threads may be waiting for an
-  // available core and some actors may be waiting for available threads. Thus,
-  // when the deciding actor has entered the finishing state, there may still
-  // be unhanded messages for other actors, and some of these may be processed
-  // in other threads while main() is destroying the actors almost guaranteeing
-  // that the application will terminate with a segmentation fault.
-  //
-  // Given that there is no active interface to the Theron scheduler, it is not
-  // possible to know when there are no pending messages. However, if the actors
-  // created in main() are known, then it is possible to verify that all their
-  // message queues are empty before terminating.
-  //
-  // This idea is implemented with a Receiver that has a set of pointers to
-  // actors to wait for. When it receives the shut down message it will loop
-  // over the list of actors checking if they have pending messages, and if so
-  // it will suspend execution for one second. The handler will only terminate
-  // when there are no pending messages for any of the guarded actors.
-  //
-  // There are two methods provided by the Network End Point to use this
-  // Receiver: One Wait For Termination that creates the receiver and waits
-  // for it to receive the shut down message, and one Shut Down method that
-  // can be called by the main actor when the system is ready for shut down
-  // as the message exchange dries up.
-
-private:
-
-	class TerminationReceiver : public Receiver
-	{
-	private:
-
-		std::set< const Actor * > GuardedActors;
-
-		// The termination message handler
-
-		void StartTermination( const Network::ShutDownMessage & TheRequest,
-													 const Address Sender )
-		{
-			while ( std::any_of( GuardedActors.begin(), GuardedActors.end(),
-										 [](const Theron::Actor * TheActor)->bool{
-											  return TheActor->GetNumQueuedMessages() > 0;  }) )
-				std::this_thread::sleep_for( std::chrono::seconds(1) );
-		}
-
-	public:
-
-		// The constructor takes an initialisation list to ensure that all pointers
-		// are for actors.
-
-		TerminationReceiver(
-									const std::initializer_list< const Actor * > & ActorsToGuard )
-		: GuardedActors( ActorsToGuard )
-		{
-			RegisterHandler( this, &TerminationReceiver::StartTermination );
-		}
-
-	};
-
-	// There is a shared pointer for this termination receiver to ensure that it
-	// is properly destroyed and so that it can be passed outside if someone
-	// wants to manage the sending of the termination message directly.
-
-	std::shared_ptr< TerminationReceiver > ShutDownReceiver;
-
-	// There is a public interface function to send the shut down message to this
-	// receiver. It optionally takes the address of the calling actor and sends
-	// the message as if it was from that actor. It throws if there is no shut
-	// down receiver allocated.
-
-	void StartShutDown( const Network::ShutDownMessage & TheMessage,
-										  const Address Sender )
-	{
-		if ( ShutDownReceiver )
-			Send( Network::ShutDownMessage(),
-						Sender, ShutDownReceiver->GetAddress() );
-		else
-		{
-			std::ostringstream ErrorMessage;
-
-			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-									 << "Sending a shut down message requires a shut down "
-									 << "receiver";
-
-			throw std::logic_error( ErrorMessage.str() );
-		}
-	}
-
-public:
-
-	// The shut down receiver and object is created and obtained by a creator
-	// function that takes a list of actors that can be converted to actor
-	// pointers and passed to the termination receiver. Note that it adds the
-	// network layer servers to the set of actors to look after.
-	//
-	// Note: There is deliberately no Wait function as this has to be called
-	// on the object returned by this function, i.e. by invoking the standard
-	// wait function on the receiver.
-	//
-	// Implementation note: The initialiser list must be given as an initialiser
-	// in stead of the constructor, and the compiler will call the correct
-	// constructor. In other words, if the initialiser list constructor should
-	// be called, one would need to say T{...} and not T({...}), and the
-	// standard make shared will implicitly use the latter case. The alternative
-	// could be to template the constructor, but then it would not be as easy to
-	// ensure that the types of the given arguments were really pointers to actors
-
-	template< class... ActorTypes >
-	std::shared_ptr< TerminationReceiver >
-	TerminationWatch( ActorTypes & ...TheActor )
-	{
-		ShutDownReceiver = std::shared_ptr< TerminationReceiver >(
-			new TerminationReceiver
-				  { CommunicationActor[ Layer::Network 			].get(),
-						CommunicationActor[ Layer::Session 			].get(),
-						CommunicationActor[ Layer::Presentation ].get(),
-						dynamic_cast< const Actor * >( &TheActor )...
-					}
-		);
-
-		return ShutDownReceiver;
-	}
-
-  // ---------------------------------------------------------------------------
   // Constructor
   // ---------------------------------------------------------------------------
   //
@@ -584,12 +476,11 @@ public:
 public:
 
  template< typename ... NetworkParameterTypes >
- NetworkEndPoint( const std::string & Name, const std::string & Location,
+ NetworkEndpoint( const std::string & Name,
 									NetworkParameterTypes && ... NetworkParameterValues )
   : Actor( Name ), StandardFallbackHandler( Actor::GetAddress().AsString() ),
-    NetworkType(
-	    Name, Location,
-		  std::forward< NetworkParameterTypes >(NetworkParameterValues)... )
+    NetworkType( Actor::GetAddress().AsString(),
+					 std::forward< NetworkParameterTypes >(NetworkParameterValues)... )
   {
     NetworkType::CreateNetworkLayer();
 		NetworkType::CreateSessionLayer();
@@ -632,9 +523,10 @@ public:
   }
 
   // The destructor is also not doing anything particular since the managed
-  // actor will be destroyed by the unique pointer destructor
+  // actors for the network layers will be destroyed by the unique pointer
+  // destructor
 
-  virtual ~NetworkEndPoint( void )
+  virtual ~NetworkEndpoint( void )
   { }
 };
 
