@@ -225,42 +225,28 @@ protected:
 	//
 	// An AMQ topic or queue is a termed a destination, and it is possible both
 	// to subscribe to messages from a destination, or send messages to a
-	// destination. In this setting there is one common broadcast group subscribed
-	// to by all endpoints and one in-box for each known endpoint. These should
-	// be fairly durable and probably be available for most of the execution time.
-  // It would therefore be wasteful to create the destination object every time
-	// a message needs to be posted to a destination, and keep separate
-	// destination objects for subscribed destinations. It is therefore a map of
-	// all destination objects. They are stored as unique pointers so that they
-	// will be deleted when the corresponding map object is deleted. There is a
-	// need for a quick look up, but not traversing the destinations in some
-	// sorted order and the unordered map is there an ideal structure for storing
-	// the destination objects.
-
+	// destination. There is a small utility function to create the destinations
+  // depending on the type of the destination (topic or queue).
 private:
 
-	std::unordered_map< std::string, std::unique_ptr< cms::Destination > >
-	Destinations;
-
-	// Iterators to this map are defined as destination pointers
-
-	using DestinationPointer =
-	std::unordered_map<std::string, std::unique_ptr<cms::Destination>>::iterator;
-
-	// There is a small utility function to create the destinations depending on
-	// the type of the destination (topic or queue).
+	using DestinationPointer = std::shared_ptr< cms::Destination >;
 
 	DestinationPointer CreateDestination( const std::string & TopicOrQueue,
-			 				                          ActiveMQ::Message::Destination Type );
+																        ActiveMQ::Message::Destination Type );
 
-	// A producer is a passive object until it is used to send a message.
-	// Furthermore, the cached producer class supports sending to various
-	// destinations as an argument to the send function, and consequently each
-	// endpoint only needs one producer. However, this needs a producer resource,
-	// and therefore both objects must be dynamically created.
+	// A producer is created on a destination and can be used to send messages
+	// to that destination only. Hence there is a map of producers associated
+	// with the queues or topics this endpoint can send messages to.
 
-	cms::MessageProducer *              ProducerResource;
-	activemq::cmsutil::CachedProducer * Producer;
+	std::unordered_map< std::string,
+	                    std::unique_ptr< activemq::cmsutil::CachedProducer > >
+  Producers;
+
+	// Producers are created with the same arguments as above and directly
+	// inserted into the map.
+
+	void CreateProducer( const std::string & TopicOrQueue,
+							         ActiveMQ::Message::Destination Type  );
 
 	// Listening to events from arriving messages is different since the message
 	// events will arrive asynchronously and the handling will be done by a
@@ -273,8 +259,7 @@ private:
 	{
 	private:
 
-	  cms::MessageConsumer *              Consumer;
-		activemq::cmsutil::CachedConsumer * Monitor;
+	  std::unique_ptr< activemq::cmsutil::CachedConsumer > Monitor;
 
 		std::function< void( const cms::Message * TheMessage ) > Handler;
 
@@ -282,9 +267,7 @@ private:
 		// the handler for processing.
 
 		virtual void onMessage( const cms::Message* TheMessage ) override
-		{
-			Handler( TheMessage );
-		}
+		{	Handler( TheMessage ); }
 
 		// The constructor initialises the listener and sets the handler based
 		// on the given handler function and start the monitor to listen to the
@@ -295,12 +278,12 @@ private:
 
 		template< class LambdaFunction >
 		MessageMonitor( cms::Session * TheSession,
-										const std::unique_ptr< cms::Destination > & Destination,
+										const DestinationPointer & Destination,
 										const LambdaFunction & HandlerFunction )
-		: Handler( HandlerFunction )
+		: Monitor(), Handler( HandlerFunction )
 		{
-		  Consumer = TheSession->createConsumer( Destination.get() );
-			Monitor = new activemq::cmsutil::CachedConsumer( Consumer );
+		  Monitor = std::make_unique< activemq::cmsutil::CachedConsumer >(
+								  TheSession->createConsumer( Destination.get() ) );
 			Monitor->setMessageListener( this );
 			Monitor->start();
 		}
@@ -309,14 +292,10 @@ private:
 
 		MessageMonitor( void ) = delete;
 
-		// The destructor closes the monitor and deletes the destination object.
+		// The destructor stops the monitor before it is automatically deleted.
 
 		~MessageMonitor( void )
-		{
-			Monitor->stop();
-			delete Monitor;
-			delete Consumer;
-		}
+		{ Monitor->stop(); }
 	};
 
   // The message monitors are kept in the same sort of map from the topic or

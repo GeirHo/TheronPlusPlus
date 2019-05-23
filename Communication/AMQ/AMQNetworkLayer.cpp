@@ -32,26 +32,61 @@ License: LGPL 3.0
 
 ==============================================================================*/
 //
+//
+// A destination pointer is created based on the managed session when a
+// for a topic or queue name.
 
 Theron::ActiveMQ::NetworkLayer::DestinationPointer
 Theron::ActiveMQ::NetworkLayer::CreateDestination(
 	const std::string & TopicOrQueue, ActiveMQ::Message::Destination Type)
 {
-	std::pair< DestinationPointer, bool > Result;
+	DestinationPointer Destination;
 
 	switch( Type )
 	{
 		case ActiveMQ::Message::Destination::Topic :
-			Result = Destinations.emplace( TopicOrQueue,
-			 						                    AMQSession->createTopic( TopicOrQueue ));
+			Destination = DestinationPointer(AMQSession->createTopic( TopicOrQueue ));
 			break;
 		case ActiveMQ::Message::Destination::Queue :
-			Result = Destinations.emplace( TopicOrQueue,
-								                     AMQSession->createQueue( TopicOrQueue ));
+			Destination = DestinationPointer(AMQSession->createQueue( TopicOrQueue ));
 			break;
 	}
 
-	return Result.first;
+	return Destination;
+}
+
+// A producer is created on a destination and can be used to send messages only
+// to that destination. It takes the same arguments as the above function to
+// create the destination, but uses this as an argument for the session to
+// create the producer object and insert this into the map of producers.
+
+void Theron::ActiveMQ::NetworkLayer::CreateProducer(
+	const std::string & TopicOrQueue, ActiveMQ::Message::Destination Type )
+{
+	if ( Producers.find( TopicOrQueue ) == Producers.end() )
+  {
+		// Create a new destination
+
+		DestinationPointer NewDestination = CreateDestination( TopicOrQueue, Type );
+
+		// The new producer is created and inserted in the producer database. Even
+		// though the lookup is inexpensive on an unordered map, producing the hash
+		// value for the topic or queue is not for free, and therefore it is more
+		// efficient to store the iterator returned by the emplace function.
+
+	  auto NewProducer =
+			   Producers.emplace( TopicOrQueue,
+						new activemq::cmsutil::CachedProducer(
+								AMQSession->createProducer( NewDestination.get() ) ) );
+
+		// The first element of the new producer is an iterator to the inserted
+		// producer record and it is used to set the delivery modus to persistent.
+	  // Persistent message delivery is configured since there is no way
+		// to detect lost messages unless the application puts in place a higher
+		// level protocol.
+
+		NewProducer.first->second->setDeliveryMode( cms::DeliveryMode::PERSISTENT );
+	}
 }
 
 // The command handler receives requests from remote endpoints. The current
@@ -112,14 +147,14 @@ void Theron::ActiveMQ::NetworkLayer::CommandHandler(
 				// Given that endpoints are tracked only to the extent that some actors
 				// on this endpoint sends to remote endpoints, and that the endpoint
 				// should have sent remove actor messages for all hosted actors,
-				// there is not more to do than delete the destination for the closing
+				// there is not more to do than delete the producer for the closing
 				// endpoint at this stage.
 
 				auto ClosingEndpoint =
-	      Destinations.find( TheTextMessage->getStringProperty( "Endpoint" ) );
+	      Producers.find( TheTextMessage->getStringProperty( "Endpoint" ) );
 
-				if ( ClosingEndpoint != Destinations.end() )
-					Destinations.erase( ClosingEndpoint );
+				if ( ClosingEndpoint != Producers.end() )
+					Producers.erase( ClosingEndpoint );
 			}
 		}
 	}
@@ -152,7 +187,9 @@ void Theron::ActiveMQ::NetworkLayer::ResolvedAddress(
 	 Response->setStringProperty( "GlobalAddress",
 																TheResponse.GlobalAddress.AsString() );
 
-	 Producer->send( Destinations[ DiscoveryTopic ].get(), Response );
+	 // The discovery topic should exist and the package is forwarded.
+
+	 Producers[ DiscoveryTopic ]->send( Response );
 
 	 delete Response;
 }
@@ -204,30 +241,22 @@ void Theron::ActiveMQ::NetworkLayer::OutboundMessage(
 
 	TheMessage.StoreProperties( Outbound );
 
-	// If there is no destination object for the in-box of the remote endpoint
+	// If there is no producer object for the in-box of the remote endpoint
 	// it will be created since we know that there is at least one actor on
 	// this endpoint that would like to communicate with actors on that
 	// endpoint.
 
-	auto Destination = Destinations.find( TopicOrQueue );
-
-	if ( Destination == Destinations.end() )
-		Destination = CreateDestination( TopicOrQueue,
-																		 TheMessage.DestinationMode );
+	if ( Producers.find( TopicOrQueue ) == Producers.end() )
+		CreateProducer( TopicOrQueue, TheMessage.DestinationMode );
 
 	// Then the message can be sent to the destination.
 
-	Producer->send( Destination->second.get(), Outbound );
+	Producers[ TopicOrQueue ]->send( Outbound );
 
 	// Cleaning up the message object
 
 	delete Outbound;
 }
-
-// The handler for actor initiated subscriptions sets the sending actor
-// identifier to null, the receiver address to be the queue or topic name,
-// and the tries to create the payload based on the message type. Not all
-// types can be converted, and in this case an exception is thrown.
 
 /*==============================================================================
 
@@ -282,16 +311,19 @@ void Theron::ActiveMQ::NetworkLayer::ResolveAddress(
 		TheMessage->setStringProperty( "ActorName",
 																	 TheRequest.NewActor.AsString() );
 
-		Producer->send( Destinations[ DiscoveryTopic ].get(), TheMessage );
+		// Then posting this discovery request on the discovery topic channel.
+
+		Producers[ DiscoveryTopic ]->send( TheMessage );
 
 		delete TheMessage;
 	}
 }
 
 // The remove actor function will send a message on the discovery channel that
-// the given actor has been removed. The command handler will forward this to
-// the session layer which should remove the external address for this the
-// removed actor if the global address for that actor is cached.
+// the given actor has been removed. The remote command handler will forward
+// this request to its session layer which should remove the external address
+// mapping for this the removed actor if the global address for that actor
+// is cached.
 
 void Theron::ActiveMQ::NetworkLayer::ActorRemoval(
 	const Theron::NetworkLayer< TextMessage >::RemoveActor & TheCommand,
@@ -305,7 +337,7 @@ void Theron::ActiveMQ::NetworkLayer::ActorRemoval(
 	TheMessage->setStringProperty( "GlobalAddress",
 														     TheCommand.GlobalAddress.AsString() );
 
-	Producer->send( Destinations[ DiscoveryTopic ].get(), TheMessage );
+	Producers[ DiscoveryTopic ]->send( TheMessage );
 
 	delete TheMessage;
 }
@@ -314,11 +346,13 @@ void Theron::ActiveMQ::NetworkLayer::ActorRemoval(
 // Handling subscriptions
 // -----------------------------------------------------------------------------
 //
-// When a subscription is requested the corresponding destination is created
+// When a subscription is requested the corresponding message monitor is created
 // and a subscription is registered with the inbound message handler. As the
 // message is not generated by a remote actor, the sending actor and the
 // destination actor fields of the inbound text message may be empty and they
-// must be completed by the session layer.
+// must be completed by the session layer. A special handler is used to ensure
+// this completion by storing the topic or queue identifier as the first
+// argument to the handler, see handler below.
 
 void Theron::ActiveMQ::NetworkLayer::NewSubscription(
 	const Theron::ActiveMQ::NetworkLayer::CreateSubscription & Request,
@@ -326,19 +360,17 @@ void Theron::ActiveMQ::NetworkLayer::NewSubscription(
 {
 	std::string TopicOrQueue( Request.TopicOrQueue );
 
-	CreateDestination( Request.TopicOrQueue, Request.ChannelType );
-
-	Subscriptions.emplace( Request.TopicOrQueue,
-		new MessageMonitor( AMQSession, Destinations[ Request.TopicOrQueue ],
-			[this,TopicOrQueue]( const cms::Message * TheMessage )->void{
-	      SubscriptionHandler( TopicOrQueue, TheMessage ); }	)	);
+	Subscriptions.emplace( TopicOrQueue,
+	  std::make_unique< MessageMonitor >(
+			AMQSession, CreateDestination( TopicOrQueue, Request.ChannelType ),
+				[this,TopicOrQueue]( const cms::Message * TheMessage )->void{
+		      SubscriptionHandler( TopicOrQueue, TheMessage ); }	)	);
 }
 
 // The removal of a subscription consists of finding the corresponding
-// subscription and delete it. Then the destination is deleted after the
-// subscription since it was used to create the subscription. Finally the
-// removal is confirmed back to the session layer (the sender of the request)
-// for it to clean up all bindings this subscription may have to local actors.
+// subscription and delete it. Then the removal is confirmed back to the
+// session layer (the sender of the request) for it to clean up all bindings
+// this subscription may have to local actors.
 
 void Theron::ActiveMQ::NetworkLayer::RemoveSubscription(
 	const Theron::ActiveMQ::NetworkLayer::CancelSubscription & Request,
@@ -348,11 +380,6 @@ void Theron::ActiveMQ::NetworkLayer::RemoveSubscription(
 
 	if ( TheSubscription != Subscriptions.end() )
 		Subscriptions.erase( TheSubscription );
-
-	auto TheDestination = Destinations.find( Request.TopicOrQueue );
-
-	if ( TheDestination != Destinations.end() )
-		Destinations.erase( TheDestination );
 
 	Send( Request, From );
 }
@@ -395,7 +422,7 @@ void Theron::ActiveMQ::NetworkLayer::Stop(
 										 static_cast< short int >( Command::EndpointShutDown ) );
 
 	TheMessage->setStringProperty( "Endpoint", GetAddress().AsString() );
-	Producer->send( Destinations[ DiscoveryTopic ].get(), TheMessage );
+	Producers[ DiscoveryTopic ]->send( TheMessage );
 
 	delete TheMessage;
 
@@ -435,9 +462,7 @@ Theron::ActiveMQ::NetworkLayer::NetworkLayer(
 : Actor( EndpointName ), StandardFallbackHandler( EndpointName ),
   Theron::NetworkLayer< TextMessage >( EndpointName ),
   AMQConnection( nullptr ), AMQSession( nullptr ),
-  Destinations(),
-  ProducerResource( nullptr ), Producer( nullptr ),
-  Subscriptions()
+  Producers(), Subscriptions()
 {
 	// Starting the AMQ interface and creating the connection using a temporary
 	// connection factory (who let the Java programmers in?)
@@ -465,31 +490,21 @@ Theron::ActiveMQ::NetworkLayer::NetworkLayer(
 	// Subscribe to the two default destinations: The global topic for discovery
 	// and the in-box of this endpoint.
 
-	CreateDestination( DiscoveryTopic, ActiveMQ::Message::Destination::Topic );
-	CreateDestination( EndpointName,   ActiveMQ::Message::Destination::Topic );
-
-  Subscriptions.emplace( DiscoveryTopic,
-						    new MessageMonitor( AMQSession, Destinations[ DiscoveryTopic ],
-								      [this]( const cms::Message * TheMessage )->void{
-												 CommandHandler( TheMessage ); } ) );
+	Subscriptions.emplace( DiscoveryTopic,
+	  std::make_unique< MessageMonitor >( AMQSession,
+			CreateDestination( DiscoveryTopic, ActiveMQ::Message::Destination::Topic ),
+			[this]( const cms::Message * TheMessage )->void{
+			 			  CommandHandler( TheMessage ); } ) );
 
 	Subscriptions.emplace( EndpointName,
-							  new MessageMonitor( AMQSession, Destinations[ EndpointName ],
-											[this]( const cms::Message * TheMessage )->void{
-												 InboundMessage( TheMessage ); } ) );
+	  std::make_unique< MessageMonitor >( AMQSession,
+			CreateDestination( EndpointName, ActiveMQ::Message::Destination::Topic ),
+			[this]( const cms::Message * TheMessage )->void{
+			 			  InboundMessage( TheMessage ); } ) );
 
-	// Then create the producer resource and use it to initialise the actual
-	// producer. Persistent message delivery is configured since there is no way
-	// to detect lost messages unless the application puts in place a higher
-	// level protocol. The producer resource is created for the discovery topic
-	// although it will be used by the producer for other destinations later.
+	// Then create the producer resource for the discovery topic
 
-	ProducerResource = AMQSession->createProducer(
-																				Destinations[ DiscoveryTopic ].get() );
-
-	Producer = new activemq::cmsutil::CachedProducer( ProducerResource );
-
-	Producer->setDeliveryMode( cms::DeliveryMode::PERSISTENT );
+  CreateProducer( DiscoveryTopic, ActiveMQ::Message::Destination::Topic );
 
 	// Registering message handlers defined in this class (not the overridden
 	// handlers as they are already registered by the base class)
@@ -514,8 +529,9 @@ Theron::ActiveMQ::NetworkLayer::~NetworkLayer()
 
 	// Clean up the local classes dynamically allocated
 
-	delete Producer;
-	delete ProducerResource;
+	Producers.clear();
+	Subscriptions.clear();
+
 	delete AMQSession;
 	delete AMQConnection;
 
