@@ -36,7 +36,7 @@
       ISBN 978-0-596-52126-4
   [2] https://swift.im/swiften/
   
-  Author: Geir Horn, University of Oslo, 2015, 2016
+  Author: Geir Horn, University of Oslo, 2015 - 2017
   Contact: Geir.Horn [at] mn.uio.no
   License: LGPL3.0
 =============================================================================*/
@@ -53,10 +53,11 @@
 #include <unordered_set>									// Ditto for available remote clients
 #include <functional> 										// For the hash functions
 #include <stdexcept>											// For standard exceptions
+#include <optional>												// For presence messages
 
 // Generic frameworks - Theron for actors and Swiften for XMPP
 
-#include <Theron/Theron.h>   							// Actors
+#include "Actor.hpp"   										// Theron++ Actors
 #include "StandardFallbackHandler.hpp"
 
 // The generic frameworks used  - it should be noted that Swiften uses the 
@@ -85,11 +86,6 @@
 #include <boost/multi_index/ordered_index.hpp>
 #include <boost/multi_index/hashed_index.hpp>
 
-// The optional struct will be used for the priority of a presence message
-// to ensure that it can be used even if there is no value value for it
-
-#include <boost/optional.hpp>
-
 // Then the Swiften library can be safely loaded.
 
 #include <Swiften/Swiften.h>	// XMPP link level protocol
@@ -98,10 +94,11 @@
 // function must be provided taking the Jabber ID as the argument to the () 
 // operator. It is implemented as a template specification for the Jabber ID 
 // that uses the standard hash function on the string version of the Jabber 
-// ID. It is defined as part of the std namespace to avoid that it has to be 
-// explicitly given to the unordered map since the compiler will find an object
-// std::hash< Swift::JID>. Note that the return statement calls the hash 
-// operator on a temporary string hash object (hence the many parentheses)
+// ID. It is defined as part of the standard names pace to avoid that it has 
+// to be explicitly given to the unordered map since the compiler will find 
+// an object std::hash< Swift::JID>. Note that the return statement calls 
+// the hash operator on a temporary string hash object (hence the many 
+// parentheses)
 
 namespace std {
   template<>
@@ -117,7 +114,9 @@ namespace std {
 }
 
 // The same extension must be done for the boost hash function used by 
-// boost::bimap.
+// boost::bimap. Since it is identical to the standard one above, it should 
+// be possible to reuse that code, but currently I have not found a way to 
+// do it.
 
 namespace boost {
   template<>
@@ -138,12 +137,11 @@ namespace boost {
 #include "NetworkLayer.hpp"
 #include "SessionLayer.hpp"
 
-// These classes belongs to the Theron transparent communication extensions
-namespace Theron {
-// and each protocol type should have its own name space to make it explicit 
-// which protocol is in use
-namespace XMPP {
+// These classes belongs to the Theron transparent communication extensions 
+// and the XMPP sub name space.
 
+namespace Theron::XMPP 
+{
 // ---------------------------------------------------------------------------
 // Jabber ID = external address
 // ---------------------------------------------------------------------------
@@ -153,7 +151,7 @@ namespace XMPP {
 // JID("node@domain/resource") == JID("node", "domain", "resource")
 // JID("node@domain") == JID("node", "domain")
   
-typedef Swift::JID JabberID;
+using JabberID = Swift::JID;
 
 // ---------------------------------------------------------------------------
 // Link Message
@@ -167,99 +165,65 @@ class OutsideMessage : public Theron::LinkMessage< JabberID >
 {
 private:
   
-  // The data fields store the "to" and "from" address and the payload. The 
-  // subject field can be used if the message needs one or is a command 
+  // The subject field can be used if the message needs one or is a command 
   // between low XMPP layers.
   
-  JabberID    SenderAddress, ReceiverAddress;
-  std::string Payload, Subject;
+	std::string Subject;
   
 public:
   
-  // There is a default constructor that just initialises the message.
+  // The standard constructor takes all the necessary fields and initialises 
+	// the base class link message accordingly.
   
-  OutsideMessage( void )
-  : SenderAddress(), ReceiverAddress(), Payload(), Subject()
+  inline OutsideMessage( const JabberID & From, const JabberID & To ,
+											   const std::string & ThePayload, 
+											   const std::string TheSubject = std::string()  )
+  : Theron::LinkMessage< JabberID >( From, To, ThePayload ), 
+    Subject( TheSubject )
   { };
   
-  // Then there is a message dealing with all the required information at 
-  // once. 
-  
-  OutsideMessage( const JabberID & From, const JabberID & To ,
-		  const std::string & ThePayload, 
-		  const std::string TheSubject = std::string()  )
-  : SenderAddress( From ), ReceiverAddress( To ), 
-    Payload( ThePayload ), Subject( TheSubject )
-  { };
-  
+	// The message can also be constructed from a basic link message, with the 
+	// subject optionally given.
+	
+	inline OutsideMessage( const Theron::LinkMessage< JabberID > & BasicMessage, 
+												 const std::string TheSubject = std::string() )
+	: OutsideMessage( BasicMessage.GetSender(), BasicMessage.GetRecipient(), 
+										BasicMessage.GetPayload(), TheSubject )
+	{ }
+	
   // A copy constructor is necessary to queue messages 
   
-  OutsideMessage( const OutsideMessage & TheMessage )
-  : SenderAddress  ( TheMessage.SenderAddress ),
-    ReceiverAddress( TheMessage.ReceiverAddress ),
-    Payload	   ( TheMessage.Payload ),
-    Subject        ( TheMessage.Subject )
+  inline OutsideMessage( const OutsideMessage & TheMessage )
+  : Theron::LinkMessage< JabberID >( TheMessage ),
+    Subject( TheMessage.Subject )
   { };
-  
-  // The virtual interface functions for setting the various fields
-  
-  virtual void SetPayload( const std::string & ThePayload )
-  {
-    Payload = ThePayload;
-  };
-  
-  virtual void SetSender( const JabberID & From )
-  {
-    SenderAddress = From;
-  };
-  
-  virtual void SetRecipient( const JabberID & To   )
-  {
-    ReceiverAddress = To;
-  };
-  
-  virtual void SetSubject( const std::string & TheSubject )
-  {
-    Subject = TheSubject;
-  }
 
-  // There are similar functions to obtain or set the sender and the receiver of 
-  // this message.
-      
-  virtual std::string GetPayload( void ) const
-  {
-    return Payload;
-  };
-  
-  virtual JabberID GetRecipient( void ) const
-  {
-    return ReceiverAddress;
-  };
-  
-  virtual JabberID GetSender( void ) const 
-  {
-    return SenderAddress;
-  };
-  
+	// The subject can be defined on an already constructed message if needed, 
+	// and it can be read from the stored string.
+	
+  void SetSubject( const std::string & TheSubject )
+  { Subject = TheSubject; }
+
   virtual std::string GetSubject( void ) const
-  {
-    return Subject;
-  }
+  { return Subject; }
   
-  // The operator () is a short cut to the full constructor performing all 
-  // the above set operations in one go. The format of this is chosen to 
-  // mirror the Theron framework's send function and it does not support 
-  // the subject for this reason.
- 
-  virtual void operator() ( const std::string  & ThePayload, 
-												    const JabberID     & From,
-												    const JabberID     & To )
+  // It may also be necessary to recover the actor address from a JabberID, 
+  // and it should be based on the resource string if the address has a 
+  // resource, otherwise it will be based on the string representation of the 
+  // whole Jabber ID. Normal actors must have the resource name set to the 
+  // actor name, and this should be unique to the whole distributed actor 
+  // system.
+  
+  virtual Address ActorAddress( const JabberID & ExternalActor ) const override
   {
-    Payload = ThePayload;
-    SenderAddress = From;
-    ReceiverAddress = To;
-  };
-
+		std::string TheAddress( ExternalActor.getResource() );
+		
+		if ( TheAddress.empty() )
+			return Address( ExternalActor.toString() );
+		else
+			return Address( TheAddress );
+	}
+  
 	virtual ~OutsideMessage( void )
 	{ }
 };
@@ -299,6 +263,19 @@ private:
   Swift::BoostNetworkFactories	NetworkManager;
   std::thread 		 							CommunicationLink;
 
+  // The link needs to remember its own Jabber ID, as the external addresses
+  // of the local actors will be based on this ID.
+  
+  JabberID ProtocolID;
+  
+	// The roster is returned as a set of JabberIDs
+  
+  using Roster = std::set< JabberID >	;
+	
+  // In order to register with the local server, a password is needed
+  
+  std::string ServerPassword;
+
   // ---------------------------------------------------------------------------
   // ACTOR CLIENT MANAGEMENT
   // ---------------------------------------------------------------------------
@@ -306,12 +283,12 @@ private:
   // Pointers to the active clients are stored in an unordered map where the 
   // key is the string version of the Jabber ID
   
-  typedef std::shared_ptr< Swift::Client > ClientObjectPointer;
+  using ClientObjectPointer = std::shared_ptr< Swift::Client >;
   
   // The priority of a client must be stored so that it can be attached to 
   // the presence messages the client will send:
   
-  typedef boost::optional<int> PrecencePriority;
+  using PrecencePriority= std::optional<int> ;
   
   // Two information items must be kept for each client: The pointer to
   // the client object, and the client's priority. Furthermore, the class must 
@@ -331,7 +308,7 @@ private:
   // first two dimensions would be the pair of peers, and the third an 
   // availability flag or a queue of pending messages. This is implemented 
   // here with two structures: One set to store a client's active remote peers,
-  // and one multimap of stored messages sorted on the remote peer address.
+  // and one multi-map of stored messages sorted on the remote peer address.
   // These fields are private and can only be accessed through the appropriate
   // supporting methods.
 
@@ -344,7 +321,7 @@ private:
     
   private:
     
-    std::unordered_set< JabberID > 			ActivePeers;
+    std::unordered_set< JabberID > 			                ActivePeers;
     std::unordered_multimap< JabberID, OutsideMessage > MessageQueue;
     
   public:
@@ -389,7 +366,7 @@ private:
       Priority( OtherRecord.Priority ),
       ActivePeers( OtherRecord.ActivePeers ),
       MessageQueue( OtherRecord.MessageQueue )
-      { }    
+      { }
   };
 
   // An unordered map is used to look up the client record for a given client
@@ -411,7 +388,7 @@ protected:
   // and when this process is complete, the client registered event is 
   // triggered, that in turn will ask the client to connect to the server.
   
-  virtual void ClientRegistered( JabberID 		  ClientID, 
+  virtual void ClientRegistered( JabberID 		            ClientID, 
 																 Swift::Payload::ref      RegistrationResponse,
 																 Swift::ErrorPayload::ref Error  );
   
@@ -423,7 +400,7 @@ protected:
   // that an actor's client becomes on-line and then subscribe to it. Derived
   // classes could re-implement this functionality.
 
-  virtual void ClientConnected( JabberID  ClientID  );
+  virtual void ClientConnected( JabberID ClientID );
   
   virtual void InitialRoster( JabberID ClientID, 
 												      Swift::RosterPayload::ref TheRoster,
@@ -544,351 +521,72 @@ private:
   
   void EndpointPresence( JabberID ClientID, 
 												 Swift::Presence::ref PresenceReceived );
-  
-public:
+	
+	// ---------------------------------------------------------------------------
+  // Adding and removing actors
+  // ---------------------------------------------------------------------------
+  //
+	// When the a new actor is created the session layer will send a resolution 
+	// request for its address. It will then create the client for the actor, 
+	// connect the actor to the server and return its external address.
 
-  // ---------------------------------------------------------------------------
-  // CONSTRUCTOR & DESTRUCTOR
-  // ---------------------------------------------------------------------------
-  
-  Link( NetworkEndPoint * Host, std::string ServerPassword,
-				const JabberID & InitialRemoteEndpoint = JabberID(),
-				std::string ServerName = "XMPPLink"  );
-  
-  virtual ~Link();
-
-  // ---------------------------------------------------------------------------
-  // COMMANDS & HANDLERS
-  // ---------------------------------------------------------------------------
-  
-  // The protocol engine may ask for new clients to be created as local 
-  // actors demands an external presence, and subsequently delete these 
-  // clients if the local actor no longer needs this communication channel. 
-  // It is also possible for a client to request the roster to see which 
-  // other remote actors that are available for communication. Each of these
-  // take and hold the Jabber ID of the local actor.
-  
-  class Command
-  {
-  private:
-    
-    JabberID ClientID;
-    
-  public:
-    
-    inline JabberID GetJID( void ) const
-    {
-      return ClientID;
-    }
-    
-    Command( const JabberID & TheID )
-    : ClientID( TheID )
-    { };
-  };
-  
-  // NEW CLIENT ( ===> XMPP::Link )
-  //
-  // The New Client command instructs the link server to create a new actor
-  // client when the handler for this command receives a request from the 
-  // protocol engine. Apparently a new client must first register with the 
-  // XMPP server, and then connect. Thus the request from the new actor is 
-  // sent to the Create Client handler, that creates the client struct and 
-  // register the client. The callback from the registration process will 
-  // trigger the connect actions for the client.
-  
-  class NewClient : public Command
-  {
-  private: 
-    
-    std::string      Password;
-    PrecencePriority Priority;
-    
-  public:
-    
-    NewClient(const JabberID & TheID, std::string ThePassword, 
-	      PrecencePriority ThePriority = PrecencePriority() ) 
-    : Command( TheID ), Password( ThePassword ), Priority( ThePriority )
-    { };
-    
-    std::string GetPassword( void ) const
-    {
-      return Password;
-    }
-    
-    PrecencePriority GetPriority( void ) const
-    {
-      return Priority;
-    }
-  };
-  
-  void CreateClient( const NewClient & Request, const Address From );
-  
-  // DELETE CLIENT ( ===> XMPP::Link )
-  //
-  // This command class and handler has the opposite effect: If there is a 
-  // client class for this ID it will be destroyed, otherwise nothing will
-  // happen
-  
-  class DeleteClient : public Command
-  {
-  public:
-    
-    DeleteClient( const JabberID & TheID ) : Command( TheID )
-    { };
-  };
-  
-  void DestroyClient( const DeleteClient & Request, const Address From );
-  
-  // GET ROSTER ( ==> XMPP::Link )
-  //
-  // This command is used when a local actor wants to identify which remote 
-  // actors are available for communication. The handler simply returns the 
-  // available Jabber IDs back to the caller actor. This is done in two parts:
-  // a message handler receiving the request for the roster and passing this 
-  // request to the XMPP server, and then register the dispatch roster 
-  // handler which will do the dispatching when the roster arrives.
-  
-  class GetRoster : public Command
-  {
-  public:
-    
-    GetRoster( const JabberID & TheID ) : Command( TheID )
-    { };
-  };
-  
-  // The roster is returned as a set of JabberIDs
-  
-  typedef std::set< JabberID >	Roster;
-  
-  // A local actor can request its rooster by sending the Get Rooster command
-  // to the link, and this will be managed by the next handler.
-  
-  void RequestRoster( const GetRoster & Request, const Address From );
-  
-  // AVAILABILITY MESSAGES ( ==> Session Layer )
-  //
-  // Availability and unavailability of clients will be sent to the Session
-  // Layer server as they arrive, using the availability status class as the 
-  // information carrier. The Session Layer must implement a handler 
-  // to receive this message type.
-  
-  class AvailabilityStatus : public Command
-  {
-  public: 
-    
-    enum class StatusType
-    {
-      Available, Unavailable
-    };
-    
-  private:
-    
-    StatusType Status;
-    
-  public:
-    
-    AvailabilityStatus( const JabberID & TheRemoteID, StatusType CurrentStatus )
-    : Command( TheRemoteID ), Status( CurrentStatus )
-    { };
-    
-    inline StatusType GetStatus( void ) const
-    {
-      return Status;
-    }
-    
-  };
-
+protected:
+		
+	virtual void ResolveAddress( const ResolutionRequest & TheRequest, 
+														   const Address TheSessionLayer ) override;
+															 
+  // When local actors are removed the session layer will send a request to 
+  // delete the actor, and this will tell all other endpoints that the client 
+  // is unavailable, and then disconnect the client.
+															 
+  virtual void ActorRemoval( const RemoveActor & TheCommand, 
+														 const Address TheSessionLayer ) override;
   // ---------------------------------------------------------------------------
   // NORMAL MESSAGES ==> XMPP::Link
   // ---------------------------------------------------------------------------
   
   // Normal messages will arrive from the Session Layer in the form of 
   // the above Outside Message class. These messages will be captured by 
-  // the Outbound Message handler of the Network Layer which will then 
-  // call the SendMessage function in order to implement the link specific 
-  // actions.
+  // the Outbound Message handler of the Network Layer.
+	
+  virtual void OutboundMessage( const OutsideMessage & TheMessage, 
+																const Address From ) override;
+	  
+public:
+
+  // ---------------------------------------------------------------------------
+  // CONSTRUCTOR & DESTRUCTOR
+  // ---------------------------------------------------------------------------
   
-  virtual void SendMessage( const OutsideMessage & TheMessage );
+  Link( const std::string & EndpointName, const std::string & EnpointDomain, 
+				const std::string & ServerPassword,
+				const JabberID & InitialRemoteEndpoint = JabberID(),
+				const std::string & ServerName = "XMPPLink"  );
+  
+  virtual ~Link();
     
 }; // End - XMPP Link Server
 
 /*=============================================================================
-//
-// XMPP Protocol Engine
-//
+
+ XMPP Session layer
+
 =============================================================================*/
-// 
-// The XMPP Protocol Engine will connect as an XMPP client to a given domain 
-// server, and then wait for local actors to register with the protocol 
-// engine. The local actors will be registered as resources for the protocol 
-// engine actor. 
-// 
-// A special address encoding scheme is used for the Theron XMPP protocol. In 
-// general an XMPP address is at the form node@domain/resource where the 
-// user has an account on a local XMPP server. The idea is that the user name is 
-// an identifier of the Theron actor system and that all local actors are 
-// "resources" of this actor system. The endpoint name is typically the node
-// part of of this address. Hence, everything up to the resource string will 
-// be the same for all actors on this endpoint. Every local actor that wants 
-// external visibility must register as an actor, and will then be assigned 
-// the correct Jabber ID.
 //
-// Furthermore, when the local actor is registered in the Theron XMPP Link 
-// server, it will also be signed in to a Multi-User Chat (MUC) room to 
-// broadcast its availability. When the other actors in the MUC sees this 
-// sign-in they will send an XMPP Presence message to the newly signed-in actor.
-// These messages will automatically be acknowledged with presence messages 
-// back to the sending actors. In this way, all actors will know about all 
-// actors.
-//
-// When an XMPP Presence message is received by the XMPP Link Server it will 
-// send a message to the Store Remote Address handler on the session layer 
-// which will register the remote address. This implies that remote addresses
-// are being pushed to the session layer, and address resolution becomes a 
-// different concept. 
+// The session layer must provide a default encoding of the external address 
+// of an actor based on its actor address. 
 
-class XMPPProtocolEngine 
-: public virtual Actor, 
-  public virtual StandardFallbackHandler,
-  public virtual SessionLayer< OutsideMessage >
-{
-  // --------------------------------------------------------------------------
-  // Address management
-  // --------------------------------------------------------------------------
-  
-private:
-
-  // The engine needs to remember its own Jabber ID, as the external addresses
-  // of the local actors will be based on this ID.
-  
-  JabberID ProtocolID;
-  
-  // In order to register with the local server, a password is needed
-  
-  std::string ServerPassword;
-  
-protected:
-  
-  // The actor register function must be defined since the standard Session  
-  // Layer does not know how to map a local actor address to a well defined 
-  // Jabber ID and the need to create a client for this actor in the XMPP 
-  // Network Layer.
-  
-  virtual void RegisterActor ( 
-	       const SessionLayerMessages::RegisterActorCommand & Command, 
-	       const Address LocalActor );
-
-  // The standard functionality for removing actors must be augmented with 
-  // a command to the XMPP Link to remove the XMPP client associated with 
-  // this local actor, and the handler must therefore be overloaded.
-  
-  virtual void RemoveActor ( 
-	       const SessionLayerMessages::RemoveActorCommand & Command, 
-	       const Address LocalActor );
-  
-  // Since the XMPP Network Server will push new addresses as they indicate 
-  // their presence in the MUC, it is necessary to capture these messages in 
-  // a dedicated handler.
-  //
-  // This will check if there is a resolver for this actor installed. This can 
-  // happen if some local actor started to send messages to this remote actor 
-  // before it came on-line. These messages will then be queued by the resolver 
-  // for this remote actor until this message handler is invoked (possibly 
-  // indefinitely if the actor never becomes available). If no resolver is
-  // pending, then the address will just be recorded. 
-  
-  void RemotePeer( const Link::AvailabilityStatus & Peer, 
-		   const Theron::Address TheNetworkLayer );
-
-  // It may happen that a remote actor forgets to set the resource field, i.e.
-  // it has formally no actor address. Then we will assume that the actor 
-  // address equals the Jabber ID "name", and create a named actor using this
-  // provided that this actor name does not already exist on this node as a 
-  // local actor such that this actor naming will cause a naming conflict.
-  
-  virtual Address ResolveUndefined( const ExternalAddress & ExAddress );
-  
-  // --------------------------------------------------------------------------
-  // Outbound: message handling
-  // --------------------------------------------------------------------------
-  
-  // The standard handler for outbound messages is sufficient, and we only 
-  // need to create an outbound resolver if this is required because the remote
-  // actor ID is unknown by the session layer.
-  
-  virtual Address CreateOutboundResolver( 
-    const Address & UnknownActorID, const Address & NetworkServerActor,
-    const Address & SessionServerActor  );
-
-  // --------------------------------------------------------------------------
-  // Inbound: message handling
-  // --------------------------------------------------------------------------
-  // The inbound situation is in many ways simpler because a remote sender will
-  // only send a message when it knows about the availability (XMPP Presence)
-  // of a local actor. Hence when the message arrives, it should immediately 
-  // be routed to the destination actor. The special addressing scheme enables 
-  // us to know immediately the Actor ID of the remote sender (the resource 
-  // field of the Jabber ID)
-  //
-  // When a message arrives, the decode message will be called with the external
-  // message received, and it should return a legal message payload for a 
-  // serialised message. If the received message is just a command with some 
-  // arguments, an empty string should be returned to indicate that this message
-  // has already been handled. The current version simply returns the payload 
-  // of the outside message.
-  //
-  // However, it will store the sender's actor ID and external address under the
-  // assumption that this will almost equal a lookup in complexity and ensure 
-  // that the remote actor's ID is know for the further message handling.
-  
-  virtual std::string DecodeMessage( const OutsideMessage & Datagram );
-
-  // If the sender's address is unknown on this endpoint, a resolver object 
-  // should be created engaging with the remote endpoint to obtain the actor 
-  // ID of the sender. However, under the encoding of addresses and the use of
-  // the MUC to indicate the presence of new, remote actors, the address of 
-  // the remote sender should already be known, and its actor ID decoded from 
-  // its Jabber ID by the New Remote Actor function above. Hence it is a serious
-  // logical error if there is a request to create a new inbound resolver, and
-  // the function will therefore just throw a standard logic_error exception 
-  
-  virtual Address CreateInboundResolver( 
-																		const ExternalAddress & UnknownActorAddress,
-																		const Address & PresentationLayerActor,
-																		const Address & SessionLayerActor )
-  {
-    throw std::logic_error("XMPP Inbound resolver should not be needed!");
-  }
-  
-  // --------------------------------------------------------------------------
-  // Constructor and destructor
-  // --------------------------------------------------------------------------
-  // The constructor will start the actor and register the handlers. Note that 
-  // the virtual handlers are already defined at the Session Layer and need 
-  // not be defined again.
-  
-public:
-  
-  XMPPProtocolEngine( NetworkEndPoint * HostPointer, 
-								      const std::string & Password, 
-								      const std::string & ServerName = "SessionLayer" );
-  
-  virtual ~XMPPProtocolEngine()
-  {
-    DeregisterHandler( this, &XMPPProtocolEngine::RemotePeer );
-  }
-  
-}; // End - XMPP Protocol Engine
+using SessionLayer = Theron::SessionLayer< OutsideMessage >;
 
 /*=============================================================================
 
- Serialising XMPP Message
+ XMPP Presentation layer
 
 =============================================================================*/
+//
+// The presentation layer is simply reused as it is.
 
-// Not implemented as there is nothing special to be done for the XMPP 
-// protocol. This is the way it should be, as the serialising should be fairly 
-// standard.
+using PresentationLayer = Theron::PresentationLayer;
 
 /*=============================================================================
 
@@ -900,66 +598,45 @@ public:
 // for the communication. Basically it is only the constructor that needs 
 // implementation to initiate the XMPP classes.
 
-class Manager : public Theron::NetworkEndPoint
+class Network : virtual public Actor,
+								public Theron::Network
 {
-private:
-  
- // JabberID ActorDiscoveryMUC;
-  
-public:
+protected:
+	
+	// The server password and the JabberID are read-only fields for derived 
+	// classes and can only be set upon construction
+	
+  const std::string ServerPassword;
+  const JabberID    InitialRemoteEndpoint;
+	
+	// The virtual functions to create the actors are implemented in the source
+	// file for the XMPP link
+	
+  virtual void CreateNetworkLayer( void ) override;
+	virtual void CreateSessionLayer( void ) override;
+	virtual void CreatePresentationLayer( void ) override;
 
-  friend class Initialiser;
-  
-  class Initialiser : public Theron::NetworkEndPoint::Initialiser
-  {
-  protected:
-    
-    std::string ServerPassword;
-    JabberID    InitialRemoteEndpoint;
-    
-  public:
-    
-    // The virtual functions are straightforward, but the syntax is lengthy 
-    // so they are implemented in the source file.
-    
-    virtual void CreateServerActors ( void );
-    virtual void BindServerActors   ( void );
-    
-    // The constructor needs the password for the server and an initial remote
-    // peer to connect to. The latter can be omitted if this is the first 
-    // network endpoint created for the actor system.
-    
-    Initialiser( const std::string & Password,
-		 const JabberID & AnotherPeer = JabberID()  )
-    : Theron::NetworkEndPoint::Initialiser(),
-      ServerPassword( Password ), InitialRemoteEndpoint( AnotherPeer )
-    {  }
-    
-    // The Jabber ID and the string will destruct by automatic invocation of
-    // their destructor functions, and hence there is nothing to do explicitly
-    // in the destructor. Yet it is important for correct inheritance.
-    
-    virtual ~Initialiser( void )
-    { }
-  };
-  
   // The constructor is only invoking the end point constructor and forward  
   // the Initialiser object to the base class. Note that the initialiser must
   // be set by the Network End Point's Set Initialiser function when this 
   // constructor is called.
-  
-  Manager( const std::string & Name, const std::string & Location,
-				   Theron::NetworkEndPoint::InitialiserType & TheInitialiser )
-  : Theron::NetworkEndPoint(Name, Location, TheInitialiser )
+	
+  Network( const std::string & Name, const std::string & Location, 
+					 const std::string & Password,
+					 const JabberID & AnotherPeer = JabberID() )
+  : Actor( Name ),
+    Theron::Network( Name, Location ),
+    ServerPassword( Password ), InitialRemoteEndpoint( AnotherPeer )
   { }
   
   // The virtual destructor is currently not doing anything
+
+public:
   
-  virtual ~Manager(void)
+  virtual ~Network(void)
   { }
   
 }; 		 // End XMPP::NetworkEndpoint
 
-}      // End namespace XMPP
-}      // End namespace Theron
+}      // End namespace Theron::XMPP
 #endif // THERON_XMPP_COMMUNICATION

@@ -1,3 +1,7 @@
 *.o
 *.d
 *.kdev4
+/.sync.ffs_db
+*.project
+*.directory
+*.a

@@ -30,7 +30,7 @@ License: LGPL 3.0
 
 #include <type_traits>									// To check a type at compile time
 
-#include <Theron/Theron.h>						  // The actor framework
+#include "Actor.hpp"						  			// The Theron++ actor framework
 #include "StandardFallbackHandler.hpp"  // Debugging and error recovery
 
 #include <iostream>
@@ -746,19 +746,24 @@ public:
 	// of this class, or potentially throws the standard logic error if there 
 	// is already an event handler registered.
 	
-	EventHandler( Framework & ExecutionFramework, 
-								const std::string & HandlerName = std::string() )
-	: Actor( ExecutionFramework,
-					 HandlerName.empty() ? nullptr : HandlerName.data() ),
-	  StandardFallbackHandler( ExecutionFramework, GetAddress().AsString() ),
+	EventHandler( const std::string & HandlerName = std::string() )
+	: Actor( HandlerName ),
+	  StandardFallbackHandler( GetAddress().AsString() ),
 	  EventClock< EventTime >( &CurrentTime ),
 		NowSubscribers(), ConsistentTime( new TimeDistribution() )
 	{
 		if( EventHandlerName.empty() )
 			EventHandlerName = GetAddress().AsString();
 		else
-			throw std::logic_error("There can only be one event handler at the time");
-		
+		{
+			std::ostringstream ErrorMessage;
+			
+			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+									 << "There can only be one event handler at the time";
+			
+			throw std::logic_error( ErrorMessage.str() );
+		}
+			
 		RegisterHandler( this, &EventHandler::AddSubscriber 				);
 		RegisterHandler( this, &EventHandler::RemoveSubscriber 			);
 		RegisterHandler( this, &EventHandler::CompletedEventHandler );
@@ -1092,12 +1097,11 @@ public:
   //    
   // The constructor register the message handler for queuing events.
 
-  DiscreteEventManager( Framework & TheFramework, 
-										    std::string name = std::string() ) 
-    : Actor( TheFramework, name.empty() ? nullptr : name.data() ),
-      StandardFallbackHandler( TheFramework, GetAddress().AsString() ),
+  DiscreteEventManager( std::string name = std::string() ) 
+    : Actor( name ),
+      StandardFallbackHandler( GetAddress().AsString() ),
       EventData(), EventClock< EventTime >( &CurrentTime ),
-      EventHandler< EventTime >( TheFramework, GetAddress().AsString() ),
+      EventHandler< EventTime >( GetAddress().AsString() ),
       EventQueue()
   {
 		RegisterHandler( this, 

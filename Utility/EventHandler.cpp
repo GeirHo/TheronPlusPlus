@@ -17,10 +17,11 @@ Revision 2017: Major re-factoring
 License: LGPL 3.0
 =============================================================================*/
 
-#include <Theron/Theron.h>
 #include <set>
 #include <stdexcept>
 #include <sstream>
+
+#include "Actor.hpp"
 #include "EventHandler.hpp"
 
 namespace Theron

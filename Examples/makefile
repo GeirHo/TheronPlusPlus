@@ -12,8 +12,8 @@
 # Defining compiler and commands
 #
 
-#CC = g++
-CC = clang++
+CC = g++
+#CC = clang++
 RM = rm -f
 
 # Location of the Theron++ framework relative to this make file and the code
@@ -25,6 +25,19 @@ THERON = ..
 # Theron++ For the author's installation it is done at the following location
 
 OLD_THERON = ../../Theron/Include
+
+# The transparent communication requires an implementation based on the 
+# protocol being used, and potentially some extra libraries. The Zero Message 
+# Queue (ZMQ) definitions needed are given below. It should be noted that the 
+# shared zmqpp library is found under /usr/local/lib and so that directory must
+# be read. There are many ways to do this, please see the excellent post at
+# https://lonesysadmin.net/2013/02/22/error-while-loading-shared-libraries-cannot-open-shared-object-file/
+
+ZMQ_INCLUDE = -I ../../ZeroMQ++/src/zmqpp
+ZMQ_LIBS    = -lzmqpp -lzmq -lboost_system
+ZMQ_HEADER  = ZeroMQ.hpp
+ZMQ_SOURCE  = ../ZeroMQ.cpp
+ZMQ_OBJECTS = ${ZMQ_SOURCE:.cpp=.o}
 
 # Optimisation -O3 is the highest level of optimisation and should be used 
 # with production code. -Og is the code optimising and offering debugging 
@@ -43,8 +56,8 @@ DEPENDENCY_FLAGS = -MMD -MP
 
 # Options 
 
-GENERAL_OPTIONS = -c -Wall -std=c++11 -ggdb -D_DEBUG
-INCLUDE_DIRECTORIES = -I. -I/usr/include -I ${THERON} -I${OLD_THERON}
+GENERAL_OPTIONS = -c -Wall -std=c++1z -ggdb -D_DEBUG
+INCLUDE_DIRECTORIES = -I. -I/usr/include -I$(THERON) -I$(ZMQ_INCLUDE)
 
 # Putting it together as the actual options given to the compiler and the 
 # linker. Note that pthread is needed on Linux systems since it seems to 
@@ -59,11 +72,12 @@ LDFLAGS = -Wl,--allow-multiple-definition -ggdb -D_DEBUG -pthread
 # Note also that the communication protocol is not included as it is not 
 # generally needed.
 
-THERON_HEADERS = Actor.hpp LinkMessage.hpp NetworkLayer.hpp \
-	         SessionLayer.hpp PresentationLayer.hpp\
-	         ConsolePrint.hpp EventHandler.hpp
+THERON_HEADERS = Actor.hpp LinkMessage.hpp SerialMessage.hpp \
+		 NetworkLayer.hpp SessionLayer.hpp PresentationLayer.hpp \
+	         ConsolePrint.hpp EventHandler.hpp ActorRegistry.hpp
 THERON_SOURCE  = $(THERON)/ConsolePrint.cpp \
 	         $(THERON)/EventHandler.cpp \
+		 $(THERON)/ActorRegistry.cpp \
 		 $(THERON)/NetworkEndPoint.cpp \
 		 $(THERON)/Actor.cpp
 THERON_OBJECTS = ${THERON_SOURCE:.cpp=.o}
@@ -95,6 +109,15 @@ clean:
 
 HelloWorld : HelloWorld.o $(THERON_OBJECTS)
 	$(CC) HelloWorld.o $(ALL_MODULES) $(LDFLAGS) -o HelloWorld
+
+ScheduledHelloWorld: Scheduled.o ScheduledHelloWorld.o $(THERON_OBJECTS)
+	$(CC) Scheduled.o ScheduledHelloWorld.o $(ALL_MODULES) $(LDFLAGS) -lgmpxx -lgmp -o ScheduledHelloWorld
+
+Serialisation : Serialisation.o $(THERON_OBJECTS)
+	$(CC) Serialisation.o $(ALL_MODULES) $(LDFLAGS) -o Serialisation
+
+ZMQDistribution: ZMQDistribution.o $(ZMQ_OBJECTS) $(THERON_OBJECTS)
+	$(CC) ZMQDistribution.o $(ZMQ_OBJECTS) $(ALL_MODULES) $(LDFLAGS) $(ZMQ_LIBS) -o ZMQDistribution
 
 #
 # DEPENDENCIES

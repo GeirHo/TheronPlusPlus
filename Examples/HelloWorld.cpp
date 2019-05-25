@@ -187,19 +187,11 @@ public:
 // and then three actors, one for each part of the message.
 
 int main(int argc, char **argv) 
-{
-	// The Theron++ utility classes still maintains the backward compatibility 
-	// with Theron requiring that a Framework is created first and passed to 
-	// all actors as the first argument. As can be seen from the above actor, 
-	// a framework is not necessary with the Theron++ implementation and it will 
-	// be removed from the utility classes for the next release.
-	
-	Theron::Framework ObsoleteFramework;
-	
+{	
 	// The console print server is set to produce the output to the standard 
 	// output stream.
 	
-	Theron::ConsolePrintServer PrintServer( ObsoleteFramework, &std::cout, 
+	Theron::ConsolePrintServer PrintServer(  &std::cout, 
 																					"ConsolePrintServer" );
 	
 	// Then the three actors producing the parts of the output. They are 

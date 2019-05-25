@@ -79,9 +79,9 @@
 #include <string>
 #include <sstream>
 
-// Theron framework and extensions
+// Actor framework and extensions
 
-#include <Theron/Theron.h>
+#include "Actor.hpp"
 #include "StandardFallbackHandler.hpp"
 
 // And it is derived from the Event Handler
