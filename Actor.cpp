@@ -327,18 +327,6 @@ Theron::SerialMessage * Theron::Actor::GenericMessage::GetSerialMessagePointer()
 	return nullptr;
 }
 
-// There is one overloaded version of this for the message type
-
-template< typename MessageType >
-Theron::SerialMessage *
-Theron::Actor::Message< MessageType >::GetSerialMessagePointer()
-{
-	if constexpr ( std::is_base_of< SerialMessage, MessageType >::value )
-		return TheMessage.get();
-	else
-		return nullptr;
-}
-
 // The mailbox stores a message by simply enqueue it after locking the mutex
 // to ensure that only one thread will enqueue a message at the time. After
 // adding the message to the queue it will signal the new message condition.

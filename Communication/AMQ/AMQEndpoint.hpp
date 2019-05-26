@@ -222,6 +222,12 @@ public:
     return LayerServer;
   }
 
+  // As this function overshadows the similar function from the actor, the
+  // actor function is explicitly reused (differences in argument lists is
+  // enough for the compiler to distinguish the two variants.)
+
+  using Actor::GetAddress;
+
   // ---------------------------------------------------------------------------
   // Shut down management
   // ---------------------------------------------------------------------------

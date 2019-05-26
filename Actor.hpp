@@ -810,7 +810,13 @@ public:
 	// necessary to use std::enable_if on a template representing the two
 	// branches.
 
-	virtual SerialMessage *	GetSerialMessagePointer( void ) override;
+	virtual SerialMessage *	GetSerialMessagePointer( void ) override
+	{
+		if constexpr ( std::is_base_of< SerialMessage, MessageType >::value )
+			return TheMessage.get();
+		else
+			return nullptr;
+	}
 
 	// The virtual destructor is just a place holder
 
