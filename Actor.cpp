@@ -10,6 +10,7 @@ License: LGPL 3.0
 
 #include "Actor.hpp"							             // The Actor definition
 #include "Communication/PresentationLayer.hpp" // The Presentation Layer
+#include "Communication/SerialMessage.hpp"     // Serialized messages
 
 // In the case that this is compiled with a GNU compiler the actor's postman
 // thread will be named with the actor's name.
@@ -39,8 +40,8 @@ std::unordered_map< Theron::Actor::Identification::IDType,
 
 std::recursive_mutex Theron::Actor::Identification::InformationAccess;
 
-Theron::Actor::Address
-Theron::Actor::Identification::ThePresentationLayerServer;
+std::set< Theron::Actor::Address >
+Theron::Actor::Identification::PresentationLayerServers;
 
 // For compatibility reasons there is a global framework pointer
 
@@ -51,24 +52,28 @@ Theron::Framework * Theron::Actor::GlobalFramework = nullptr;
 // -----------------------------------------------------------------------------
 //
 // The presentation layer server can only be set by a presentation layer to
-// its address. It will throw a logical error exception if the presentation
-// layer server already exists
+// its address. An address can be constructed on a name string of a non-existing
+// actor. This actor is then taken to be a remote actor and messages to such
+// actors will be enqueued for handling by the presentation layer server.
+//
+// However, in the case there is more than one network stack the message
+// should be routed to the right network type presentation layer. The right
+// layer is known by the sending actor as it has to send a message that can
+// be correctly serialized for the remote actor. The problem is that there is
+// no way to know the right network stack from the receiver's address alone.
+//
+// This is solved by 'delegation'. The first presentation layer registering
+// will receive all messages for external actors, and it should provide
+// functionality to check the presentation layer address stored in the message
+// so that the message can be enqueued for handling by the right presentation
+// layer server. The presentation layer servers are kept in a set so that
+// if the first closes any of the other may transparently take over the message
+// handling.
 
 void Theron::Actor::Identification::SetPresentationLayerServer(
 																		const Theron::PresentationLayer * TheSever )
 {
-	if ( ThePresentationLayerServer )
-	{
-		std::ostringstream ErrorMessage;
-
-		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-							   <<  "Only one presentation server can be used!"
-								 << " Already set to " << ThePresentationLayerServer.AsString();
-
-		throw std::logic_error( ErrorMessage.str() );
-	}
-
-	ThePresentationLayerServer = TheSever->GetAddress();
+	PresentationLayerServers.insert( TheSever->GetAddress() );
 }
 
 // Creating an Identification object is subject to an initial verification that
@@ -130,7 +135,9 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 	if ( TheActor != nullptr )
   {
 		if ((TheActorID->ActorPointer == nullptr) ||
-				(TheActorID->ActorPointer == ThePresentationLayerServer->ActorPointer) )
+				(( !PresentationLayerServers.empty() ) &&
+				 ( TheActorID->ActorPointer ==
+					   PresentationLayerServers.begin()->get()->ActorPointer) ) )
 			TheActorID->ActorPointer = TheActor;
 		else if( TheActor != TheActorID->ActorPointer )
 		{
@@ -145,8 +152,9 @@ Theron::Actor::Address Theron::Actor::Identification::Create(
 		  throw std::logic_error( ErrorMessage.str() );
 		}
 	}
-	else if ( ThePresentationLayerServer->ActorPointer != nullptr )
-		TheActorID->ActorPointer = ThePresentationLayerServer->ActorPointer;
+	else if ( !PresentationLayerServers.empty() )
+		TheActorID->ActorPointer =
+			PresentationLayerServers.begin()->get()->ActorPointer;
 
 	// At this point the Identification pointer is correctly set, and the
 	// address constructed from its shared pointer can be returned.
@@ -232,20 +240,27 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 //
 // However, if the actor closing is currently registered as the Presentation
 // Layer, it could have several addresses pointing at it, and it must therefore
-// clear multiple pointers.
+// reset these pointers. If there are more presentation layers, the pointers
+// should be assigned to an existing layer, and if there are no more layers,
+// the pointer should be set to the null pointer.
 
 void Theron::Actor::Identification::ClearActor(
 																	const Theron::Actor::Address & ActorAddress )
 {
 	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	if ( ActorAddress == ThePresentationLayerServer )
+	if ( ActorAddress == *PresentationLayerServers.begin() )
   {
+		Actor * NewHandler = nullptr;
+
+		PresentationLayerServers.erase( ActorAddress );
+
+		if ( !PresentationLayerServers.empty() )
+			NewHandler = PresentationLayerServers.begin()->get()->ActorPointer;
+
 		for ( auto & TheID : ActorsByID )
 			if ( TheID.second->ActorPointer == ActorAddress->ActorPointer )
-				TheID.second->ActorPointer = nullptr;
-
-		ThePresentationLayerServer = Address::Null();
+				TheID.second->ActorPointer = NewHandler;
 	}
 	else
 		ActorAddress->ActorPointer = nullptr;
@@ -256,17 +271,13 @@ void Theron::Actor::Identification::ClearActor(
 // -----------------------------------------------------------------------------
 //
 // A small check to see if the Identification object can be used for routing
-// messages. Note that the default validity check on addresses cannot be used
-// for the Presentation Layer Server Pointer because this check will call the
-// Allow Routing function which would lead to an infinite recursion. Instead
-// the address is compared against the Null address to verify that the pointer
-// is properly set.
+// messages. An identifier is valid if it has a destination actor or if there
+// is a presentation layer to handle remote actors only defined by name.
 
 bool Theron::Actor::Identification::AllowRouting( void )
 {
 	return ( ActorPointer != nullptr ) ||
-				 ( ( ThePresentationLayerServer != Address::Null() ) &&
-				   ( ThePresentationLayerServer->ActorPointer != nullptr ) ) ;
+				 ( !PresentationLayerServers.empty() ) ;
 }
 
 // -----------------------------------------------------------------------------
@@ -307,6 +318,26 @@ Theron::Actor::Identification::~Identification( void )
  Message handling
 
 =============================================================================*/
+//
+// The function to get a serial message could not be defined in the header as
+// the serial message was forward declared.
+
+Theron::SerialMessage * Theron::Actor::GenericMessage::GetSerialMessagePointer()
+{
+	return nullptr;
+}
+
+// There is one overloaded version of this for the message type
+
+template< typename MessageType >
+Theron::SerialMessage *
+Theron::Actor::Message< MessageType >::GetSerialMessagePointer()
+{
+	if constexpr ( std::is_base_of< SerialMessage, MessageType >::value )
+		return TheMessage.get();
+	else
+		return nullptr;
+}
 
 // The mailbox stores a message by simply enqueue it after locking the mutex
 // to ensure that only one thread will enqueue a message at the time. After

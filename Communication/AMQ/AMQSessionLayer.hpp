@@ -1,4 +1,3 @@
-
 /*==============================================================================
 Active Message Queue Session Layer
 
@@ -36,12 +35,12 @@ topic.
 
 References:
 
-Author and Copyright: Geir Horn, 2017-2019
+Author and Copyright: Geir Horn, University of Oslo, 2017-2019
 License: LGPL 3.0
 ==============================================================================*/
 
-#ifndef THERON_ACTIVEMQ_CLIENT
-#define THERON_ACTIVEMQ_CLIENT
+#ifndef THERON_ACTIVEMQ_SESSION_LAYER
+#define THERON_ACTIVEMQ_SESSION_LAYER
 
 // Standard headers
 
@@ -95,6 +94,21 @@ class SessionLayer
   virtual public StandardFallbackHandler,
 	virtual public Theron::SessionLayer< TextMessage >
 {
+	// ---------------------------------------------------------------------------
+	// Server address management
+	// ---------------------------------------------------------------------------
+	//
+  // The session layer communicates with the network layer and the presentation
+	// layer and needs the addresses for these servers, which can be obtained
+	// from the endpoint.
+
+	virtual Address NetworkLayerAddress     ( void ) const final;
+	virtual Address PresentationLayerAddress( void ) const final;
+
+	// ---------------------------------------------------------------------------
+	// Subscription management
+	// ---------------------------------------------------------------------------
+	//
 	// The topics subscribed to by at least one actor on this endpoint are
 	// stored in an unordered map so that they can easily be looked up. As
 	// there can be many subscribers per topic, these are kept in a set of
@@ -106,10 +120,6 @@ private:
 	std::unordered_map< std::string, std::unordered_set< Address > >
 	Subscriptions;
 
-	// ---------------------------------------------------------------------------
-	// Subscription management messages
-	// ---------------------------------------------------------------------------
-	//
 	// Actors on this endpoint subscribes to topics by using the messages
 	// defined in the network layer. However, to ensure that these are seen as
 	// session layer defined messages by the actors, they are private in the
@@ -189,4 +199,4 @@ public:
 
 
 }      // Name space ActiveMQ
-#endif // THERON_ACTIVEMQ_CLIENT
+#endif // THERON_ACTIVEMQ_SESSION_LAYER

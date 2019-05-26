@@ -36,6 +36,7 @@ License: LGPL 3.0
 #include <mutex>						  // To protect the queue
 #include <utility>						// Pairs
 #include <unordered_map>			// To map actor names to actors
+#include <set>                // Set of Presentation Layer addresses
 #include <functional>					// For defining handler functions
 #include <list>								// The list of message handlers
 #include <algorithm>					// Various container related utilities
@@ -45,8 +46,6 @@ License: LGPL 3.0
 #include <stdexcept>				  // To throw standard exceptions
 #include <sstream>						// To provide nice exception messages
 #include <type_traits>				// For meta-programming
-
-#include "Communication/SerialMessage.hpp"  // Messages that can be serialised
 
 #include <iostream>					  // For debugging
 
@@ -84,6 +83,11 @@ class EndPoint;
 // remote network endpoints. This actor type must be forward declared.
 
 class PresentationLayer;
+
+// Finally the serial message must be forward declared to avoid circular
+// inclusion of headers.
+
+class SerialMessage;
 
 // In this implementation everything is an actor as there is no compelling
 // reason for the other Theron classes.
@@ -255,11 +259,11 @@ private:
 
 	static std::recursive_mutex InformationAccess;
 
-  // An address is stored for the presentation layer so that messages for
-	// remote actors can be routed to the presentation layer for serialisation
-	// and remote transmission.
+  // The addresses of the presentation layers are stored in a set to ensure
+	// that if there is a presentation layer available, it will be able to
+	// handle messages, and to be resilient against duplicate registrations.
 
-	static Address ThePresentationLayerServer;
+	static std::set< Address > PresentationLayerServers;
 
 	// The constructor is private and takes a name string only, and assigns a
 	// unique ID to the Identification object. The reason for keeping it private
@@ -640,10 +644,7 @@ public:
 	// to the serial message. This is overloaded by the typed message class below
 	// if the message type does support serialisation.
 
-	virtual SerialMessage * GetSerialMessagePointer( void )
-	{
-		return nullptr;
-	}
+	virtual SerialMessage * GetSerialMessagePointer( void );
 
 	// It is important to make this class polymorphic by having at least one
 	// virtual method, and it must in order to ensure proper destruction of the
@@ -809,13 +810,7 @@ public:
 	// necessary to use std::enable_if on a template representing the two
 	// branches.
 
-	virtual SerialMessage *	GetSerialMessagePointer( void )
-	{
-		if constexpr ( std::is_base_of< SerialMessage, MessageType >::value )
-			return TheMessage.get();
-		else
-			return nullptr;
-	}
+	virtual SerialMessage *	GetSerialMessagePointer( void ) override;
 
 	// The virtual destructor is just a place holder
 
@@ -844,6 +839,32 @@ protected:
 
 virtual
 bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage );
+
+// There is a utility variant of this function that can be used in the rare
+// cases where an actor operates as a "man in the middle" receiving messages
+// for other actors and has no message handler to manage the messages in the
+// correct way.
+
+inline bool
+EnqueueMessage(const Address TheReceiver,
+							 const std::shared_ptr<GenericMessage> & TheMessage )
+{
+	if ( TheReceiver )
+		Identification::GetActor( TheReceiver )->EnqueueMessage( TheMessage );
+  else
+	{
+    std::ostringstream ErrorMessage;
+
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ":"
+		             << "Delegated message enqueue: The address of the receiving "
+								 << "actor must be a legal address";
+
+	  throw std::invalid_argument( ErrorMessage.str() );
+  }
+
+  return true;
+}
+
 
 // There is a callback function invoked by the Postman when a new message has
 // been processed. It is virtual in order to allow derived classes to be

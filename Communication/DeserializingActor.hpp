@@ -285,15 +285,24 @@ protected:
 	inline bool HasNetwork( void )
 	{ return NetworkConnected; }
 
+	// The de-serializing actor has to sign in with the Session Layer server,
+	// and sign out of the session layer. The standard way would be to set up a
+	// virtual function to return the session layer of the used transport layer
+	// protocol. However, this will not be initialized when the de-serializing
+	// actor starts, and the virtual function table is gone when the class
+	// is destructed. The solution is therefore to store the session layer
+	// address upon construction.
+
+private:
+
+	Address SessionLayerAddress;
+
 	// Then the actual handler for the shut down function will simply clear the
 	// connected flag and ask the session layer to disconnect the actor.
 
 	virtual void Stop( const Network::ShutDown & StopMessage,
 										 const Address Sender )
 	{
-		Address SessionLayerAddress(
-						Network::GetAddress( Network::Layer::Session ) );
-
 		if ( SessionLayerAddress )
 			Send( SessionLayerMessages::RemoveActorCommand(), SessionLayerAddress );
 
@@ -330,13 +339,8 @@ protected:
 	// is protected to ensure that only derived classes can use it, and that
 	// it is a concious decision by the application developer to use the method.
 
-private:
-
 	inline bool RegisterWithSessionLayer( void )
 	{
-		Address SessionLayerAddress(
-						Network::GetAddress( Network::Layer::Session ) );
-
 		if ( SessionLayerAddress )
 		{
 			Send( SessionLayerMessages::RegisterActorCommand(), SessionLayerAddress	);
@@ -345,6 +349,21 @@ private:
 		}
 		else
 			return false;
+	}
+
+	// To support these scenarios where late registration must be allowed, there
+	// is a helper function setting the session layer server address. It makes
+	// sure to de-register if the session layer has already been set.
+
+protected:
+
+	inline void SetSessionLayerAddress( const Address NewAddress )
+	{
+		if( SessionLayerAddress )
+			Stop( Network::ShutDown(), Address::Null() );
+
+		SessionLayerAddress = NewAddress;
+		RegisterWithSessionLayer();
 	}
 
   // The constructor is defined in the code file because it will register the
@@ -358,23 +377,18 @@ private:
 
 public:
 
-  DeserializingActor( const std::string & name = std::string() )
+  DeserializingActor( const std::string & name = std::string(),
+											const Address TheSessionLayer = Address::Null() )
   : Actor( name ),
     StandardFallbackHandler( GetAddress().AsString() ),
-		NetworkConnected( false )
+		NetworkConnected( false ), SessionLayerAddress( TheSessionLayer )
   {
     RegisterHandler( this, &DeserializingActor::SerialialMessageHandler );
 		RegisterHandler( this, &DeserializingActor::Stop );
 
-		RegisterWithSessionLayer();
+		if ( SessionLayerAddress )
+			RegisterWithSessionLayer();
   }
-
-  // Backward compatibility constructor
-
-  DeserializingActor( Framework & TheFramework,
-											const std::string name = std::string() )
-	: DeserializingActor( name )
-	{	}
 
   // And we need a virtual destructor to ensure that everything will be
   // cleaned correctly. It should also inform the session layer actor
@@ -384,13 +398,7 @@ public:
   virtual ~DeserializingActor()
   {
 		if ( NetworkConnected )
-		{
-			Address SessionLayerAddress(
-							Network::GetAddress( Network::Layer::Session ) );
-
-			if ( SessionLayerAddress )
-				Send( SessionLayerMessages::RemoveActorCommand(), SessionLayerAddress );
-		}
+			Stop( Network::ShutDown(), Address::Null() );
 	}
 };
 

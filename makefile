@@ -128,7 +128,7 @@ COMMUNICATION_HEADERS = DeserializingActor.hpp LinkMessage.hpp \
                         NetworkEndpoint.hpp NetworkLayer.hpp \
                         PresentationLayer.hpp SerialMessage.hpp \
                         SessionLayer.hpp
-COMMUNICATION_SOURCE  = NetworkEndpoint.cpp
+COMMUNICATION_SOURCE  =
 COMMUNICATION_OBJECTS = ${COMMUNICATION_SOURCE:.cpp=.o}
 
 # The command to build the object files for the communication files is
@@ -150,9 +150,10 @@ $(OBJECTS_DIR)/%.o : $(COMMUNICATION_DIR)/%.cpp
 # (message broker)
 
 AMQ_DIR     = $(COMMUNICATION_DIR)/AMQ
-AMQ_HEADERS = AMQEndPoint.hpp AMQMessages.hpp AMQNetworkLayer.hpp \
-              AMQSessionLayer.hpp
-AMQ_SOURCE  = AMQMessages.cpp AMQNetworkLayer.cpp AMQSessionLayer.cpp
+AMQ_HEADERS = AMQEndpoint.hpp AMQMessages.hpp AMQNetworkLayer.hpp \
+              AMQPresentationLayer.hpp AMQSessionLayer.hpp
+AMQ_SOURCE  = AMQEndpoint.cpp AMQMessages.cpp AMQNetworkLayer.cpp \
+              AMQPresentationLayer.cpp AMQSessionLayer.cpp
 AMQ_OBJECTS = ${AMQ_SOURCE:.cpp=.o}
 
 # The involved AMQ libraries are in non-standard locations and the include

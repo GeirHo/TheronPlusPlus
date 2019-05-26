@@ -25,6 +25,7 @@ License: LGPL 3.0
 #include "Communication/NetworkEndpoint.hpp"
 
 #include "Communication/AMQ/AMQNetworkLayer.hpp"
+#include "Communication/AMQ/AMQEndpoint.hpp"
 
 /*==============================================================================
 
@@ -121,7 +122,8 @@ void Theron::ActiveMQ::NetworkLayer::CommandHandler(
 
 				 if ( !ActorName.empty() )
 					 Send( ResolutionRequest( Address( ActorName ) ),
-								 Theron::Network::GetAddress(Theron::Network::Layer::Session) );
+								 Theron::ActiveMQ::Network::GetAddress(
+									 Theron::Network::Layer::Session) );
 			 }
 			 break;
 			case Command::DiscoveryResponse :
@@ -130,8 +132,8 @@ void Theron::ActiveMQ::NetworkLayer::CommandHandler(
 				  GlobalAddress( TheTextMessage->getStringProperty( "GlobalAddress" ) ),
 					Address( TheTextMessage->getStringProperty( "ActorName" ) ) );
 
-				 Send( ForTheRecord,
-							 Theron::Network::GetAddress( Theron::Network::Layer::Session ) );
+				 Send( ForTheRecord, Theron::ActiveMQ::Network::GetAddress(
+														 Theron::Network::Layer::Session ) );
 			 }
 			 break;
 			case Command::ActorRemoved :
@@ -139,8 +141,8 @@ void Theron::ActiveMQ::NetworkLayer::CommandHandler(
 				 RemoveActor TheMessage(
 				 GlobalAddress( TheTextMessage->getStringProperty("GlobalAddress") ) );
 
-				 Send( TheMessage,
-							 Theron::Network::GetAddress( Theron::Network::Layer::Session ) );
+				 Send( TheMessage, Theron::ActiveMQ::Network::GetAddress(
+													 Theron::Network::Layer::Session ) );
 			}
 			case Command::EndpointShutDown :
 		  {
@@ -209,7 +211,8 @@ void Theron::ActiveMQ::NetworkLayer::InboundMessage(
  const cms::Message * TheMessage )
 {
   Send( Theron::ActiveMQ::TextMessage( TheMessage ),
-			  Theron::Network::GetAddress( Theron::Network::Layer::Session )	);
+			  Theron::ActiveMQ::Network::GetAddress(
+				  Theron::Network::Layer::Session )	);
 }
 
 // Sending messages converts from the text message to the CMS text message
@@ -398,7 +401,8 @@ void Theron::ActiveMQ::NetworkLayer::SubscriptionHandler(
 	ReceivedMessage( TextMessage::Validate( TheMessage ) );
 
 	Send( TextMessage( Sender, Receiver, ReceivedMessage->getText() ),
-				Theron::Network::GetAddress(Theron::Network::Layer::Session)  );
+				Theron::ActiveMQ::Network::GetAddress(
+					Theron::Network::Layer::Session )  );
 }
 
 /*==============================================================================
@@ -527,7 +531,7 @@ Theron::ActiveMQ::NetworkLayer::~NetworkLayer()
 	if ( ! AMQConnection->isClosed() )
 		Stop( Network::ShutDown(), Theron::Address::Null() );
 
-	// Clean up the local classes dynamically allocated
+	// Clean up the local communication classes dynamically allocated
 
 	Producers.clear();
 	Subscriptions.clear();

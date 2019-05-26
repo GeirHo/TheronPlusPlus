@@ -8,6 +8,27 @@ License: LGPL 3.0
 ==============================================================================*/
 
 #include "Communication/AMQ/AMQSessionLayer.hpp"
+#include "Communication/AMQ/AMQEndpoint.hpp"
+
+/*==============================================================================
+
+ Network layer server addresses
+
+==============================================================================*/
+
+Theron::Actor::Address
+Theron::ActiveMQ::SessionLayer::NetworkLayerAddress() const
+{
+	return
+	Theron::ActiveMQ::Network::GetAddress( Theron::Network::Layer::Network );
+}
+
+Theron::Actor::Address
+Theron::ActiveMQ::SessionLayer::PresentationLayerAddress() const
+{
+	return
+	Theron::ActiveMQ::Network::GetAddress( Theron::Network::Layer::Presentation );
+}
 
 /*==============================================================================
 
@@ -41,7 +62,7 @@ void Theron::ActiveMQ::SessionLayer::InboundMessage(
 
 			for ( const Address & TheSubscriber : Subscribers->second )
 				Send( RemoteMessage( Sender, TheSubscriber, ThePayload ),
-					    Network::GetAddress( Network::Layer::Presentation ) );
+					    PresentationLayerAddress() );
 		}
 	}
 	else
@@ -66,7 +87,7 @@ void Theron::ActiveMQ::SessionLayer::NewSubscription(
 	// the network layer.
 
 	if ( NovelSubscription.second == true )
-		Send( Request, Network::GetAddress( Network::Layer::Network ) );
+		Send( Request, NetworkLayerAddress() );
 }
 
 // Removing the subscription necessitates first to find if there is a
@@ -87,7 +108,7 @@ void Theron::ActiveMQ::SessionLayer::RemoveSubscription(
 
 		if ( Subscribers->second.empty() )
 		{
-			Send( Request, Network::GetAddress( Network::Layer::Network ) );
+			Send( Request, NetworkLayerAddress() );
 			Subscriptions.erase( Subscribers );
 		}
 	}
@@ -103,7 +124,7 @@ void Theron::ActiveMQ::SessionLayer::Stop(
 	for ( auto & ActiveSubscription : Subscriptions )
   {
 		CancelSubscription Cancellation( ActiveSubscription.first );
-		Send( Cancellation, Network::GetAddress( Network::Layer::Network ) );
+		Send( Cancellation, NetworkLayerAddress() );
 	}
 
 	Subscriptions.clear();
@@ -136,7 +157,6 @@ Theron::ActiveMQ::SessionLayer::SessionLayer(
 Theron::ActiveMQ::SessionLayer::~SessionLayer()
 {
 	for ( auto & Subscription : Subscriptions )
-		Send( CancelSubscription( Subscription.first ),
-					Network::GetAddress( Network::Layer::Network ) );
+		Send( CancelSubscription( Subscription.first ),	NetworkLayerAddress() );
 }
 

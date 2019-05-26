@@ -119,6 +119,7 @@ License: LGPL 3.0
 // Standard headers
 
 #include <string>     // Standard strings
+#include <memory>     // Smart pointers
 
 // Theron++ Actor Framework headers
 
@@ -135,20 +136,10 @@ License: LGPL 3.0
 #include "Communication/AMQ/AMQMessages.hpp"
 #include "Communication/AMQ/AMQNetworkLayer.hpp"
 #include "Communication/AMQ/AMQSessionLayer.hpp"
+#include "Communication/AMQ/AMQPresentationLayer.hpp"
 
 namespace Theron::ActiveMQ
 {
-/*==============================================================================
-
- Presentation layer
-
-==============================================================================*/
-//
-// The standard version of the presentation layer can be used with no
-// modification, and so it is simply defined as an alias here.
-
-using PresentationLayer = Theron::PresentationLayer;
-
 /*==============================================================================
 
  AMQ Network
@@ -163,26 +154,86 @@ class Network
   virtual public StandardFallbackHandler,
   public Theron::Network
 {
+  // ---------------------------------------------------------------------------
+  // Storing layer servers
+  // ---------------------------------------------------------------------------
+	//
+	// This AMQ Network class is final class and it should not be further
+	// inherited. The network layer actors can therefore be direct data member
+	// of this class.
+
+private:
+
+	ActiveMQ::NetworkLayer      NetworkServer;
+	ActiveMQ::SessionLayer      SessionServer;
+	ActiveMQ::PresentationLayer PresentationServer;
+
+  // ---------------------------------------------------------------------------
+  // Address access
+  // ---------------------------------------------------------------------------
+	//
+	// The addresses of these layer servers are returned by virtual functions
+	// that are so simple that they can be defined in-line
+
 protected:
 
-	// To avoid storing the network endpoint name, the AMQ server IP, and the
-	// server port in the class waiting for the network endpoint to call the
-	// functions to create the layers, the layers are directly created by the
-	// constructor and the create functions are left empty.
+	virtual Address NetworkLayerAddress( void ) const final
+	{ return NetworkServer.GetAddress(); }
 
-	virtual void CreateNetworkLayer( void ) override
-	{	}
+	virtual Address SessionLayerAddress( void ) const final
+	{ return SessionServer.GetAddress(); }
 
-	virtual void CreateSessionLayer( void ) override
-	{ }
+	virtual Address PresentationLayerAddress( void ) const final
+	{ return PresentationServer.GetAddress(); }
 
-	virtual void CreatePresentationLayer( void ) override
-	{ }
+	// In order to provide access to the server addresses without having a pointer
+	// to this class, a static pointer is defined and used by a static function
+	// to call the right address function.
 
+private:
+
+	static Network * AMQNetwork;
+
+	// Then there is a public function to obtain the addresses based on the
+	// layer types defined in the standard network class. One could directly
+	// return the value, however some compilers will issue a warning that
+	// there is no return from the function, and the address is therefore
+	// stored temporarily in the switch statement.
+
+public:
+
+	inline static Address GetAddress( Theron::Network::Layer Role )
+	{
+		Address LayerServer;
+
+	  switch( Role )
+	  {
+			case Theron::Network::Layer::Network:
+	      LayerServer = AMQNetwork->NetworkLayerAddress();
+	      break;
+			case Theron::Network::Layer::Session:
+	      LayerServer = AMQNetwork->SessionLayerAddress();
+	      break;
+			case Theron::Network::Layer::Presentation:
+	     LayerServer = AMQNetwork->PresentationLayerAddress();
+	     break;
+    }
+
+    return LayerServer;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Shut down management
+  // ---------------------------------------------------------------------------
+	//
 	// There is no special shut down management for AMQ networks. It is difficult
 	// to see how it can be implemented since first of all the local actors on
 	// this endpoint using the AMQ interface must be stopped.
 
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
+	//
 	// The constructor must have an endpoint name, and it should be noted that
 	// This is the external name to be used towards the remote AMQ endpoints
 	// giving actor addresses like <actor name>@<endpoint name>. The endpoint
@@ -204,23 +255,24 @@ protected:
 	// the constructor is the optional endpoint prefix to be added to these
 	// server names and to the network endpoint actor.
 
+protected:
+
 	Network( const std::string & EndpointName,
 					 const std::string & AMQServerIP,
 					 const std::string & AMQServerPort = "61616",
 					 const std::string & SessionServer = "SessionLayer",
 					 const std::string & PresentationServer = "PresentationLayer",
-					 const std::string & AMQPrefix = "AMQ:" )
-	: Actor( EndpointName ),
-	  StandardFallbackHandler( Actor::GetAddress().AsString() ),
-	  Theron::Network( Actor::GetAddress().AsString() )
-	{
-		CreateServer< Layer::Network, NetworkLayer >(
-			AMQPrefix + EndpointName, AMQServerIP, AMQServerPort );
-		CreateServer< Layer::Session, SessionLayer >(
-			AMQPrefix + SessionServer );
-		CreateServer< Layer::Presentation, PresentationLayer >(
-			AMQPrefix + PresentationServer );
-	}
+					 const std::string & AMQPrefix = "AMQ:" );
+
+	// The default constructor and the copy constructor are deleted
+
+	Network( void ) = delete;
+	Network( const Network & Other ) = delete;
+
+	// The destructor is virtual to ensure proper closing of base classes
+
+	virtual ~Network()
+	{}
 };
 
 /*==============================================================================
