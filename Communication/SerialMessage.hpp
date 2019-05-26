@@ -58,6 +58,8 @@
 #include <type_traits>  // For the true type
 #include <string>       // For standard strings
 
+#include "Actor.hpp"    // For Theron++ addresses
+
 namespace Theron
 {
 
@@ -82,6 +84,15 @@ public:
 protected:
 
   virtual bool Deserialize( const Payload & TheMessage ) = 0;
+
+	// A particular protocol is often imposed by a transmission layer and
+	// implemented by the serializing function. However, this implies that only
+	// the Presentation Layer server for the particular protocol can handle the
+	// message. To enable correct handling in the case there are multiple
+	// transmission protocols simultaneously used by an application, each serial
+	// message must provide a way to obtain the right presentation layer server.
+
+	virtual Address PresentationLayerAddress( void ) const = 0;
 
 	// These functions should be callable from the presentation layer and from
 	// actors that needs to de-serialise incoming messages.

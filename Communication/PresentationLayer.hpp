@@ -88,7 +88,17 @@ namespace Theron
 class PresentationLayer : virtual public Actor,
 													virtual public StandardFallbackHandler
 {
-private:
+  // --------------------------------------------------------------------------
+  // Session Layer Address
+  // --------------------------------------------------------------------------
+  //
+	// The presentation layer will forward messages to the session layer, and
+	// since it is technology dependent how this is implemented, its address is
+	// expected to be defined by the technology dependent derived class.
+
+protected:
+
+	virtual Address SessionLayerAddress( void ) const = 0;
 
   // --------------------------------------------------------------------------
   // Shut down management
@@ -98,6 +108,8 @@ private:
 	// blocked from sending more messages to the remote actors. This is done by
 	// a shut down message from the session layer, that sets a flag that
 	// prevents further messages.
+
+private:
 
 	bool ForwardOutboundMessages;
 
@@ -190,8 +202,7 @@ private:
 	// The implementation is therefore based on the Run Time Type Information
 	// (RTTI) and the ability to convert the generic message to a message of the
 	// expected type. Invalid argument exceptions will be created if the message
-	// given is not of the expected type. Note that the message will not be
-	// enqueued for processing with this actor.
+	// given is not of the expected type.
 
 protected:
 
@@ -229,15 +240,35 @@ protected:
 
 			SerialMessage * OutboundMessage( TheMessage->GetSerialMessagePointer() );
 
-		  // A valid message will in this case be forwarded as a remote message
-		  // to the Session Layer server.
+		  // The message will simply be ignored if the network stack is shutting
+			// down and the forward flag has been cleared.
 
 			if ( ForwardOutboundMessages )
 		  {
 				if ( OutboundMessage != nullptr )
-					Send( RemoteMessage( TheMessage->From, TheMessage->To,
-															 OutboundMessage->Serialize() ),
-								Network::GetAddress( Network::Layer::Session ) );
+				{
+					// At this point there are two cases to consider. The message could
+					// have this presentation layer as its presentation layer, which
+					// means that it supports the network protocol served by this
+					// presentation layer, and it can be readily forwarded to the
+					// session layer as a remote message.
+
+					Address HandlingLayer( OutboundMessage->PresentationLayerAddress() );
+
+					if ( HandlingLayer == GetAddress() )
+						Send( RemoteMessage( TheMessage->From, TheMessage->To,
+																 OutboundMessage->Serialize() ),
+									SessionLayerAddress() );
+					else
+				  {
+						// This was the first of multiple presentation layer servers
+						// and it has been given the responsibility to forward messages
+						// to the other presentation layers. It will do this via the
+						// delegated Enqueue function.
+
+						Actor::EnqueueMessage( HandlingLayer, TheMessage );
+					}
+				}
 				else
 				{
 					std::ostringstream ErrorMessage;
@@ -267,12 +298,7 @@ public:
   // --------------------------------------------------------------------------
 	//
 	// The constructor registers the handler for the incoming messages and the
-  // default handler. The Session Layer server address is initialised with the
-  // default address of the Session Layer. This is possible since a Theron
-  // Address does not check that the actor exists when it is constructed on
-  // a string. The check is only done when the fist message is sent to this
-  // address. Hence, as long as the default names are used for the actors,
-  // then no further initialisation is needed.
+  // default handler.
 
   PresentationLayer( const std::string & ServerName = "PresentationLayer"  )
   : Actor( ServerName ),
@@ -282,15 +308,6 @@ public:
 		RegisterHandler( this, &PresentationLayer::Stop );
 		Actor::SetPresentationLayerServer( this );
   }
-
-  // The compatibility constructor accepts a pointer to the framework which
-  // in classical Theron should be the same as the network end point. It just
-  // delegates to the above constructor and forgets about the framework pointer.
-
-  PresentationLayer( Framework * TheHost,
-								     const std::string ServerName = "PresentationLayer"  )
-  : PresentationLayer( ServerName )
-  { }
 };
 
 } 			// End of name space Theron

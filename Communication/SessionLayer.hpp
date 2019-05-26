@@ -6,15 +6,15 @@
   ensures the bidirectional address transfer between the external address space
   of the network and the local actor address space so that incoming messages
   can be delivered to the right actor, and so that outgoing messages can reach
-  the right actor on the right remote EndPoint. Important: It is assumed that
+  the right actor on the right remote endpoint. Important: It is assumed that
   the actor addresses are all unique across all nodes, which means that there
-  cannot be two actors on two EndPoints with the same name.
+  cannot be two actors on two endpoints with the same name.
 
-  The actor is a template on the ExternalAddress to hold the network wide
+  The actor is a template on the External Address to hold the network wide
   address of an actor. It creates a link message consisting of the external
   sender address, the receiver address and the protocol conforming datagram.
   Different protocols can be implemented by overloading the datagram encoder
-  function that maps a serialised message to an ExternalMessage.
+  function that maps a serialised message to an External Message.
 
   If a packet is targeted to an external actor whose address is unknown, an
   address resolver actor is created for this address. Further messages to the
@@ -285,6 +285,19 @@ public:
 	using MessageType = ExternalMessage;
 
   // ---------------------------------------------------------------------------
+  // Network and presentation layer addresses
+  // ---------------------------------------------------------------------------
+  //
+	// The Session layer will interact with both the Network Layer of this
+	// endpoint and the Presentation Layer. However their addresses will depend
+	// on the transport technology and protocol used by a particular endpoint,
+	// and the address functions are therefore virtual to be completed by a
+	// particular technology implementation inheriting the session layer.
+
+	virtual Address NetworkLayerAddress     ( void ) const = 0;
+	virtual Address PresentationLayerAddress( void ) const = 0;
+
+  // ---------------------------------------------------------------------------
   // Address map
   // ---------------------------------------------------------------------------
   //
@@ -427,7 +440,7 @@ protected:
 	virtual void Stop( const Network::ShutDown & StopMessage,
 										 const Address Sender )
 	{
-		Send( StopMessage, Network::GetAddress( Network::Layer::Presentation ) );
+		Send( StopMessage, PresentationLayerAddress() );
 
 		for ( auto & AnActorRecord : KnownActors.right )
 			if ( AnActorRecord.first.IsLocalActor() )
@@ -480,7 +493,7 @@ private:
 		if ( NetworkConnected )
 			Send(
 			typename NetworkLayer<ExternalMessage>::ResolutionRequest( LocalActor ),
-			Network::GetAddress( Network::Layer::Network	) 	);
+			NetworkLayerAddress() 	);
 		else
 			Send( Network::ShutDown(), LocalActor );
 	}
@@ -533,8 +546,7 @@ private:
 			// Then the external messages cached for this receiver will be sent
 			// to the network layer server
 
-			Address TheNetworkLayer( Network::GetAddress(
-														   Network::Layer::Network ) );
+			Address TheNetworkLayer( NetworkLayerAddress() );
 			auto Message = Range.first;
 
 			while ( Message != Range.second )
@@ -586,7 +598,7 @@ private:
 
 			Send( typename NetworkLayer<ExternalMessage>::RemoveActor(
 										 AddressRecord->second ),
-				    Network::GetAddress( Network::Layer::Network ) );
+				    NetworkLayerAddress() );
 
 			// The actor is then forgotten locally
 
@@ -607,8 +619,7 @@ private:
 				for ( auto & AnActorRecord : KnownActors.right )
 					if ( AnActorRecord.first.IsLocalActor() )
 				  {
-						Send( Network::ShutDown(),
-								  Network::GetAddress( Network::Layer::Network ) );
+						Send( Network::ShutDown(), NetworkLayerAddress() );
 						break;
 					}
 			}
@@ -727,8 +738,7 @@ protected:
 
 			Send( RemoteMessage( RemoteActor,	ReceiverRecord->second,
 													 TheMessage.GetPayload()  ),
-						Network::GetAddress( Network::Layer::Presentation )
-					);
+						PresentationLayerAddress() );
 		}
 	}
 
@@ -775,7 +785,7 @@ private:
 		if ( TheReceiver != KnownActors.right.end() )
 			Send( ExternalMessage( SenderAddress, TheReceiver->second,
 														 TheMessage.GetPayload() ),
-						Network::GetAddress( Network::Layer::Network ) );
+						NetworkLayerAddress() );
 		else
 		{
 			// The external address of the receiver is currently not known, and it
@@ -785,7 +795,7 @@ private:
 			if ( MessageCache.find( TheMessage.GetReceiver() ) == MessageCache.end() )
 				Send( typename NetworkLayer< ExternalMessage >::ResolutionRequest(
 							  TheMessage.GetReceiver() ),
-				      Network::GetAddress( Network::Layer::Network	)	);
+				      NetworkLayerAddress()	);
 
 			// Then the message is cached for delayed sending once the response comes
 			// back from the network layer. In this case the receiver field is left

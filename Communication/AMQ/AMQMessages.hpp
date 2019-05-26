@@ -57,6 +57,7 @@ License: LGPL 3.0
 
 #include "Actor.hpp"
 #include "Communication/LinkMessage.hpp"
+#include "Communication/SerialMessage.hpp"
 
 namespace Theron::ActiveMQ
 {
@@ -716,6 +717,30 @@ public:
 
 	virtual ~TextMessage( void )
 	{ }
+};
+
+/*==============================================================================
+
+ Serial messages
+
+==============================================================================*/
+//
+// Messages that are to be sent externally must be derived from the serial
+// message type, and for the AMQ layer this simply defines the definition for
+// the handling Presentation Layer which must be the AMQ presentation layer
+// server. Note that to avoid the need of another source file implementing only
+// this virtual function, it has been implemented in the AMQ Endpoint source
+// file.
+
+class SerialMessage : public Theron::SerialMessage
+{
+protected:
+
+	virtual Address PresentationLayerAddress( void ) const final;
+
+public:
+
+	SerialMessage( void ) = default;
 };
 
 /*==============================================================================
