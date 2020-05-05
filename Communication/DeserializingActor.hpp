@@ -134,9 +134,6 @@ private:
 	template< class MessageType >
 	void RegisterMessageType( void )
 	{
-		static_assert( std::is_default_constructible< MessageType >::value,
-							   "A serial message must have a default constructor" );
-
 		// The function to construct this message is defined as a lambda passed
 		// and stored in the map for this type of messages.
 
@@ -240,7 +237,12 @@ protected:
 																								const Address From ) )
 	{
 		if constexpr ( std::is_base_of<SerialMessage, MessageType>::value )
+		{
+			static_assert( std::is_default_constructible< MessageType >::value,
+							       "A serial message must have a default constructor" );
+
 			RegisterMessageType< MessageType >();
+		}
 
 		return Actor::RegisterHandler( TheActor, TheHandler );
 	}
