@@ -202,8 +202,8 @@ protected:
 	// from a remote end point. Some may take such a message as a shut down signal
 	// to this local actor system, and some may just ignore it and accept that
 	// the remote system is gone. It is therefore recommended that the Network
-	// Layer server sends the shut down message to the Network Endpoint actor
-	// and the function handling this message can be overloaded to do more
+	// Layer server sends the external shut down message to the Network Endpoint
+	// actor and the function handling this message can be overloaded to do more
 	// specific handling.
 
 public:

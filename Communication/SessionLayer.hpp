@@ -368,7 +368,9 @@ protected:
 
 private:
 
-	std::unordered_multimap< Address, ExternalMessage > MessageCache;
+	using MessageStore = std::unordered_multimap< Address, ExternalMessage >;
+
+  MessageStore MessageCache;
 
   // --------------------------------------------------------------------------
   // New peer notification subscriptions
@@ -543,19 +545,22 @@ private:
 
 			auto Range = MessageCache.equal_range( AddressRecord.TheActor );
 
-			// Then the external messages cached for this receiver will be sent
-			// to the network layer server
-
-			Address TheNetworkLayer( NetworkLayerAddress() );
-			auto Message = Range.first;
-
-			while ( Message != Range.second )
+			if ( Range.first != MessageCache.end() )
 		  {
-				Send( ExternalMessage( Message->second.GetSender(),
-															 AddressRecord.GlobalAddress,
-															 Message->second.GetPayload() ),
-							TheNetworkLayer );
-				MessageCache.erase( Message++ );
+				// Then the external messages cached for this receiver will be sent
+				// to the network layer server
+
+				Address TheNetworkLayer( NetworkLayerAddress() );
+
+				std::for_each( Range.first, Range.second,
+			    [&]( const typename MessageStore::value_type & Message){
+						Send( ExternalMessage( Message.second.GetSender(),
+																   AddressRecord.GlobalAddress,
+																   Message.second.GetPayload() ),
+								  TheNetworkLayer );
+					});
+
+				MessageCache.erase( Range.first, Range.second );
 			}
 		}
 	}
@@ -648,10 +653,9 @@ private:
 			// may not arrive if the actors are volatile.
 
 			auto Result  = MessageCache.equal_range( AddressRecord->second );
-			auto Message = Result.first;
 
-			while ( Message != Result.second )
-				MessageCache.erase( Message++ );
+			if ( Result.first != MessageCache.end() )
+				MessageCache.erase( Result.first, Result.second );
 
 			// Finally, the address record can be deleted.
 

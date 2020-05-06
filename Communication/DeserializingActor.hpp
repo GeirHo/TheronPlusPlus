@@ -239,7 +239,7 @@ protected:
 		if constexpr ( std::is_base_of<SerialMessage, MessageType>::value )
 		{
 			static_assert( std::is_default_constructible< MessageType >::value,
-      "A serial message must have a default constructor, and cannot be abstract" );
+      "Serial message must have a default constructor, and cannot be abstract");
 
 			RegisterMessageType< MessageType >();
 		}

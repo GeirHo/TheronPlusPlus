@@ -195,32 +195,11 @@ private:
 	static Network * AMQNetwork;
 
 	// Then there is a public function to obtain the addresses based on the
-	// layer types defined in the standard network class. One could directly
-	// return the value, however some compilers will issue a warning that
-	// there is no return from the function, and the address is therefore
-	// stored temporarily in the switch statement.
+	// layer types defined in the standard network class.
 
 public:
 
-	inline static Address GetAddress( Theron::Network::Layer Role )
-	{
-		Address LayerServer;
-
-	  switch( Role )
-	  {
-			case Theron::Network::Layer::Network:
-	      LayerServer = AMQNetwork->NetworkLayerAddress();
-	      break;
-			case Theron::Network::Layer::Session:
-	      LayerServer = AMQNetwork->SessionLayerAddress();
-	      break;
-			case Theron::Network::Layer::Presentation:
-	     LayerServer = AMQNetwork->PresentationLayerAddress();
-	     break;
-    }
-
-    return LayerServer;
-  }
+	static Address GetAddress( Theron::Network::Layer Role );
 
   // As this function overshadows the similar function from the actor, the
   // actor function is explicitly reused (differences in argument lists is

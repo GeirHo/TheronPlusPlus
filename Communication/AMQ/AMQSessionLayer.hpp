@@ -94,6 +94,8 @@ class SessionLayer
   virtual public StandardFallbackHandler,
 	virtual public Theron::SessionLayer< TextMessage >
 {
+protected:
+
 	// ---------------------------------------------------------------------------
 	// Server address management
 	// ---------------------------------------------------------------------------

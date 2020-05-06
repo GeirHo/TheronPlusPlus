@@ -8,6 +8,10 @@ Author and Copyright: Geir Horn, University of Oslo, 2018-2019
 License: LGPL 3.0
 ==============================================================================*/
 
+#include <string>
+#include <sstream>
+#include <stdexcept>
+
 #include "AMQMessages.hpp"
 #include "AMQEndpoint.hpp"
 #include "AMQNetworkLayer.hpp"
@@ -36,6 +40,54 @@ Theron::ActiveMQ::Network::Network(
 {
 	AMQNetwork = this;
 }
+
+// The function to get the address of a particular layer server will return
+// this provided that the layer server exists. Otherwise, it will throw an
+// logic error exception.
+
+Theron::Actor::Address
+Theron::ActiveMQ::Network::GetAddress( Theron::Network::Layer Role )
+{
+	Address     LayerServer;
+	std::string ServerTypeInError;
+
+  switch( Role )
+  {
+		case Theron::Network::Layer::Network:
+			if ( AMQNetwork != nullptr )
+	      LayerServer = AMQNetwork->NetworkLayerAddress();
+			else
+				ServerTypeInError = "Network Layer";
+      break;
+		case Theron::Network::Layer::Session:
+			if ( AMQNetwork != nullptr )
+	      LayerServer = AMQNetwork->SessionLayerAddress();
+			else
+				ServerTypeInError = "Session Layer";
+      break;
+		case Theron::Network::Layer::Presentation:
+			if ( AMQNetwork != nullptr )
+	      LayerServer = AMQNetwork->PresentationLayerAddress();
+			else
+				ServerTypeInError = "Presentation Layer";
+     break;
+  }
+
+  if ( ServerTypeInError.empty() )
+    return LayerServer;
+	else
+	{
+		std::ostringstream ErrorMessage;
+
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+		             << "The address of the " << ServerTypeInError
+		             << " server is requested before the network endpoint has been"
+								 << " initialised";
+
+	  throw std::logic_error( ErrorMessage.str() );
+	}
+}
+
 
 /*==============================================================================
 

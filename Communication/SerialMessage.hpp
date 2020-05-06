@@ -91,6 +91,11 @@ protected:
 	// message. To enable correct handling in the case there are multiple
 	// transmission protocols simultaneously used by an application, each serial
 	// message must provide a way to obtain the right presentation layer server.
+	// Inbound messages arrives at the bottom of the right stack and for them
+	// this is not needed. However an outbound message is detected by the
+	// receiver address being remote, and then Theron++ needs to know to which
+	// presentation layer the outbound packet should be delivered if there is
+	// more than one.
 
 	virtual Address PresentationLayerAddress( void ) const = 0;
 

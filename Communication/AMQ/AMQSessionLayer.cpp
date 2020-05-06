@@ -144,8 +144,9 @@ void Theron::ActiveMQ::SessionLayer::Stop(
 
 Theron::ActiveMQ::SessionLayer::SessionLayer(
 	const std::string & ServerName )
-: Actor( ServerName ), StandardFallbackHandler( ServerName ),
-  Theron::SessionLayer< TextMessage >( ServerName ),
+: Actor( ServerName ),
+  StandardFallbackHandler( GetAddress().AsString() ),
+  Theron::SessionLayer< TextMessage >( GetAddress().AsString() ),
   Subscriptions()
 {
 	RegisterHandler( this, &SessionLayer::NewSubscription    );

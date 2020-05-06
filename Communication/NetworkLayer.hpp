@@ -41,8 +41,6 @@
 #include "Communication/NetworkEndpoint.hpp"
 #include "Communication/LinkMessage.hpp"
 
-#include <iostream> // TEST for debugging information
-
 namespace Theron
 {
 /*==============================================================================
