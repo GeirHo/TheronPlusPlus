@@ -147,8 +147,8 @@ private:
 					// There is a small issue with access. The Deserializing Actor is a
 					// friend of the serial message, but in general it cannot access
 					// protected members of derived message types. Hence the function to
-					// de-serialise the message must be called on a serial message, and
-					// then using the implementation of the derived class.
+					// de-serialise the message must be called on a serial message base
+					// class, which then uses the implementation of the derived class.
 
 					SerialMessage * NewMessage( &BinaryMessage );
 

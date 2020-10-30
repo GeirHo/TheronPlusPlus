@@ -1671,10 +1671,9 @@ class Receiver : public virtual Actor
 private:
 
 	// There is a counter for messages that has arrived an not yet Consumed or
-	// waited for. It is declared volatile to ensure that the compiler does not
-	// optimise it away.
+	// waited for. 
 
-	volatile MessageCount Unconsumed;
+	MessageCount Unconsumed;
 
 	// Access to this counter will be protected by a mutex.
 

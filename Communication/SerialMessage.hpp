@@ -83,7 +83,17 @@ public:
 
 protected:
 
-  virtual bool Deserialize( const Payload & TheMessage ) = 0;
+	// De-serializing is more interesting since the actual binary fields to
+	// be filled for the class are not known by the base class. It must therefore
+	// require a function that can de-serialize the payload. Ideally, this should
+	// be the constructor taking the payload string. However there is no way to
+	// force a subclass to have such a constructor. It is possible, though, to
+	// force a subclass to have a virtual function to be used for the
+	// de-serialization, and require that this function returns a known type
+	// boolean to indicate if the operation was successful. This function should
+	// not throw an exception if the de-serialisation fails.
+
+  virtual bool Deserialize( const Payload & TheMessage ) noexcept = 0;
 
 	// A particular protocol is often imposed by a transmission layer and
 	// implemented by the serializing function. However, this implies that only
