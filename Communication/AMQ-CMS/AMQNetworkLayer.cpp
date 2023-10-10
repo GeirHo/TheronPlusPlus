@@ -435,6 +435,10 @@ void Theron::ActiveMQ::NetworkLayer::Stop(
 	AMQSession->stop();
 	AMQConnection->stop();
 	AMQConnection->close();
+  
+  // Notify the endpoint of the closure
+  
+  Network::NetworkClosed();
 }
 
 

@@ -53,7 +53,13 @@ Theron::ActiveMQ::Network::GetAddress( Theron::Network::Layer Role )
 
   switch( Role )
   {
-		case Theron::Network::Layer::Network:
+		case Theron::Network::Layer::Endpoint:
+			if ( AMQNetwork != nullptr )
+	      LayerServer = AMQNetwork->EndpointAddress();
+			else
+				ServerTypeInError = "Endpoint";
+      break;
+    case Theron::Network::Layer::Network:
 			if ( AMQNetwork != nullptr )
 	      LayerServer = AMQNetwork->NetworkLayerAddress();
 			else
@@ -88,6 +94,30 @@ Theron::ActiveMQ::Network::GetAddress( Theron::Network::Layer Role )
 	}
 }
 
+/*==============================================================================
+
+ Shutdown management
+
+==============================================================================*/
+//
+// Stopping the network if it is defined. Otherwise the same error as above 
+// will be thrown.
+
+void Theron::ActiveMQ::Network::NetworkClosed( void )
+{
+  if( AMQNetwork != nullptr )
+    AMQNetwork->NetworkStopped();
+  else
+  {
+		std::ostringstream ErrorMessage;
+
+		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+		             << "The NetworkClosed function is called on a network "
+		             << "endpoint that has not been initialised";
+
+	  throw std::logic_error( ErrorMessage.str() );    
+  }
+}
 
 /*==============================================================================
 

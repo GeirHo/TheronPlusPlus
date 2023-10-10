@@ -211,10 +211,17 @@ public:
   // Shut down management
   // ---------------------------------------------------------------------------
 	//
-	// There is no special shut down management for AMQ networks. It is difficult
-	// to see how it can be implemented since first of all the local actors on
-	// this endpoint using the AMQ interface must be stopped.
-
+	// It is only needed to declare the static function that sets the network
+  // status to not running
+  
+protected:
+  
+  using Theron::Network::NetworkStopped;
+  
+public:
+  
+   static void NetworkClosed( void );
+  
   // ---------------------------------------------------------------------------
   // Constructor and destructor
   // ---------------------------------------------------------------------------
