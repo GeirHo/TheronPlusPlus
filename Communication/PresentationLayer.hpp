@@ -1,10 +1,10 @@
 /*=============================================================================
   Presentation Layer
 
-  A message must be a Serial Message for it to be able to be sent across the
-  network. In terms of this framework it means that the message must inherit
-  the Serial Message base class, and implement the virtual function
-  std::string Serialize() from that base class. It will be called by the
+  A message must be a Polymoephic Message for it to be able to be sent across 
+	the network. In terms of this framework it means that the message must 
+	inherit the Polymoephic Message base class, and implement the virtual 
+	function GetPayload() from that base class. It will be called by the
   Presentation Layer to pack up the message before it is transmitted
 
   This class is a part of the revised and extended Theron mechanism for external
@@ -18,47 +18,44 @@
   is C, then it is detected by the Theron external communication extensions
   that actor C is on a remote endpoint, and the message will be delivered to
   the inbound queue for the Presentation Layer server, which is an actor. The
-  Presentation Layer server will then call the Serialize() method on the message
-  to obtain the string representation of the message to send to the remote
+  Presentation Layer server will then call the GetPayload() method on the 
+	message to obtain the representation of the message to send to the remote
   actor C.
 
-  After packing the message up as a string, the string will be forwarded to the
-  Session Layer server which will embed the message as the payload of a message
-  in the right protocol, before the Session Layer delivers the message to
-  the Network Layer for actual transmission.
+  After packing the message up as and external payload, the string will be 
+	forwarded to the Session Layer server which will embed the message as the 
+	payload of a message in the right protocol, before the Session Layer delivers
+	the message to the Network Layer for actual transmission.
 
   The reverse process is more complex because the only information available
-  to the Session Layer is the actor ID of the remote sender, the actor ID of the
-  local actor to receive the message, and a string representing the message
-  content. The two actors involved can exchange many different types of
-  messages, and there is no way for the Presentation Layer automatically to
-  deduce which binary message the string should be converted into. The user must
-  therefore provide a message handler capable of receiving a string message
-  on each actor class that receives serialized messages. This method must
-  convert the string it receives back to the right binary message format and
-  call the actor's message handler for this binary message.
+  to the Session Layer is the actor identifier of the remote sender, the actor
+	identifier of the local actor to receive the message, and an external payload
+	representing the message content. The two actors involved can exchange many 
+	different types of messages, and there is no way for the Presentation Layer 
+	automatically to deduce which binary message the payload should be converted
+	into. The application developer must therefore provide a message handler 
+	capable of receiving a Polymorphic Message on each actor class that receives
+	message. This message handler must convert the payload it receives back to 
+	the right binary message format and call the actor's message handler for 
+	this binary message.
 
-  In order to allow the actor to have a string handler for normal peer to peer
-  communication, the special class SerialMessage::Payload is used for the
-  message format so that the actor can distinguish between strings that that
-  contains serialised binary structures and normal strings. The actual
-  initialisation of a binary message from a string should be done by the
-  Deserialize method that must be implemented for each message that should be
-  transferable over the network.
-
-  To continue the above example: When a message arrives from C, the Presentation
-  Layer will receive a serial message with C as the sender and, say, B as the
-  receiver. The payload will be stored as a Payload and then forwarded
-  to as if it comes from C, and B's handler for Payloads will receive
+  To continue the above example: When a message arrives from C, the 
+	Presentation Layer will receive a network message with C as the sender and, 
+	say, B as the receiver. The payload will be stored as a Payload and forwarded
+  to B with C as the sender, and B's handler for external payloads will receive
   the message, convert it to the right binary format, and resend the message to
-  B's handler for the given message binary message type.
+  B's handler for the given binary message type.
 
   REVISION: This file is NOT compatible with standard Theron - the new actor
-            implementation of Theron++ MUST be used.
+            implementation of Theron++ MUST be used since the original 
+						version of this class only supported serialisation of messages.
+						The current version lets the polymorphic message convert the binary
+						message to any kind of message that is understood by the network
+						layer protocol.
 
-  Author: Geir Horn, University of Oslo, 2015 - 2017
-  Contact: Geir.Horn [at] mn.uio.no
-  License: LGPL3.0
+  Author and Copyright: Geir Horn, University of Oslo
+  Contact: Geir.Horn@mn.uio.no
+  License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
 #ifndef THERON_PRESENTATION_LAYER
@@ -74,32 +71,22 @@
 #include <typeinfo>
 #include <typeindex>
 #include <stdexcept>
+#include <memory>
+#include <source_location>	
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
 #include "Communication/NetworkEndpoint.hpp"
-#include "Communication/SerialMessage.hpp"
+#include "Communication/PolymorphicMessage.hpp"
 
 // The Presentation Layer is defined to be a part of the Theron name space
 
 namespace Theron
 {
-
+template< class ProtocolPayload >
 class PresentationLayer : virtual public Actor,
 													virtual public StandardFallbackHandler
 {
-  // --------------------------------------------------------------------------
-  // Session Layer Address
-  // --------------------------------------------------------------------------
-  //
-	// The presentation layer will forward messages to the session layer, and
-	// since it is technology dependent how this is implemented, its address is
-	// expected to be defined by the technology dependent derived class.
-
-protected:
-
-	virtual Address SessionLayerAddress( void ) const = 0;
-
   // --------------------------------------------------------------------------
   // Shut down management
   // --------------------------------------------------------------------------
@@ -122,8 +109,8 @@ private:
   // Remote message format
   // --------------------------------------------------------------------------
   //
-	// The general mechanism of serialisation is discussed above. Transparent
-	// communication means in this context that the actors should be identical
+  // The general mechanism of serialisation is discussed above. Transparent
+  // communication means in this context that the actors should be identical
 	// whether they are at the same network endpoint or on different endpoints
 	// (or nodes) as long as the message sent supports serialisation. This the
 	// serialisation depends on the actual data fields and structure of the
@@ -138,35 +125,24 @@ private:
 
   class RemoteMessage
   {
-  private:
+  public:
 
-    Address From, To;
-    SerialMessage::Payload Message;
+    const Address From, To;
+    const ProtocolPayload MessagePayload;
 
   public:
 
     RemoteMessage( const Address & TheSender, const Address & TheReceiver,
-								   const SerialMessage::Payload & ThePayload )
-    : From( TheSender ), To( TheReceiver ), Message( ThePayload )
+				   				 const ProtocolPayload & ThePayload )
+    : From( TheSender ), To( TheReceiver ), MessagePayload( ThePayload )
     {};
+		
+		RemoteMessage( const RemoteMessage & Other )
+		: RemoteMessage( Other.From, Other.To, Other.MessagePayload )
+		{};
 
-    // Interface functions
-
-    inline Address GetSender( void ) const
-    {
-      return From;
-    }
-
-    inline Address GetReceiver( void ) const
-    {
-      return To;
-    }
-
-    inline SerialMessage::Payload GetPayload( void ) const
-    {
-      return Message;
-    }
-
+		RemoteMessage()  = delete;
+		~RemoteMessage() = default;
   };
 
 	// Since this is a part of the internal protocol with the Session Layer server
@@ -177,7 +153,7 @@ private:
 	friend class SessionLayer;
 
   // --------------------------------------------------------------------------
-  // Serialisation and de-serialisation
+  // Message encoding
   // --------------------------------------------------------------------------
 	//
   // A fundamental issue is that Theron's message handlers do not specify the
@@ -196,7 +172,7 @@ private:
 	// Two cases must be considered: The one where a message is outbound for a
 	// remote endpoint, and the case where the message is inbound coming from an
 	// actor on a remote endpoint and addressed to a local actor. In the outbound
-	// case the message should be Serializeable, and in the inbound case it
+	// case the message should be a polymorphic message, and in the inbound case 
 	// it should be a Remote Message coming from the session layer.
 	//
 	// The implementation is therefore based on the Run Time Type Information
@@ -235,17 +211,18 @@ protected:
 		}
 		else
 		{
-			// The outbound message should in this case support serialisation, and
-			// the payload is created first.
-
-			SerialMessage * OutboundMessage( TheMessage->GetSerialMessagePointer() );
-
 		  // The message will simply be ignored if the network stack is shutting
 			// down and the forward flag has been cleared.
 
 			if ( ForwardOutboundMessages )
 		  {
-				if ( OutboundMessage != nullptr )
+				// The outbound message should in this case be polymorphic, and
+				// the payload is created first.
+
+				std::shared_ptr< Theron::PolymorphicProtocolHandler > 
+				OutboundMessage( TheMessage->GetPolymorphicMessagePointer() );
+
+				if ( OutboundMessage )
 				{
 					// At this point there are two cases to consider. The message could
 					// have this presentation layer as its presentation layer, which
@@ -256,9 +233,44 @@ protected:
 					Address HandlingLayer( OutboundMessage->PresentationLayerAddress() );
 
 					if ( HandlingLayer == GetAddress() )
-						Send( RemoteMessage( TheMessage->From, TheMessage->To,
-																 OutboundMessage->Serialize() ),
-									SessionLayerAddress() );
+					{
+						// The message is then cast to the expected polymorphic message 
+						// class based on the payload type of this presentation layer
+						
+						std::shared_ptr< PolymorphicMessage< ProtocolPayload > >
+						ConvertableMessage = std::dynamic_pointer_cast< 
+										PolymorphicMessage< ProtocolPayload > >( OutboundMessage );
+										
+						// If the conversion was successful the payload can be encoded and 
+						// the corresponding remote message sent to the session layer for 
+						// address mapping to the global addresses and subsequent network 
+						// transmission by the Network Layer. However, if the conversion 
+						// was unsuccessful, it means that the message type cannot be 
+						// handled by this presentation layer, and there is a mismatch 
+						// between the information provided by the presentation layer 
+						// address and the polymorphic message payload. There is no way 
+						// to recover from this logic error, and a standard exception is 
+						// thrown.
+						
+						if ( ConvertableMessage )
+							Send( RemoteMessage( TheMessage->From, TheMessage->To,
+																	 ConvertableMessage->GetPayload() ),
+										Network::GetAddress( Network::Layer::Session ) );
+						else
+						{
+							std::ostringstream ErrorMessage;
+							std::source_location Location = std::source_location::current();
+							
+							ErrorMessage << Location.file_name() << " at line " 
+													 << Location.line() << ": The Presentation Layer "
+													 << "server " << GetAddress().AsString() 
+													 << " in function " << Location.function_name()
+													 << " got a message with incompatible payload type"
+													 << OutboundMessage->GetProtocolTypeName();
+													 
+						  throw std::invalid_argument( ErrorMessage.str() );
+						}
+					}
 					else
 				  {
 						// This was the first of multiple presentation layer servers
@@ -272,12 +284,18 @@ protected:
 				else
 				{
 					std::ostringstream ErrorMessage;
+					std::source_location Location = std::source_location::current();
 
-					ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-											 << "Outbound message to the Presentation Layer from "
-											 << TheMessage->From.AsString() << " with receiver "
+					ErrorMessage << Location.file_name() << " at line " 
+											 << Location.line() 
+											 << " in function " << Location.function_name() << ": "
+											 << "Outbound message of type " 
+											 << TheMessage->GetMessageTypeName() 
+											 << " to the Presentation Layer " 
+											 << GetAddress().AsString() <<  "from Actor "
+											 << TheMessage->From.AsString() << " with receiver Actor "
 											 << TheMessage->To.AsString()
-											 << " does not support serialisation";
+											 << " is not a polymorphic message";
 
 					throw std::invalid_argument( ErrorMessage.str() );
 				}
@@ -294,7 +312,7 @@ protected:
 public:
 
   // --------------------------------------------------------------------------
-  // Constructor
+  // Constructor and destructor
   // --------------------------------------------------------------------------
 	//
 	// The constructor registers the handler for the incoming messages and the
@@ -306,8 +324,17 @@ public:
 		ForwardOutboundMessages( true )
   {
 		RegisterHandler( this, &PresentationLayer::Stop );
-		Actor::SetPresentationLayerServer( this );
+		Actor::SetPresentationLayerServer( GetAddress() );
   }
+
+  // There is no default constructor or copy constructor.
+
+	PresentationLayer() = delete;
+	PresentationLayer( const PresentationLayer & Other ) = delete;
+
+	// The virtual destructor is just the default destructor.
+
+	virtual ~PresentationLayer() = default;
 };
 
 } 			// End of name space Theron

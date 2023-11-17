@@ -1,7 +1,7 @@
 /*=============================================================================
   Network End Point
 
-  The original communication architecture of Theron has an End Point class that
+  The communication architecture of Theron has an End Point class that
   deals with the external input and output activities.
 
 	A network is served by three layers according to the Open Systems
@@ -10,56 +10,62 @@
 	care of the address mapping between the local actor addresses and their
 	external addresses typically including information about the endpoint's
 	network address (like actorX@nodeY), and the Presentation Layer ensuring
-	that messages are correctly serialised on sending. The three servers for
+	that messages are correctly converted on sending. The three servers for
 	these layers are implemented as actors, and they must all be up and running
 	and correctly	connected before the network end point operational.
 
-  De-serialization requires knowledge about the binary message format the
-  message will be converted into, and the available message formats are defined
-  by the receiving actor. Therefore, in order to receive messages from remote
-  actors an actor should be inheriting the base Deserializing Actor base class,
-	and messages that are capable of being exchanged with potentially remote
-	actors should be derived from the Serial Message class that basically defines
-	the serial protocol in terms of user defined serialization and
-	de-serialization functions.
+  Decoding inbound messages requires knowledge about the binary message format
+	the network message will be converted into, and the available message formats 
+	are defined by the receiving actor. Therefore, in order to receive messages 
+	from remote actors, a local actor must be inheriting the base Networking
+	Actor base class, and messages that are capable of being exchanged with 
+	potentially remote actors should be derived from the Polymorphic Message 
+	class that basically defines the protocol dependent payload conversion.
 
   References:
   [1] https://en.wikipedia.org/wiki/OSI_model
 
-  Author: Geir Horn, University of Oslo, 2015-2017
-  Contact: Geir.Horn [at] mn.uio.no
-  License: LGPL3.0
+  Author and Copyright: Geir Horn, University of Oslo
+  Contact: Geir.Horn@mn.uio.no
+  License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
 #ifndef THERON_TRANSPARENT_COMMUNICATION
 #define THERON_TRANSPARENT_COMMUNICATION
+
+// Standard headers
 
 #include <memory> 					// For shared pointers.
 #include <utility>					// For the forward template
 #include <map>							// For the managed actors
 #include <set>							// For shut down management
 #include <type_traits>			// For advanced meta-programming
+#include <concepts>         // To constrain template types
 #include <initializer_list> // For structured initialisation
 #include <sstream>          // For readable error messages
 #include <stdexcept>        // For error reporting
 #include <thread>			      // To wait for all messages to be served
 #include <chrono>			      // To wait if there are unhanded messages
 #include <algorithm>	      // To accumulate unhanded messages
+#include <source_location>  // For informative error messages
 
-#include "Actor.hpp"			 // The Theron++ actor framework
+// The Theron++ actor framework
+
+#include "Actor.hpp"			  
 #include "Utility/StandardFallbackHandler.hpp"
+#include "Communication/LinkMessage.hpp"
 
 namespace Theron
 {
-
 // The base classes for the various layers are declared as known symbols
 
-template< class ExternalMessage >
+template< ValidLinkMessage ExternalMessage >
 class NetworkLayer;
 
-template < class ExternalMessage >
+template < ValidLinkMessage ExternalMessage >
 class SessionLayer;
 
+template < class ProtocolPayload >
 class PresentationLayer;
 
 /*==============================================================================
@@ -78,10 +84,11 @@ class PresentationLayer;
 // actual server construction. However, this is not possible because the
 // virtual function table is not initialised with the derived class' functions
 // before the constructor of the base class, i.e. the network endpoint
-// terminates. It is therefore not possible for the network endpoint constructor
-// to ensure that the network endpoint is operational when terminating.
+// terminates. It is therefore not possible for the network endpoint 
+// constructor to ensure that the network endpoint is operational when 
+// terminating.
 //
-// It is therefore required to have a class defining the network layer servers
+// Thus, it is required to have a class defining the network layer servers
 // that can be inherited by a technology dependent network layer. This class
 // is then passed as a template parameter to the network endpoint class, and
 // will serve as a base class for the network endpoint class. This implies
@@ -129,39 +136,23 @@ protected:
 	virtual Address PresentationLayerAddress( void ) const = 0;
 
 	// The problem with these is that one will need a pointer to the network
-	// endpoint to obtain the addresses. It is therefore recommended that the
-	// transport specific network class stores a static pointer to itself,
-	// initialised by its constructor, allowing it to define a static function
-	// using this pointer to obtain the addresses. The pattern for this idea
-	// is:
-	//
-	// static const Network * TechnologyNetwork; // Set to 'this'
-	//
-	// inline static Address GetAddress( Layer Role )
-	// {
-	//   Address LayerAddress;
-	//
-	//   switch( Role )
-	//   {
-	//     case Network:
-	//       LayerAddress = TechnologyNetwork->NetworkLayerAddress();
-	//       break;
-	//     case Session:
-	//       LayerAddress = TechnologyNetwork->SessionLayerAddress();
-	//       break;
-	//     case Presentation:
-	//      LayerAddress = TechnologyNetwork->PresentationLayerAddress();
-	//      break;
-  //   }
-	//
-	//   return LayerAddress;
-  // }
-	//
-	// The technology dependent classes implementing the similar address accessing
-	// functions in the three layers, can then simply call this static function
-	// with the right layer without having the pointer to the transport specific
-	// network class.
-	//
+	// endpoint to obtain the addresses. A static function is therefore provided
+	// to call indirectly these functions. This is defined in the code file for 
+	// the generic Network Endpoint.
+	
+public:
+
+	static Address GetAddress( Layer Role );
+
+	// The whole point of static function is that it does not have the 'this'
+	// pointer, and so in order to be able to call the address functions for 
+	// the various layers, a static pointer to the Network class must be 
+	// provided. This is initialised to 'this' in the constructor.
+
+private:
+
+	static const Network * TheNetwork; 
+
 	// ---------------------------------------------------------------------------
   // Shut-down management
   // ---------------------------------------------------------------------------
@@ -177,17 +168,17 @@ protected:
 	// and try to ensure that no messages are in transit when the nodes closes.
 	// For the local system this implies the following:
 	//
-	// 1. The session layer must inform all the de-serializing actors that the
-	//    node is shutting down. Any new de-serializing actors registering will
+	// 1. The Session Layer must inform all the Networking Actors that the
+	//    node is shutting down. Any new Networking Actors registering will
   //    immediately receive the shut down message, and they will not be
   //    registered with remote endpoints.
-  // 2. The Presentation layer will be asked to stop any outbound message and
+  // 2. The Presentation Layer will be asked to stop any outbound message and
   //    just drop further messages quietly.
-	// 3. The de-serializing actors will each acknowledge the shut down message
-	//    by sending a remove actor message to the session layer. This will
+	// 3. The Networking Actors will each acknowledge the shut down message
+	//    by sending a remove actor message to the Session Layer. This will
 	//    inform the remote endpoints that these actors are gone.
-	// 4. When the last de-serializing actor asks for removal, the session layer
-	//    will tell the network layer to shut down.
+	// 4. When the last Networking Actor asks for removal, the session layer
+	//    will tell the Network Layer to shut down.
 	// 5. The network layer should then disconnect from the peer endpoint overlay
 	//    network, possibly informing the remote peers that this endpoint
 	//    shuts down.
@@ -236,6 +227,7 @@ protected:
 	: Actor( Name ), StandardFallbackHandler( Actor::GetAddress().AsString() )
 	{
 		RegisterHandler( this, &Network::Stop );
+		TheNetwork = this;
 	}
 
 	Network( void ) = delete;
@@ -265,8 +257,8 @@ public:
 // be derived from the Network base class for the network endpoint class to
 // compile.
 
-template< class NetworkType,
-	typename = std::enable_if_t< std::is_base_of<Network, NetworkType>::value > >
+template< class NetworkType >
+requires std::derived_from< Network, NetworkType >
 class NetworkEndpoint
 : virtual public Actor,
   virtual public StandardFallbackHandler,
@@ -303,9 +295,10 @@ public:
 public:
 
  template< typename ... NetworkParameterTypes >
- NetworkEndpoint( const std::string & Name,
+ NetworkEndpoint( const std::string & EnpointName,
 									NetworkParameterTypes && ... NetworkParameterValues )
-  : Actor( Name ), StandardFallbackHandler( Actor::GetAddress().AsString() ),
+  : Actor( EndpointName ), 
+		StandardFallbackHandler( Actor::GetAddress().AsString() ),
     NetworkType( Actor::GetAddress().AsString(),
 					 std::forward< NetworkParameterTypes >(NetworkParameterValues)... )
   {
@@ -324,10 +317,12 @@ public:
 		if ( !LayerServerError.empty() )
 		{
 			std::ostringstream ErrorMessage;
+			std::source_location Location = std::source_location::current();
 
-			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-									 << "Network endpoint: No server for the communication layer "
-									 << LayerServerError
+			ErrorMessage << Location.file_name() << " at line " 
+									 << Location.line() << "in" << Location.function_name() << ": "
+									 << "Network endpoint - No server for the "
+									 << "communication layer " << LayerServerError
 									 << " has been defined. Improper initialisation!";
 
 		  throw std::logic_error( ErrorMessage.str() );
@@ -338,8 +333,7 @@ public:
   // actors for the network layers will be destroyed by the unique pointer
   // destructor
 
-  virtual ~NetworkEndpoint( void )
-  { }
+  virtual ~NetworkEndpoint( void ) = default;
 };
 
 }  			// End name space Theron

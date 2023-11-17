@@ -30,24 +30,25 @@ License: LGPL 3.0
 #ifndef THERON_REPLACEMENT_ACTOR
 #define THERON_REPLACEMENT_ACTOR
 
-#include <string>							// Strings
-#include <memory>							// Smart pointers
-#include <queue>							// For the queue of messages
-#include <mutex>						  // To protect the queue
-#include <utility>						// Pairs
-#include <unordered_map>			// To map actor names to actors
-#include <set>                // Set of Presentation Layer addresses
-#include <functional>					// For defining handler functions
-#include <list>								// The list of message handlers
-#include <algorithm>					// Various container related utilities
-#include <thread>						  // To execute actors
-#include <condition_variable> // To synchronise threads
-#include <atomic>							// Thread protected variables
-#include <stdexcept>				  // To throw standard exceptions
-#include <sstream>						// To provide nice exception messages
-#include <type_traits>				// For meta-programming
+#include <string>									 // Strings
+#include <memory>									 // Smart pointers
+#include <queue>									 // For the queue of messages
+#include <mutex>						  		 // To protect the queue
+#include <utility>						 		 // Pairs
+#include <unordered_map>					 // To map actor names to actors
+#include <set>                		 // Set of Presentation Layer addresses
+#include <functional>							 // For defining handler functions
+#include <list>										 // The list of message handlers
+#include <algorithm>							 // Various container related utilities
+#include <thread>						  		 // To execute actors
+#include <condition_variable> 		 // To synchronise threads
+#include <atomic>							 		 // Thread protected variables
+#include <stdexcept>				  		 // To throw standard exceptions
+#include <sstream>						 		 // To provide nice exception messages
+#include <type_traits>						 // For meta-programming
 
-#include <iostream>					  // For debugging
+#include <iostream>					  		 // For debugging
+#include <boost/core/demangle.hpp> // For reporting readable message types
 
 namespace Theron {
 
@@ -82,12 +83,13 @@ class EndPoint;
 // de-serialising message that can then be transmitted as text strings to
 // remote network endpoints. This actor type must be forward declared.
 
+template< class ProtocolPayload >
 class PresentationLayer;
 
-// Finally the serial message must be forward declared to avoid circular
+// Finally the polymorphic message must be forward declared to avoid circular
 // inclusion of headers.
 
-class SerialMessage;
+class PolymorphicProtocolHandler;
 
 // In this implementation everything is an actor as there is no compelling
 // reason for the other Theron classes.
@@ -332,7 +334,8 @@ public:
 
 	// A static function is provided to set the presentation layer address
 
-	static void SetPresentationLayerServer( const PresentationLayer * TheSever );
+	static 
+	void SetPresentationLayerServer( const Address & ThePresentationLayerSever );
 
 	// It is a recurring problem to keep main() alive until all actors have done
 	// their work. The following function can be called to all actors have empty
@@ -587,8 +590,8 @@ inline static bool IsLocalActor( const std::string & ActorName )
 // with this function.
 
 inline static void SetPresentationLayerServer(
-																					const PresentationLayer * TheServer )
-{ Identification::SetPresentationLayerServer( TheServer ); }
+									 const Address & ThePresentationLayerSever )
+{ Identification::SetPresentationLayerServer( ThePresentationLayerSever ); }
 
 /*=============================================================================
 
@@ -644,8 +647,15 @@ public:
 	// to the serial message. This is overloaded by the typed message class below
 	// if the message type does support serialisation.
 
-	virtual SerialMessage * GetSerialMessagePointer( void );
+	virtual std::shared_ptr< PolymorphicProtocolHandler > 
+	GetPolymorphicMessagePointer(void);
 
+	// There is also a virtual function to get a printable name string indicating 
+	// the message type. This must be provided by the specific message types
+	
+	virtual std::string GetMessageTypeName( void ) const
+	{ return std::string( "Generic message base class" ); }
+	
 	// It is important to make this class polymorphic by having at least one
 	// virtual method, and it must in order to ensure proper destruction of the
 	// derived messages.
@@ -810,14 +820,21 @@ public:
 	// necessary to use std::enable_if on a template representing the two
 	// branches.
 
-	virtual SerialMessage *	GetSerialMessagePointer( void ) override
+	virtual std::shared_ptr< PolymorphicProtocolHandler >	
+	GetPolymorphicMessagePointer( void ) override
 	{
-		if constexpr ( std::is_base_of< SerialMessage, MessageType >::value )
-			return TheMessage.get();
+		if constexpr ( std::is_base_of<  PolymorphicProtocolHandler, MessageType >::value )
+			return TheMessage;
 		else
-			return nullptr;
+			return std::shared_ptr< PolymorphicProtocolHandler >();
 	}
 
+	// There is a support function to report the type of the message in a 
+	// human readable form for error messages.
+	
+	virtual std::string GetMessageTypeName( void ) const override
+	{	return boost::core::demangle( typeid( MessageType ).name() );	}
+	
 	// The virtual destructor is just a place holder
 
 	virtual ~Message( void )
@@ -902,8 +919,8 @@ public:
 
 template< class MessageType >
 static bool Send( const MessageType & TheMessage,
-								  const Address & TheSender,
-									const Address & TheReceiver )
+				  const Address & TheSender,
+				  const Address & TheReceiver )
 {
 	static_assert( std::is_copy_constructible< MessageType >::value,
 								"The message to send must be copy constructible"	);

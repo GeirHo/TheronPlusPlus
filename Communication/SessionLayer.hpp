@@ -10,51 +10,34 @@
   the actor addresses are all unique across all nodes, which means that there
   cannot be two actors on two endpoints with the same name.
 
-  The actor is a template on the External Address to hold the network wide
-  address of an actor. It creates a link message consisting of the external
-  sender address, the receiver address and the protocol conforming datagram.
-  Different protocols can be implemented by overloading the datagram encoder
-  function that maps a serialised message to an External Message.
-
-  If a packet is targeted to an external actor whose address is unknown, an
-  address resolver actor is created for this address. Further messages to the
-  unknown remote actor will be queued by the resolver actor until it has
-  resolved the remote address. It will then forward all the enqueued messages
-  and register the known remote address with the protocol engine so that future
-  messages to that actor can be sent directly.
+  The session layer is a template on the External Message holding the two 
+  unique global addresses of the two actors exchanging the message. Different
+  protocols typically extends this generic message to be able to exchange 
+  protocol specific messages.
+  
+  If an outbound packet from a local actor is targeted to an external actor 
+  whose global address is unknown, an address resolution request is created 
+  for this address. Further messages to the unknown remote actor will be 
+  cached until the remote address has been resolved. The session layer will 
+  then forward all the cached messages for the remote actor, and register the 
+  known remote address so that future messages to that remote  can be sent 
+  directly.
 
   A message received from a remote actor will carry the remote actors
-  external address, but the actual actor ID will remain unknown. In this
-  case, a local actor ID equal to its external address will be created.
-  However, it could still be that another local actor on this endpoint does
-  know the remote actor's ID and will later send a message to this actor by
-  its real ID. In this case an address resolution will occur, and the external
-  address of the remote actor ID will be returned. We will then try to
-  remember two mappings for the same external address: to the temporary
-  assigned actor ID and to the real actor ID.
-
-  This is a problem if the local actors are remembering the IDs of the
-  remote actors they receive messages from. In this case some local actors
-  my remember the temporary address and some actors my remember the real
-  address. In request-response situations the response message should be
-  delivered to the request actor coming from the same actor as it sent the
-  request to, thus, if an actor sent a request to a temporary address, it
-  should also receive messages as if they are always from this temporary
-  address. However, if we know the real ID, it should be used for incoming
-  messages from this remote actor, and hence the requesting actor may receive
-  the response from an unknown sender using the real actor ID. For this reason,
-  we need to resolve the real ID of a remote actor sending a message to an
-  actor on this endpoint on the first message received from that actor.
-
-  Author: Geir Horn, University of Oslo, 2015-2019
-  Contact: Geir.Horn [at] mn.uio.no
-  License: LGPL3.0
+  external address, which should encode the actual actor name. In this
+  case, a local actor ID equal to its external address will be created in 
+  the external actor map so that other local actors trying to sen to the 
+  remote actor will not need to look up the address again.
+ 
+  Author and Copyright: Geir Horn, University of Oslo
+  Contact: Geir.Horn@mn.uio.no
+  License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
 #ifndef THERON_SESSION_LAYER
 #define THERON_SESSION_LAYER
 
-// Included headers
+// Standard headers
 
 #include <set>
 #include <map>
@@ -65,11 +48,11 @@
 #include <type_traits>
 #include <stdexcept>
 #include <sstream>
+#include <concepts>
+#include <ranges>
+#include <algorithm>
 
-#include <boost/bimap/bimap.hpp>
-#include <boost/bimap/set_of.hpp>
-#include <boost/bimap/unordered_set_of.hpp>
-#include <boost/bimap/tags/tagged.hpp>
+// Theorn++ headers
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
@@ -93,7 +76,7 @@ namespace Theron
 
 ==============================================================================*/
 //
-// The actual Session Sayer is a template class on the external message format
+// The actual Session Layer is a template class on the external message format
 // to be used with the compatible Network Layer class. However it is based
 // on the fundamental principle that actors register with the Session Layer,
 // and it is also possible to subscribe to notifications of other actors
@@ -120,6 +103,7 @@ protected:
 
 		RegisterActorCommand( void ) = default;
 		RegisterActorCommand( const RegisterActorCommand & Other ) = default;
+    ~RegisterActorCommand() = default;
 	};
 
   class RemoveActorCommand
@@ -128,6 +112,7 @@ protected:
 
 		RemoveActorCommand( void ) = default;
 		RemoveActorCommand( const RemoveActorCommand & Other ) = default;
+    ~RemoveActorCommand() = default;
 	};
 
 	// These messages can only be sent by the de-serializing actors. The idea is
@@ -139,11 +124,11 @@ protected:
 	// the removal of the registration from its destructor - provided that it is
 	// destroyed before the session layer class!
 
-	friend class DeserializingActor;
+	template< typename > friend class NetworkingActor;
 
   // Actors may need to know their possible peer actors, and can subscribe
-  // to a notification when a new peer is discovered by sending a subscription
-  // request to the Session Layer.
+  // to a notification when a (remote) new peer is discovered by sending a
+  // subscription request to the Session Layer.
 
 public:
 
@@ -153,6 +138,7 @@ public:
 
 		NewPeerSubscription( void ) = default;
 		NewPeerSubscription( const NewPeerSubscription & Other ) = default;
+    ~NewPeerSubscription() = default;
 	};
 
   // The inverse command simply takes the sender out of the list of subscribers
@@ -163,6 +149,7 @@ public:
 
 		NewPeerUnsubscription( void ) = default;
 		NewPeerUnsubscription( const NewPeerUnsubscription & Other ) = default;
+    ~NewPeerUnsubscription() = default;
 	};
 
   // ---------------------------------------------------------------------------
@@ -190,9 +177,9 @@ public:
 
     NewPeerAdded( const Address & ThePeer )
     : std::set< Address >()
-    {
-      insert( ThePeer );
-    }
+    { insert( ThePeer ); }
+    
+    ~NewPeerAdded() = default;
   };
 
   // It is also necessary to inform the subscribers in the situation where a
@@ -203,16 +190,20 @@ public:
   {
   private:
 
-    Address RemovedPeer;
+    const Address RemovedPeer;
 
   public:
 
     PeerRemoved( const Address & ThePeer )
     : RemovedPeer( ThePeer )
     { }
+    
+    PeerRemoved( void ) = delete;
 
     Address GetAddress( void ) const
     { return RemovedPeer; }
+    
+    ~PeerRemoved() = default;
   };
 
 };
@@ -233,186 +224,103 @@ public:
 // servers on other endpoints, and it will also participate to the resolution
 // of external actors' addresses.
 //
-// In order to fulfil this core task it has
-//
-// A. A bidirectional address mapping between external actor addresses and
-//    raw actor addresses. This stores the external addresses of the local
-//    actors that may be requested from remote session layer servers.
-// B. An internal protocol: Messages and message handlers to accept
-//    registration from local actors and de-registrations when the local
-//    actor disappears.
-// C. An external protocol: for resolving network endpoints with peer session
-//    layer servers.
-// D. A command protocol: used to interface the local link layer server and
-//    the local presentation layer server.
-//
-// All of these parts are described and elaborated in the following.
+// The initial implementation of the session layer used the bimap structure 
+// from Boost. However this has not been updated to support useful features 
+// like ranges, and this version of the session layer has been re-implemented 
+// using only standard containers. The session layer maintains the following 
+// structures:
+// 1. Two address maps mapping from Actor addresses to global addresses
+// 2. A cache of messages pending resolution of the global address of the 
+//    receiving actor. When the resolution response arrives, the cached messages
+//    is forwarded, and the actor gets an entry in the remote actors map,
+// 3. A set of actors subscribing to the events that a new remote actor has 
+//    been discovered in case they are waiting to interact with this new actor.
 //
 // The template argument is the message format to be used on the link and
 // it must be as subclass of the extended communication's LinkMessage class for
 // the class to compile, and of course the Network Layer must supply a handler
 // for this type of message.
 
-template < class ExternalMessage >
-class SessionLayer : virtual public Actor,
-										 virtual public StandardFallbackHandler,
-										 public SessionLayerMessages
+template< ValidLinkMessage ExternalMessage >
+class SessionLayer 
+: virtual public Actor,
+  virtual public StandardFallbackHandler,
+  public SessionLayerMessages
 {
 public:
 
-  // The main functionality of the Session Layer is to encode an external
-  // message that can be sent to the Network Layer for external transmission; or
-  // handle a external message delivered from the Network Layer. The external
-  // message consists of the remote addresses of the sender and recipient,
-  // and the datagram. The external message must confirm to the Network Layer
-  // interface, i.e. it must be derived from that class, and this condition
-  // is checked before we continue the compilation.
-
-  static_assert(  std::is_base_of<
-    LinkMessage< typename ExternalMessage::AddressType >,
-    ExternalMessage >::value,
-    "Session Layer: External message must be derived from Link Message" );
-
   // The external address represents the type used to hold the address as
-  // required by the protocol. In the case of IP addresses, this is typically
-  // a string, but it could be an integer or any other binary form.
-  // The address type is defined so that it can be used externally
+  // required by the protocol. The valid message concept ensures that it 
+  // exist and that is derived from the global address with support for 
+  // conversion to the actor address or a global address for the actor that 
+  // is unique across the distributed actor system. The address type is 
+  // used here so that it can be used externally
 
   using ExternalAddress = typename ExternalMessage::AddressType;
-
-	// The message type is also defined for standard reference
-
-	using MessageType = ExternalMessage;
-
-  // ---------------------------------------------------------------------------
-  // Network and presentation layer addresses
-  // ---------------------------------------------------------------------------
-  //
-	// The Session layer will interact with both the Network Layer of this
-	// endpoint and the Presentation Layer. However their addresses will depend
-	// on the transport technology and protocol used by a particular endpoint,
-	// and the address functions are therefore virtual to be completed by a
-	// particular technology implementation inheriting the session layer.
-
-	virtual Address NetworkLayerAddress     ( void ) const = 0;
-	virtual Address PresentationLayerAddress( void ) const = 0;
+  
+  // The messages arriving from the presentation layer must have the same 
+  // payload as the payload of the external message, and so the internal 
+  // messages can be defined from the presentation layer template definition.
+  
+  using PresentationLayerType = PresentationLayer< 
+                                typename ExternalMessage::PayloadType >;
+  
+  using InternalMessage = PresentationLayerType::RemoteMessage;
+                          
+  // The expected network layer type is also defined based on the message 
+                          
+  using NetworkLayerType = NetworkLayer< ExternalMessage >;
 
   // ---------------------------------------------------------------------------
-  // Address map
+  // Local variables
   // ---------------------------------------------------------------------------
   //
-  // Each actor has two addresses, one external useful for the communication
-  // protocol, and one internal actor address used by Theron to forward packets.
-  // The latter will in this context be called the actor's ID and the former is
-  // the external address.
-  //
-  // The IDs are essentially local for the actors attached to an endpoint. Only
-  // if a local ID cannot be found should the message be sent externally. This
-  // means that a local actor will overshadow a remote actor with the same ID.
-  // The consequence is, however, that actors expecting responses to their
-  // messages should have unique IDs since the ID is the only thing that is
-  // sent to the local actor together with the message. If the local actor
-  // responds, the message would not go to the remote ID but to the local actor
-  // if there is a local actor with the same ID as the remote sender.
-  //
-  // An actor can be created in two ways: With an explicit name string, like
-  // the following "MyActorName", or with an automatically assigned ID. In
-  // latter case, the Framework and the EndPoint will ensure that the assigned
-  // ID is unique as it will be bound to the EndPoint. However, if it is
-  // manually given there is no way we can assure uniqueness and prevent the
-  // overshadowing effect.
-  //
-  // It is therefore sufficient to have one map between the external address
-  // and the actor ID irrespective of the location of the actor (local or
-  // remote). However, it should be possible to look up actors both based on
-  // their IDs and based on their external addresses. This calls for a bi-
-  // directional map, and the boost::bimap provides this functionality.
-  //
-  // It would be great if the tagged version of the bimap could be used,
-  // but this does not work with template classes, see question asked at
-  // http://stackoverflow.com/questions/30704621/tagged-boostbimap-in-templates-do-they-work
-  //
-  // The bi-map is then defined for the two types given by the external
-  // address as the left hand side and the actor ID represented by the
-  // Theron::Address object as the right hand side.
-
-protected:
-
-  using ActorRegistryMap = boost::bimaps::bimap <
-    boost::bimaps::unordered_set_of< ExternalAddress >,
-    boost::bimaps::set_of< Address >
-  >;
-
-  using ActorRecord = typename ActorRegistryMap::value_type;
-
-  // Then the actual map will be an instance of the actor registry map using
-  // the actor record to create new actor records when the information becomes
-  // available.
-	//
-	// IMPORTANT: It should be noted that the underlying model is "lazy" meaning
-	// that only local actors are stored, and the addresses of remote actors
-	// that receive messages from actors on this network endpoint. This implies
-	// that all endpoints must receive information when an actor de-register,
-	// but there is no need to ensure consistency of actor addresses when the
-	// actor system endpoint starts.
-	//
-	// The map of known actors is only protected to allow technology specific
-	// extensions of the session layer class.
-
-  ActorRegistryMap KnownActors;
-
-	// A consequence of this lazy approach is that it is necessary to cache
-	// messages to unknown recipients until their external addresses have been
-	// resolved. Since there can be many messages for one receiver, a multi-map
-	// is used
+  // When messages arrives from remote actors they should be forwarded to known
+  // actors on this endpoint. An actor can be known in two ways: either by 
+  // explicit registration, or implicitly by sending a message to a remote 
+  // actor. In either case, it is added to the the local actor registry 
+  // organised by the external address as the search key to be able to fast 
+  // forward incoming messages.
 
 private:
-
-	using MessageStore = std::unordered_multimap< Address, ExternalMessage >;
-
-  MessageStore MessageCache;
-
-  // --------------------------------------------------------------------------
-  // New peer notification subscriptions
-  // --------------------------------------------------------------------------
-  //
-  // Other local actors may want to know when actors, remote or local, become
-  // available and known. For this they can set up a subscription and receive
-  // the known actor addresses.
-  //
-  // The set of active subscribers are kept in a set of subscribers to avoid
-  // double subscriptions and ensure that only one subscription is stored for
-  // each actor.
-
+  
+  std::unordered_map< ExternalAddress, Address > LocalActorRegistry;
+  
+  // Since the external address of the sending actor is created on the fly 
+  // from its actor address and the endpoint identification, the latter must 
+  // be stored and and used to form the external address of local actors.
+  
+  const std::string EndpointName;
+  
+  // The addresses of local actors wanting to receive notifications about new 
+  // peers are kept in a simple set to avoid duplicates.
+  
   std::set< Address > NewPeerSubscribers;
 
-  // When a peer subscribes to be notified about new peers, it will be added
-  // to the set of subscribers, and it will receive a message containing the
-  // peers currently known to the system. It could be that no peers are known
-  // to the system, in which an empty set of addresses will be returned.
+  // The main task of the Session Layer is to keep track of communication 
+  // sessions involving a local actor and a remote actor. However, the actual
+  // messages will contain the actor identifiers and it is therefore not 
+  // necessary to keep track of which local actor has a session with which 
+  // external actor. The purpose is therefore just to maintain the mapping 
+  // from an actor address to the external address of the actor. This is 
+  // done both ways: When a message is sent from a local actor to a remote 
+  // actor, it does not need to consider that the actor is remote and 
+  // send to the actor using its normal actor name as destination. If the 
+  // actor system fails to find the actor on this endpoint, a resolution 
+  // request is initiated and when it terminates with the external address 
+  // unique of the remote actor. 
+  
+  std::unordered_map< Address, ExternalAddress > ExternalActors;
+  
+  // During the resolution of the external address, messages for the remote 
+  // actor must be cached. It should be noted that several messages may 
+  // arrive for the same external actor during the resolution process, and 
+  // the cache is therefore a multi-map allowing multiple entries for the 
+  // remote actor.
+  
+  std::unordered_multimap< Address, InternalMessage > MessageCache;
 
-  void SubscribeToPeerDiscovery(
-    const SessionLayerMessages::NewPeerSubscription & Command,
-    const Address RequestingActor )
-  {
-    NewPeerSubscribers.insert( RequestingActor );
-    NewPeerAdded ExistingPeers;
-
-    for ( auto Peer  = KnownActors.right.begin();
-				       Peer != KnownActors.right.end(); ++Peer )
-		  ExistingPeers.insert( Peer->first );
-
-    Send( ExistingPeers, RequestingActor );
-  }
-
-  void UnsubscribePeerDiscovery(
-    const SessionLayerMessages::NewPeerUnsubscription & Command,
-    const Address RequestingActor )
-  {
-    NewPeerSubscribers.erase( RequestingActor );
-  }
-
- 	// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Shut-down management
   // ---------------------------------------------------------------------------
 	//
@@ -442,227 +350,263 @@ protected:
 	virtual void Stop( const Network::ShutDown & StopMessage,
 										 const Address Sender )
 	{
-		Send( StopMessage, PresentationLayerAddress() );
+		Send( StopMessage, Network::GetAddress( Network::Layer::Presentation ) );
 
-		for ( auto & AnActorRecord : KnownActors.right )
-			if ( AnActorRecord.first.IsLocalActor() )
-				Send( StopMessage, AnActorRecord.first );
+    std::ranges::for_each( std::view::values( LocalActorRegistry ),
+      [&,this]( const Address & LocalActor )[
+        Send( StopMessage, LocalActor );
+    ]);
 
 		NetworkConnected = false;
 	}
 
-  // --------------------------------------------------------------------------
-  // Local actor registration and de-registration
-  // --------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Local actor registry
+  // ---------------------------------------------------------------------------
   //
-  // When a local de-serialising actor starts it may register if it may receive
-  // messages from actors on remote endpoints. This registration will add the
-  // address to the known actors, and send the actor's address to the new
-  // peer notification subscribers.
-  //
-  // There is a hatch: The bi-map of know actors requires both the external
-  // address and the local actor address. The external address must be resolved
-  // by the network layer. However, it is unknown how long this process will
-  // take. In the meantime a void external address could be used, but if a
-  // second actor registers before the resolution for the first actor is
-  // complete, it will receive the same default external address. However, the
-  // bi-map will not accept two identical external addresses and the second
-  // registration will be refused. Since the actual format of the external
-  // address is technology dependent, it is not possible to construct a
-  // realistic external address unique to the actor being registered (some kind
-  // of actor address hash) in a default way.
-  //
-  // Even if this may overcome the problem of registering the actor in the
-  // bi-map, there is a risk that this actor will actually follow the
-  // registration by sending an external message, and then will be identified
-  // with an external address that cannot be used to route the incoming message
-  // if the external address has been resolved to something else in the
-  // meantime. The only viable solution is to make an incomplete registration
-  // by just recording the registration, and then finalise it once the response
-  // from the network layer arrives. Messages sent from this local actor will
-  // just be cached until the resolution response arrives.
-  //
-  // If some actor subscribes to the registered peers, the subscribing actors
-  // will not be informed about this new registration before its external
-  // address has been resolved. The registration handler will therefore simply
-  // create a resolution request for the actor.
+  // A local actor can register with the session layer to indicate that it is
+  // available to receive messages from remote actors. The registration 
+  // messages just makes an entry in the local actor registry map. If there 
+  // are subscribers to new actor events, they will be informed. 
+  // 
+  // It is a philosphical question if this registration should be done 
+  // even if the network has not yet been connected, but since it is about the 
+  // local actor it is fine to register them as other local actors will always
+  // be able to send messages to these actors as long as they remain active.
 
 private:
 
-  void RegisterActor( const SessionLayerMessages::RegisterActorCommand & Command,
-							        const Address LocalActor )
+  void RegisterActor( const RegisterActorCommand & Command,
+                      const Address LocalActor )
 	{
-		if ( NetworkConnected )
-			Send(
-			typename NetworkLayer<ExternalMessage>::ResolutionRequest( LocalActor ),
-			NetworkLayerAddress() 	);
-		else
-			Send( Network::ShutDown(), LocalActor );
+    LocalActorRegistry.try_emplace( 
+     ExternalAddress( LocalActor, EndpointName ), LocalActor );
+    
+    std::ranges::for_each( NewPeerSubscribers, 
+      [this](const Address & Subscriber){
+        Send( NewPeerAdded( LocalActor ), Subscriber );
+    });
+	}
+	
+	// When a remote actor wants to send a message to an actor not on its own 
+	// endpoint it initiates a resolution request. This request is received by 
+	// the Network Layer that forwards a request to the session layer and if the 
+	// actor has registered or if it is known by name on this node, positive 
+	// response is returned, and the actor is stored as a local actor in the 
+	// registry so that messages can easily be mapped for this actor.
+	
+	void CheckLocalActor( const NetworkLayerType::ResolutionRequest & TheRequest,
+                        const Address TheNetworkLayer )
+	{
+    if( TheRequest.RequestedActor.IsLocalActor() )
+    {
+      ExternalAddress GlobalActorID( TheRequest.RequestedActor, EndpointName );
+      
+      LocalActorRegistry.try_emplace(GlobalActorID, TheRequest.RequestedActor);
+      
+      Send( NetworkLayerType::ResolutionResponse( 
+            GlobalActorID, TheRequest.RequestingActor ),
+            Network::GetAddress( Network::Layer::Network ) );
+    }
 	}
 
-  // When the resolved address comes back it will be associated with the
-  // already recorded actor address. Note that this can also be used to update
-  // a previously stored address if the link protocol can change the address
-  // autonomously. It can also be that this is a response to a request to store
-  // the address of a remote actor whose global address has been resolved.
+	// Actors can be created and destroyed at any time, and if a remote actor 
+	// closes, it should be removed from the local registry and a message must 
+	// be sent to the networking layer to inform other endpoints that the actor
+	// is no longer available. The direct approach would be to search the local
+	// actor registry by the value field for an address matching the closing 
+	// actor's address. This would be linear in the number of local actors. A
+	// better approach is to first form the actor's external address and check 
+	// if this exists as the lookup will then be O(1), and the external address 
+	// will be readily available for notifying remote endpoints.
+	// 
+	// If the actor is in the local registry, the Network Layer is asked 
+	// to notify remote endpoints about this actor removal, and then the actor 
+	// record is removed from the local registry. All local actors subscribing  
+	// to the actor availability events will be notified that the actor has 
+	// closed.
+	// 
+	// The final step of the shut down protocol is initiated when the network 
+	// is marked as disconnected and the last local actor closes. Only then can 
+	// the Network Layer close.
+	
+  void RemoveLocalActor( const RemoveActorCommand & Command,
+                         const Address ClosingActor )
+  {
+    ExternalAddress GlobalActorID( ClosignActor, EndpointName );
+    
+    if( LocalActorRegistry.contains( GlobalActorID ) )
+    {
+			Send( NetworkLayerType::RemoveActor( GlobalActorID ),
+				    Network::GetAddress( Network::Layer::Network ) );
+      
+      LocalActorRegistry.erase( GlobalActorID );
+      
+      if( !NetworkConnected && LocalActorRegistry.empty() )
+        Send( Network::ShutDown(), 
+              Network::GetAddress( Network::Layer::Network ) );
+    }
+
+    // Finally, all Actors on this node subscribing for peer actor events will 
+    // be notified.
+
+    std::ranges::for_each( NewPeerSubscribers, 
+      [this](const Address & Subscriber){
+        Send( PeerRemoved( LocalActor ), Subscriber );
+  });    
+  }
+
+  // ---------------------------------------------------------------------------
+  // Subscriber management
+  // ---------------------------------------------------------------------------
   //
-  // Any cached messages must be forwarded if the external address was a new
-  // external address and there are cached outbound messages for this remote
-  // actor
+  // When a peer subscribes to be notified about new peers, it will be added
+  // to the set of subscribers, and it will receive a message containing the
+  // peers currently known to the system. Note that addresses of the peer 
+  // actors must be exported differently for the external actor and the 
+  // internal actor as it it just the raw actor address that should be sent 
+  // to the subscriber. It could be that no peers are known to the system, 
+  // in which an empty set of addresses will be returned.
+
+  void SubscribeToPeerDiscovery( const NewPeerSubscription & Command,
+                                 const Address SubscribingActor )
+  {
+    NewPeerAdded ExistingPeers;
+
+    ExistingPeers.insert_range( std::view::keys( ExternalActors ) );
+    ExistingPeers.insert_range( std::view::values( LocalActorRegistry ) );
+    
+    Send( ExistingPeers, SubscribingActor );
+    NewPeerSubscribers.insert( RequestingActor );
+  }
+
+  // The inverse function cancelling a subscription is simpler since it is 
+  // just deleting the address of the subscribing actor.
+  
+  void UnsubscribePeerDiscovery( const NewPeerUnsubscription & Command, 
+                                 const Address SubscribingActor )
+  {
+    NewPeerSubscribers.erase( SubscribingActor );
+  }
+  
+  // ---------------------------------------------------------------------------
+  // Outbound messages
+  // ---------------------------------------------------------------------------
+  //
+  // Given that the session layer does not know about remote actors before
+  // before they are addressed by local actors, an outbound message will be
+  // cached pending the address resolution if the actor is unknown, otherwise
+  // is is immediately passed on to be forwarded by the link layer.
+
+  void OutboundMessage( const InternalMessage & TheMessage,
+                        const Address ThePresentationLayer )
+	{
+    // The external address of the local sender is constructed first
+    
+    ExternalAddress SenderAddress( TheMessage.From, EndpointName );
+    
+    // The local actor is registered if it does not already exist in the 
+    // local registry
+    
+    LocalActorRegistry.try_emplace( SenderAddress, TheMessage.From );
+    
+		// The normal situation is that the external address is already known 
+    // and the external message can be constructed based on the looked up 
+    // external address and the global address of the sending actor.
+    
+    if( ExternalActors.contains( TheMessage.GetReceiver() ) )
+    {
+      Send( ExternalMessage( SenderAddress, 
+                             ExternalActors[ TheMessage.To ], 
+                             TheMessage.MessagePayload ),
+            Network::GetAddress( Network::Layer::Network ) );
+    }
+    else
+    {
+      // The global address of the remote receiver is not known and a resolution
+      // request is initiated before the message is cached using the receiver 
+      // actor's address as key.
+      
+      Send( NetworkLayerType::ResolutionRequest(
+            TheMessage.GetReceiver(), SenderAddress ),
+            Network::GetAddress( Network::Layer::Network ) );
+      
+      // Then caching the message waiting for the address to be resolved some 
+      // time in the future. Note that this may not be immediate because the 
+      // remote receiver may not yet exist since actors can be created or 
+      // destroyed dynamically.
+      
+      MessageCache.emplace( TheMessage.To, TheMessage );
+    }    
+	}
+  
+  // When the resolved address comes back the message will provide both the 
+  // address of the searched remote actor, and the global address of the 
+  // local requesting actor. It will simply store the global address of the 
+  // remote actor, and forward any cached messages. 
 
   void StoreExternalAddress(
-		   const typename
-		   NetworkLayer< ExternalMessage >::ResolutionResponse & AddressRecord,
+		   const NetworkLayerType::ResolutionResponse & AddressRecord,
 			 const Address TheNetworkLayer	)
   {
-		auto ByID = KnownActors.right.find( AddressRecord.TheActor );
-
-		if ( ByID != KnownActors.right.end() )
-			KnownActors.right.replace_data( ByID, AddressRecord.GlobalAddress );
-		else
-		{
-			// This is a response to a resolution request created when a local
-			// actor wanting to send a message to this remote actor and both
-			// the external address and the local address should be stored
-
-			KnownActors.insert( ActorRecord( AddressRecord.GlobalAddress,
-																			 AddressRecord.TheActor ) );
-
-			// If there are subscribers that should be informed about the new actor
-			// registration, they should all be informed about this event.
-
-			if ( ! NewPeerSubscribers.empty() )
-		  {
-				NewPeerAdded NewPeer;
-				NewPeer.insert( AddressRecord.TheActor );
-
-				for ( auto & AnActor : NewPeerSubscribers )
-					Send( NewPeer, AnActor );
-			}
-
-			// Then it must be checked if there are any cached messages for this
-			// remote receiver.
-
-			auto Range = MessageCache.equal_range( AddressRecord.TheActor );
-
-			if ( Range.first != MessageCache.end() )
-		  {
-				// Then the external messages cached for this receiver will be sent
-				// to the network layer server
-
-				Address TheNetworkLayer( NetworkLayerAddress() );
-
-				std::for_each( Range.first, Range.second,
-			    [&]( const typename MessageStore::value_type & Message){
-						Send( ExternalMessage( Message.second.GetSender(),
-																   AddressRecord.GlobalAddress,
-																   Message.second.GetPayload() ),
-								  TheNetworkLayer );
-					});
-
-				MessageCache.erase( Range.first, Range.second );
-			}
-		}
-	}
-
-	// The network layer do not know if a local actor is a de-serializing actor,
-	// as this is only known by the session layer since only such actors can
-	// register with the session layer. Thus, when a remote end-point wants to
-	// know if an actor exists on this node, a resolution request message is
-	// generated by the network layer. The handler for this responds with a
-	// resolution response message if the actor is known to the session layer.
-
-	void CheckLocalActor(
-	const typename NetworkLayer<ExternalMessage>::ResolutionRequest & TheRequest,
-	const Address TheNetworkLayer )
-	{
-		auto ByID = KnownActors.right.find( TheRequest.NewActor );
-
-		if ( ByID != KnownActors.right.end() )
-			Send( typename NetworkLayer< ExternalMessage >::ResolutionResponse(
-			      ByID->second, TheRequest.NewActor ), TheNetworkLayer );
-	}
-
-  // In the same way there is a command handler for removing the external
-  // address of an actor (local or external). There can also be protocol
-  // specific side effects for this action, however the default behaviour is
-  // just to look up the actor in the map and remove it if it has a
-  // registration. The information that the actor has been removed is also
-  // passed back to all subscribers of peer actor information.
-
-  void RemoveLocalActor(
-									  const SessionLayerMessages::RemoveActorCommand & Command,
-						        const Address ActorAddress )
-  {
-    auto AddressRecord = KnownActors.right.find( ActorAddress );
-
-		if ( AddressRecord != KnownActors.right.end() )
+    // The actor address of the remote actor is stored first.
+    
+    Address RemoteActor( AddressRecord.RequestedActor.ActorAddress() );
+    
+    // The actor addresses are stored if they do not exist in the list of 
+    // external actors.
+    
+    ExternalActors.try_emplace( RemoteActor, AddressRecord.RequestedActor );
+    
+    // if there are messages cached for this remote actor, they should be 
+    // forwarded and deleted from the cache.
+    
+    if( MessageCache.contains( RemoteActor ) )
     {
-			// First the network layer is asked to remove remote references for this
-			// actor to prevent remote actors from sending further messages.
-
-			Send( typename NetworkLayer<ExternalMessage>::RemoveActor(
-										 AddressRecord->second ),
-				    NetworkLayerAddress() );
-
-			// The actor is then forgotten locally
-
-      KnownActors.right.erase( AddressRecord );
-
-			// Finally all local subscribers can be informed about this event.
-
-      for ( const Address & Subscriber : NewPeerSubscribers )
-				Send( PeerRemoved( ActorAddress ), Subscriber );
-
-			// If this was the last actor and the network is closing, the Network
-			// Layer server must be asked to shut down. The tricky thing is that
-			// there could be other remote actors stored in the known actors map,
-			// and so the location of each actor must be checked.
-
-			if ( NetworkConnected == false )
-		  {
-				for ( auto & AnActorRecord : KnownActors.right )
-					if ( AnActorRecord.first.IsLocalActor() )
-				  {
-						Send( Network::ShutDown(), NetworkLayerAddress() );
-						break;
-					}
-			}
+      auto [First, Last] = MessageCache.equal_range( RemoteActor );
+      
+      for( auto & [_, TheMessage] : std::ranges::sub_range( First, Last ) )
+        Send( ExternalMessage( ExternalAddress( TheMessage.GetSender(), 
+                                                EndpointName ),
+                               AddressRecord.RequestedActor,
+                               TheMessage.GetPayload() ),
+              Network::GetAddress( Network::Layer::Network ) );
+              
+      MessageCache.erase( First, Last );
     }
-  }
+	}
 
   // In the same way, the session layer must also respond to requests to remove
   // remote actors, and it should also notify peer subscribers. If the actor
   // is not known, then nothing will happen.
 
-  void RemoveRemoteActor(
-				  const typename NetworkLayer< ExternalMessage >::RemoveActor & Command,
-					const Address TheNetworkLayer )
+  void RemoveRemoteActor( const NetworkLayer::RemoveActor & Command, 
+                          const Address TheNetworkLayer )
 	{
-		auto AddressRecord = KnownActors.left.find( Command.GlobalAddress );
+		auto AddressRecord = ExternalActors.find( Command.GlobalAddress );
 
-		if ( AddressRecord != KnownActors.left.end() )
+		if ( AddressRecord != ExternalActors.end() )
 		{
 			// All subscribers are informed about this removal first
 
-			for ( const Address & Subscriber : NewPeerSubscribers )
-				Send( PeerRemoved( AddressRecord->second ), Subscriber );
+      std::ranges::for_each( NewPeerSubscribers, 
+        [&,this]( const Address & Subscriber ){
+          Send( PeerRemoved( AddressRecord->second ), Subscriber );
+        });
 
 			// Any messages cached for this remote actor will simply be deleted.
 			// hence the sending actor should be robust and aware that a message
 			// may not arrive if the actors are volatile.
 
-			auto Result  = MessageCache.equal_range( AddressRecord->second );
-
-			if ( Result.first != MessageCache.end() )
-				MessageCache.erase( Result.first, Result.second );
+			auto [First, Last] = MessageCache.equal_range( AddressRecord->second );
+			MessageCache.erase( First, Last );
 
 			// Finally, the address record can be deleted.
 
-			KnownActors.left.erase( AddressRecord );
+			ExternalActors.erase( AddressRecord );
 		}
 	}
-
+	
   // --------------------------------------------------------------------------
   // Inbound messages
   // --------------------------------------------------------------------------
@@ -671,22 +615,24 @@ private:
   // ignored. This is necessary in the case where the local actor shuts down
   // at the same time as a remote actor sends a message. The information that
   // the actor is closing may cross with the message from the remote sender, and
-  // the message cannot be delivered.In order to ensure the delivery in a
+  // the message cannot be delivered. In order to ensure the delivery in a
   // distributed setting an acknowledgement protocol should be implemented
-  // among the actors.
+  // among the actors, but this is application dependent.
   //
-  // Inbound messages from registered senders is perfectly possible, but creates
-  // a philosophical problem. It could be that these senders have not been
-  // registered by the remote endpoint because they are not supposed to receive
-  // any messages. Remember that the registration is done by the Deserializing
-  // actor, and it is only necessary to inherit the Deserializing actor if the
-  // actor is receiving messages from actors on remote endpoints. If the actors
-  // implement a publish-subscribe pattern, only the subscribing actors will
-  // receive messages, and the pattern is not symmetric. The endpoint hosting
-  // the subscribing actor may thus not know about the sender of the message,
-  // and it has to set the actor address of the sender to a string
-  // representation of the external address. The question is should it also
-  // register this sender as a known actor?
+  // Inbound messages from unregistered senders is perfectly possible, but 
+  // creates a philosophical problem. It could be that these senders have not 
+  // been registered by the remote endpoint because they are not supposed 
+  // to receive any messages. Remember that the registration is done by the 
+  // Networking Actor, and it is only necessary to inherit the Networking
+  // Actor if the actor is receiving messages from actors on remote endpoints.
+  // In theory, an actor can send messages without being able to receive 
+  // message. If the actors implement a publish-subscribe pattern, only the 
+  // subscribing actors will receive messages, and the pattern is not 
+  // symmetric. The endpoint hosting the subscribing actor may thus not 
+  // know about the sender of the message, and it has to set the actor 
+  // address of the sender to a string representation of the external 
+  // address. The question is should it also register this sender as a 
+  // known actor?
   //
   // The risk is that storing the sender in a situation where remote sender
   // actors are frequently created and destroyed will cause the known actor
@@ -712,104 +658,14 @@ private:
 
 protected:
 
-	using RemoteMessage = PresentationLayer::RemoteMessage;
-
   virtual void InboundMessage( const ExternalMessage & TheMessage,
 										           const Address TheNetworkLayer )
 	{
-		auto ReceiverRecord = KnownActors.left.find( TheMessage.GetRecipient() );
-
-		if ( ReceiverRecord != KnownActors.left.end() )
-		{
-			// The actor address of the sender must be set for the message to be
-			// valid. It can either be stored in the actor registry if the remote
-			// actor has already been registered, or it can be set to a temporary
-			// remote actor address.
-
-			Address RemoteActor;
-
-			// The sender's actor address is resolved if it is registered.
-
-			auto SenderRecord = KnownActors.left.find( TheMessage.GetSender() );
-
-			if ( SenderRecord != KnownActors.left.end() )
-				RemoteActor = SenderRecord->second;
-			else
-				RemoteActor = TheMessage.ActorAddress( TheMessage.GetSender() );
-
-			// The sender's actor address is now valid, and the message can be
-			// forwarded to the presentation layer to be de-serialised.
-
-			Send( RemoteMessage( RemoteActor,	ReceiverRecord->second,
-													 TheMessage.GetPayload()  ),
-						PresentationLayerAddress() );
-		}
-	}
-
-  // --------------------------------------------------------------------------
-  // Outbound messages
-  // --------------------------------------------------------------------------
-  //
-  // Given that the session layer does not know about remote actors before
-  // before they are addressed by local actors, an outbound message will be
-  // cached pending the address resolution if the actor is unknown, otherwise
-  // is is immediately passed on to be forwarded by the link layer.
-
-private:
-
-  void OutboundMessage( const PresentationLayer::RemoteMessage & TheMessage,
-												const Address ThePresentationLayer )
-	{
-		// The receiver and the senders are looked up by their actor addresses
-
-		auto TheReceiver = KnownActors.right.find( TheMessage.GetReceiver() ),
-		     TheSender   = KnownActors.right.find( TheMessage.GetSender() );
-
-		// It is a philosophically difficult problem if the sender does not
-		// exists as a known actor since this means that the actor has not
-		// registered, and the Deserializing Actor base class will register all
-		// derived actors. In other words, the actor is not able to receive
-		// serialised messages, and no message should be routed back to it.
-		// Yet, it is probably correct to send it, but with an empty return
-		// address. Hence, if the lookup fails it is assumed that the sender
-	  // address is initialised to something that has a default value by the
-	  // default constructor of the External message, and the sender field is
-	  // not set.
-
-	  ExternalAddress SenderAddress;
-
-		if ( TheSender != KnownActors.right.end() )
-			SenderAddress = TheSender->second;
-
-		// Then the datagram can be sent or queued depending on whether the
-		// external address of the receiver is already known or not. If it is
-		// known then message can just be forwarded to the Network Layer server
-		// for handling.
-
-		if ( TheReceiver != KnownActors.right.end() )
-			Send( ExternalMessage( SenderAddress, TheReceiver->second,
-														 TheMessage.GetPayload() ),
-						NetworkLayerAddress() );
-		else
-		{
-			// The external address of the receiver is currently not known, and it
-			// should be requested from the network layer - but only if there is
-			// not already a pending request indicated by a cached message.
-
-			if ( MessageCache.find( TheMessage.GetReceiver() ) == MessageCache.end() )
-				Send( typename NetworkLayer< ExternalMessage >::ResolutionRequest(
-							  TheMessage.GetReceiver() ),
-				      NetworkLayerAddress()	);
-
-			// Then the message is cached for delayed sending once the response comes
-			// back from the network layer. In this case the receiver field is left
-		  // uninitialised until the resolution response comes back from the
-		  // Network Layer server.
-
-			MessageCache.emplace( TheMessage.GetReceiver(),
-														ExternalMessage( SenderAddress, ExternalAddress(),
-																						 TheMessage.GetPayload() ) );
-		}
+    if( LocalActorRegistry.contains( TheMessage.GetRecipient() ) )
+			Send( InternalMessage( TheMessage.GetSender().ActorAddress(), 
+                             TheMessage.GetRecipient().ActorAddress(), 
+                             TheMessage.GetPayload()  ),
+						Network::GetAddress( Network::Layer::Presentation ) );
 	}
 
   // --------------------------------------------------------------------------
@@ -827,22 +683,23 @@ private:
 
 public:
 
-  SessionLayer( const std::string & ServerName = "SessionLayer"  )
+  SessionLayer(const std::string & ServerName, const std::string & TheEndPoint)
   : Actor( ServerName ),
     StandardFallbackHandler( ServerName ),
     SessionLayerMessages(),
-    KnownActors(), MessageCache(), NewPeerSubscribers(),
-		NetworkConnected( false )
+    LocalActorRegistry(), EndpointName( TheEndPoint ), NewPeerSubscribers(),
+    ExternalActors(), MessageCache(),
+		NetworkConnected( true )
   {
+    RegisterHandler( this, &SessionLayer<ExternalMessage>::Stop                     );
+		RegisterHandler( this, &SessionLayer<ExternalMessage>::RegisterActor            );
+    RegisterHandler( this, &SessionLayer<ExternalMessage>::CheckLocalActor    	    );
+		RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoveLocalActor    	    );
     RegisterHandler( this, &SessionLayer<ExternalMessage>::SubscribeToPeerDiscovery );
     RegisterHandler( this, &SessionLayer<ExternalMessage>::UnsubscribePeerDiscovery );
-		RegisterHandler( this, &SessionLayer<ExternalMessage>::Stop                     );
-		RegisterHandler( this, &SessionLayer<ExternalMessage>::RegisterActor            );
-		RegisterHandler( this, &SessionLayer<ExternalMessage>::StoreExternalAddress	    );
-		RegisterHandler( this, &SessionLayer<ExternalMessage>::CheckLocalActor    	    );
-		RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoveLocalActor    	    );
-    RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoveRemoteActor        );
-    RegisterHandler( this, &SessionLayer<ExternalMessage>::OutboundMessage    	    );
+		RegisterHandler( this, &SessionLayer<ExternalMessage>::OutboundMessage    	    );
+    RegisterHandler( this, &SessionLayer<ExternalMessage>::StoreExternalAddress	    );
+		RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoveRemoteActor        );
     RegisterHandler( this, &SessionLayer<ExternalMessage>::InboundMessage           );
   }
 
@@ -850,15 +707,14 @@ public:
   // and forgets about the given Framework pointer.
 
   SessionLayer( Framework * HostPointer,
-								const std::string & ServerName = "SessionLayer" )
-	: SessionLayer( ServerName )
+								const std::string & ServerName, const std::string TheEndPoint )
+	: SessionLayer( ServerName, TheEndPoint )
 	{ }
 
   // The destructor has nothing to do, but is a place holder for derived classes
 
-  virtual ~SessionLayer()
-  { }
+  virtual ~SessionLayer() = default;
 };
 
-} 	// End name space Theron
+}	// End name space Theron
 #endif 	// THERON_SESSION_LAYER

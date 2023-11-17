@@ -34,6 +34,7 @@
 #include <type_traits>
 #include <stdexcept>
 #include <ostream>
+#include <concepts>
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
@@ -52,7 +53,7 @@ namespace Theron
 // The network layer depends on the external message format to be exchanged
 // with remote network endpoints.
 
-template< class ExternalMessage >
+template< ValidLinkMessage ExternalMessage >
 class NetworkLayer : virtual public Actor,
 										 virtual public StandardFallbackHandler
 {
@@ -65,8 +66,9 @@ public:
   // engine, hence the condition is enforced also here.
 
   static_assert( std::is_base_of<
-				  LinkMessage< typename ExternalMessage::AddressType >,
-				  ExternalMessage >::value,
+				  LinkMessage< typename ExternalMessage::AddressType, 
+											 typename ExternalMessage::PayloadType  >,
+											 ExternalMessage >::value,
 				  "Network Layer: External message must be derived from Link Message" );
 
  	// ---------------------------------------------------------------------------
@@ -76,20 +78,24 @@ public:
   // When an actor address needs to be found in the distributed actor system
   // The address resolution and assignment of the external address is dependent
   // on the actual communication technology being used. Hence, the session
-  // layer will send a resolution request for a given actor address.
+  // layer will send a resolution request for a given remote actor address.
+	// The message also contains the requesting actor so that the remote actor 
+	// can set up a 'subscription' for this the local actor.
 
   class ResolutionRequest
   {
 	public:
 
-		const Address NewActor;
+		const Address RequestedActor;
+		const typename ExternalMessage::AddressType RequestingActor;
 
-		ResolutionRequest( const Address & TheActor )
-		: NewActor( TheActor )
+		ResolutionRequest( const Address & TheRemoteActor, 
+											 const typename ExternalMessage::AddressType & LocalActor)
+		: RequestedActor( TheRemoteActor ), RequestingActor( LocalActor )
 		{ }
 
 		ResolutionRequest( const ResolutionRequest & Other )
-		: NewActor( Other.NewActor )
+		: RequestedActor(  Other.RequestedActor, Other.RequestingActor ) 
 		{ }
 
 		ResolutionRequest( void ) = delete;
@@ -105,17 +111,17 @@ public:
 	{
 	public:
 
-		const typename ExternalMessage::AddressType GlobalAddress;
-		const Address TheActor;
+		const typename ExternalMessage::AddressType 
+		RequestedActor, RequestingActor;
 
 		inline ResolutionResponse(
-					const typename ExternalMessage::AddressType & GlobalReference,
-					const Address & NewActor )
-		: GlobalAddress( GlobalReference ), TheActor( NewActor )
+					const typename ExternalMessage::AddressType & ResolvedAddress,
+					const typename ExternalMessage::AddressType & ActorRequesting )
+		: RequestedActor( ResolvedAddress ), RequestingActor( ActorRequesting )
 		{ }
 
 		inline ResolutionResponse( const ResolutionResponse & Other )
-		: ResolutionResponse( Other.GlobalAddress, Other.TheActor )
+		: ResolutionResponse( Other.RequestingActor, Other.RespondingActor )
 		{ }
 
 		ResolutionResponse( void ) = delete;
@@ -210,11 +216,11 @@ public:
 	NetworkLayer( std::string ServerName = "NetworkLayerServer" )
 	: Actor( ServerName ), StandardFallbackHandler( ServerName )
 	{
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolveAddress  );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolvedAddress );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ActorRemoval    );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::Stop            );
+		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::ResolveAddress  );
+		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::ResolvedAddress );
+		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::ActorRemoval    );
+		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::OutboundMessage );
+		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::Stop            );
 	}
 
   // Finally there is a virtual destructor

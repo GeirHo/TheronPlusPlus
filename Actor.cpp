@@ -71,9 +71,9 @@ Theron::Framework * Theron::Actor::GlobalFramework = nullptr;
 // handling.
 
 void Theron::Actor::Identification::SetPresentationLayerServer(
-																		const Theron::PresentationLayer * TheSever )
+																		const Address & ThePresentationLayerSever )
 {
-	PresentationLayerServers.insert( TheSever->GetAddress() );
+	PresentationLayerServers.insert( ThePresentationLayerSever );
 }
 
 // Creating an Identification object is subject to an initial verification that
@@ -322,9 +322,10 @@ Theron::Actor::Identification::~Identification( void )
 // The function to get a serial message could not be defined in the header as
 // the serial message was forward declared.
 
-Theron::SerialMessage * Theron::Actor::GenericMessage::GetSerialMessagePointer()
+std::shared_ptr< Theron::PolymorphicProtocolHandler > 
+Theron::Actor::GenericMessage::GetPolymorphicMessagePointer()
 {
-	return nullptr;
+	return std::shared_ptr< Theron::PolymorphicProtocolHandler >();
 }
 
 // The mailbox stores a message by simply enqueue it after locking the mutex
