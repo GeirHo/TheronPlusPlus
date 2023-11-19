@@ -173,7 +173,7 @@ public:
   // and the payload and initialises the various fields accordingly.
 
   LinkMessage( const ExternalAddress & From, const ExternalAddress & To,
-			   const MessagePayload ThePayload )
+			         const MessagePayload ThePayload )
   : SenderAddress( From ), ReceiverAddress( To ), Payload( ThePayload )
   { }
 
@@ -191,7 +191,7 @@ public:
   // The destructor is virtual to support correct deallocation of derived
   // classes, but it does not do anything in particular.
 
-  virtual ~LinkMessage() = default;
+  virtual ~LinkMessage() noexcept = default;
 };
 
 // -----------------------------------------------------------------------------

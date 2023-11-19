@@ -171,38 +171,55 @@ public:
   {
   public:
 
-    NewPeerAdded( void )
-    : std::set< Address >()
-    { }
-
     NewPeerAdded( const Address & ThePeer )
-    : std::set< Address >()
-    { insert( ThePeer ); }
+    : std::set< Address >{ ThePeer }
+    {}
     
+    // It is a little more complicated if a range of addresses is given to 
+    // the constructor since the type depends on the range. The concept is 
+    // taken from the exposition of the container compatible range on the page
+    // https://en.cppreference.com/w/cpp/ranges/to#container_compatible_range
+
+    template< class RangeType >
+    requires std::ranges::input_range< RangeType > &&
+             std::convertible_to< std::ranges::range_reference_t< RangeType >, 
+                                  Address >
+    NewPeerAdded( RangeType & AddressRange )
+    : std::set< Address >( AddressRange )
+    {}
+
+
+    NewPeerAdded()  = delete;
     ~NewPeerAdded() = default;
   };
 
   // It is also necessary to inform the subscribers in the situation where a
-  // registered address becomes invalid, and a subscribing actor would need
+  // registered addresses become invalid, and a subscribing actor would need
   // to register a handler for this message.
 
-  class PeerRemoved
+  class PeerRemoved : public std::set< Address >
   {
-  private:
-
-    const Address RemovedPeer;
-
   public:
 
+    // Constructing from a single address is staight forward initialisation
+  
     PeerRemoved( const Address & ThePeer )
-    : RemovedPeer( ThePeer )
-    { }
-    
-    PeerRemoved( void ) = delete;
+    : std::set< Address >{ ThePeer }
+    {}
 
-    Address GetAddress( void ) const
-    { return RemovedPeer; }
-    
+    // The ranges constructor is similar to the one used for the New Peer Added
+    // message above and basically requires a range with a type that is or is 
+    // convertible to an actor address.
+
+    template< class RangeType >
+    requires std::ranges::input_range< RangeType > &&
+             std::convertible_to< std::ranges::range_reference_t< RangeType >, 
+                                  Address >
+    PeerRemoved( RangeType & AddressRange )
+    : std::set< Address >( AddressRange )
+    {}
+
+    PeerRemoved()  = delete;
     ~PeerRemoved() = default;
   };
 
@@ -353,12 +370,46 @@ protected:
 		Send( StopMessage, Network::GetAddress( Network::Layer::Presentation ) );
 
     std::ranges::for_each( std::view::values( LocalActorRegistry ),
-      [&,this]( const Address & LocalActor )[
-        Send( StopMessage, LocalActor );
-    ]);
+      [&,this]( const Address & LocalActor ){
+        Send( StopMessage, LocalActor ); });
 
 		NetworkConnected = false;
 	}
+
+  // There is also possible that a remote endpoint is closing. In this case all
+  // addresses held against this remote endpoint is invalidated, and should be 
+  // removed. It is also necessary to inform local subscribers that all known
+  // actors on the remote endpoint have been removed.
+
+  virtual void RemoteEndpointClosing( 
+               const Network::ClosingEndpoint & ClosingMessage, 
+               const Address TheNetworkLayer )
+  {
+    // The addresses used by local actors on this endpoint to send 
+    // messages to actors on the closing endpoint is collected. 
+
+    PeerRemoved RemovedActorAddresses( 
+      std::ranges::view::keys(
+        std::ranges::view::filter( ExternalActors,
+          [&](const auto & ActorRecord){ 
+          return ActorRecord.second.Endpoint() == ClosingMessage.Identifier 
+        }) )
+    );
+
+    // The local subscribers are informed about the removal of all the remote 
+    // actors on the closing endpoint.
+
+    std::ranges::for_each( NewPeerSubscribers, 
+      [&,this](const Address & Subscriber){ 
+        Send( RemovedActorAddresses, Subscriber ); });
+
+    // Finally, all the remote address records held for the closing endpoint 
+    // can be removed.
+
+    std::ranges::for_each( RemovedActorAddresses, 
+      [&,this](const Address & RemovedActor){ 
+        ExternalAddress.erase( RemovedActor ) });
+  }
 
   // ---------------------------------------------------------------------------
   // Local actor registry
@@ -672,18 +723,12 @@ protected:
   // Constructor and destructor
   // --------------------------------------------------------------------------
   //
-  // The constructor then takes only the name of the Session Layer as
-  // argument after the mandatory pointer to the network endpoint. However,
-  // note that there is a default initialisation of the addresses of the
-  // Network Layer server and the Presentation Layer server. This is possible
-  // since a Theron Address  object initialised with a string will not check if
-  // this corresponds to a legal address before a message is being sent to this
-  // address. Hence, if the default names are used, then the explicit binding
-  // of their addresses is not necessary.
+  // The constructor only takes the name of the endpoint and the name of the 
+  // Session Layer as arguments.
 
 public:
 
-  SessionLayer(const std::string & ServerName, const std::string & TheEndPoint)
+  SessionLayer(const std::string & TheEndPoint, const std::string & ServerName)
   : Actor( ServerName ),
     StandardFallbackHandler( ServerName ),
     SessionLayerMessages(),
@@ -692,6 +737,7 @@ public:
 		NetworkConnected( true )
   {
     RegisterHandler( this, &SessionLayer<ExternalMessage>::Stop                     );
+    RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoteEndpointClosing     );
 		RegisterHandler( this, &SessionLayer<ExternalMessage>::RegisterActor            );
     RegisterHandler( this, &SessionLayer<ExternalMessage>::CheckLocalActor    	    );
 		RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoveLocalActor    	    );
@@ -708,7 +754,7 @@ public:
 
   SessionLayer( Framework * HostPointer,
 								const std::string & ServerName, const std::string TheEndPoint )
-	: SessionLayer( ServerName, TheEndPoint )
+	: SessionLayer( TheEndPoint, ServerName )
 	{ }
 
   // The destructor has nothing to do, but is a place holder for derived classes

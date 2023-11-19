@@ -22,19 +22,23 @@
   implemented by this actor before sending the message, or before delivering a
   received message to the protocol engine.
 
-  Author: Geir Horn, University of Oslo, 2015-2019
-  Contact: Geir.Horn [at] mn.uio.no
-  License: LGPL3.0
+ 	Author and Copyright: Geir Horn, University of Oslo
+	Contact: Geir.Horn@mn.uio.no
+	License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
 #ifndef THERON_NETWORK_LAYER
 #define THERON_NETWORK_LAYER
 
-#include <string>
-#include <type_traits>
-#include <stdexcept>
-#include <ostream>
-#include <concepts>
+// Standard headers
+
+#include <string>				// For standard strings
+#include <type_traits>	// For good templates
+#include <stdexcept>		// For indicating errors
+#include <ostream>			// For formatting error messages
+#include <concepts>			// For testing template parameters
+
+// Theron++ actor system files
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
@@ -60,16 +64,6 @@ class NetworkLayer : virtual public Actor,
 public:
 
   using MessageType = ExternalMessage;
-
-  // For the link server it is not essential that the external message confirms
-  // to the Link Message interface, but it is a requirement for the protocol
-  // engine, hence the condition is enforced also here.
-
-  static_assert( std::is_base_of<
-				  LinkMessage< typename ExternalMessage::AddressType, 
-											 typename ExternalMessage::PayloadType  >,
-											 ExternalMessage >::value,
-				  "Network Layer: External message must be derived from Link Message" );
 
  	// ---------------------------------------------------------------------------
 	// Resolving addresses
@@ -216,11 +210,11 @@ public:
 	NetworkLayer( std::string ServerName = "NetworkLayerServer" )
 	: Actor( ServerName ), StandardFallbackHandler( ServerName )
 	{
-		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::ResolveAddress  );
-		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::ResolvedAddress );
-		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::ActorRemoval    );
-		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::OutboundMessage );
-		RegisterHandler( this, &NetworkLayer< ValidLinkMessage ExternalMessa >::Stop            );
+		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolveAddress  );
+		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolvedAddress );
+		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ActorRemoval    );
+		RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );
+		RegisterHandler( this, &NetworkLayer< ExternalMessage >::Stop            );
 	}
 
   // Finally there is a virtual destructor
@@ -228,7 +222,6 @@ public:
   virtual ~NetworkLayer( void )
   { };
 };
-
 
 }      // End name space Theron
 #endif // THERON_NETWORK_LAYER
