@@ -2,8 +2,8 @@
 Active Message Queue Interface
 
 The Active Message Queue (AMQ) [1] is a server based messaging system where
-various clients can exchange messages via a server (message broker). The 
-interface to the AMQ server (broker) is based on the Qpid Proton [2] 
+various clients can exchange messages via a server (called a message broker). 
+The interface to the AMQ server (broker) is based on the Qpid Proton [2] 
 Application Programming Interface (API) [3]. The Network Layer encapsulates 
 all Proton activities and is the handler for all Proton call-backs. 
 
@@ -58,7 +58,7 @@ the following parameters must be given to its constructor:
    endpoint name in the global address, see the AMQ Message header defining 
    the global address format.
 2. The URL of the AMQ message Broker to be used
-3. The network port of the AMQ Broker to be used
+3. The network port of the AMQ Broker to be used (an integer)
 4. The name string of the Network Layer Actor
 5. The name string of the Session Layer Actor
 6. The name string of the Presentation Layer
@@ -78,10 +78,138 @@ References:
 [3] https://qpid.apache.org/releases/qpid-proton-0.39.0/proton/cpp/api/index.html
 
 Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
 License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 ==============================================================================*/
 
-#ifndef THERON_AMQ
-#define THERON_AMQ
+#ifndef THERON_AMQ_NETWORK
+#define THERON_AMQ_NETWORK
 
-#endif 
+// Standard headers
+
+// Qpid Proton interface headers
+
+#include "proton/message.hpp"
+#include "proton/connection_options.hpp"
+
+// Theron++ Actor Framework headers
+
+#include "Actor.hpp"
+#include "Utility/StandardFallbackHandler.hpp"
+#include "Communication/NetworkEndpoint.hpp"
+
+// Active Message Queue network servers
+
+#include "Communication/AMQ/AMQNetworkLayer.hpp"
+#include "Communication/AMQ/AMQSessionLayer.hpp"
+#include "Communication/AMQ/AMQPresentationLayer.hpp"
+
+namespace Theron::AMQ
+{
+/*==============================================================================
+
+ AMQ Network
+
+==============================================================================*/
+//
+// The network class is responsible for creating the different layer servers
+// using the framework of the generic network class.
+
+class Network
+: virtual public Actor,
+  virtual public StandardFallbackHandler,
+  public Theron::Network
+{
+  // ---------------------------------------------------------------------------
+  // Storing layer servers
+  // ---------------------------------------------------------------------------
+  //
+  // This AMQ Network class is final class and it should not be further
+  // inherited. The network layer actors can therefore be direct data member
+  // of this class.
+
+private:
+
+  NetworkLayer      NetworkServer;
+  SessionLayer      SessionServer;
+  PresentationLayer PresentationServer;
+
+  // ---------------------------------------------------------------------------
+  // Address access
+  // ---------------------------------------------------------------------------
+  //
+  // The addresses of these layer servers are returned by virtual functions
+  // that are so simple that they can be defined in-line
+
+protected:
+
+  virtual Address NetworkLayerAddress( void ) const final
+  { return NetworkServer.GetAddress(); }
+
+  virtual Address SessionLayerAddress( void ) const final
+  { return SessionServer.GetAddress(); }
+
+  virtual Address PresentationLayerAddress( void ) const final
+  { return PresentationServer.GetAddress(); }
+
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
+  //
+  // The constructor must have an endpoint name, and it should be noted that
+  // this is the external name to be used towards the remote AMQ endpoints
+  // giving actor addresses like <actor name>@<endpoint name>. The IP address 
+  // or the DNS lookup name for the AMQ server (or message broker) must be 
+  // given. Note that this does not specify the protocol as the TCP will be 
+  // added to this IP when connecting. An optional server port can be given and
+  // this is given as an integer to ensure that it is a proper port.
+  //
+  // Finally, the names for the Session Layer server and the Presentation Layer
+  // server can be given. They are only used to create the named actors,
+  // and default names are used if they are not given. 
+
+protected:
+
+  Network( const std::string & EndpointName,
+           const std::string & AMQServerIP,
+           const unsigned    & AMQServerPort = 61616,
+           const std::string & NetworkLayerName = "AMQNetworkLayer",
+           const std::string & SessionServerName = "AMQSessionLayer",
+           const std::string & PresentationServerName = "AMQPresentationLayer",
+           const proton::connection_options & GivenConnectionOptions 
+                  = proton::connection_options(),
+           const proton::message::property_map & GivenMessageOptions 
+                  = proton::message::property_map()  )
+  : Actor( EndPointName ), 
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    Theron::Network( Actor::GetAddress().AsString() ),
+    NetworkServer( GlobalAddress( NetworkLayerName, EndpointName ),
+                   AMQServerIP, AMQServerPort, GivenConnectionOptions,
+                   GivenMessageOptions ),
+    SessionServer( EndpointName, SessionServerName ),
+    PresentationServer( PresentationServerName )
+  {}
+
+  // The default constructor and the copy constructor are deleted
+
+  Network( void ) = delete;
+  Network( const Network & Other ) = delete;
+
+  // The destructor is virtual to ensure proper closing of base classes
+
+  virtual ~Network() = default;
+};
+
+/*==============================================================================
+
+ AMQ Endpoint
+
+==============================================================================*/
+//
+// Setting up the endpoint for AMQ implies simply to reuse the standard network
+// endpoint for the above network class creating the right servers.
+
+using NetworkEndpoint = Theron::NetworkEndpoint< Theron::AMQ::Network >;
+
+}      // Name space Theron AMQ
+#endif // THERON_AMQ_NETWORK
