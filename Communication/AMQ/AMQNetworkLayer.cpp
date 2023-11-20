@@ -16,9 +16,8 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 // The Theron++ headers
 
-#include "Communication/NetworkLayer.hpp"
 #include "Communication/NetworkEndpoint.hpp"
-
+#include "Communication/NetworkLayer.hpp"
 #include "Communication/AMQ/AMQNetworkLayer.hpp"
 
 // Additional Qpid Proton headers 
@@ -56,8 +55,8 @@ void NetworkLayer::on_connection_open( proton::connection & TheBroker )
   AMQBroker = TheBroker;
   Connected = true;
   
-  ActionQueue.add( [=, this](){ AMQBroker.open_receiver( DiscoveryTopic ); } );
-  ActionQueue.add( [=, this](){ AMQBroker.open_sender  ( DiscoveryTopic ); } );
+  AMQBroker.open_receiver( DiscoveryTopic ); 
+  AMQBroker.open_sender  ( DiscoveryTopic ); 
 }
 
 // When a new sender has been connected to the right topic on the AMQ broker
@@ -82,9 +81,11 @@ void NetworkLayer::on_sendable( proton::sender & ThePublisher )
   TopicName                     TheName( TheTopicID.address() );
   std::lock_guard< std::mutex > TheLock( MessageCacheLock );
   
-  // Add the topic and the sender to the Publishers
+  // Add the topic and the sender to the Publishers. Because of asynchronous
+  // behaviour on this enpoint, it could be that he same publisher is created
+  // several times, and so it should only be registered the first time.
   
-  Publishers.emplace( TheName, ThePublisher );
+  Publishers.try_emplace( TheName, ThePublisher );
   
   // Search for the cached messages awaiting the creation of this sender and 
   // forward them as delayed actions to the AMQ event loop.
@@ -106,8 +107,8 @@ void NetworkLayer::on_sendable( proton::sender & ThePublisher )
 
 void NetworkLayer::on_receiver_open( proton::receiver & TheSubscription )
 {
-  Subscribers.emplace( TheSubscription.target().address(), 
-                       TheSubscription );
+  Subscribers.try_emplace( TheSubscription.target().address(), 
+                           TheSubscription );
 }
 
 // When a message arrives on one of the subscribed topics, the message to send 
@@ -139,8 +140,8 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             MessageType::AddressType 
             ActorAddress( proton::get< std::string >( TheMessage.body() ) );
             
-            //Send(  RemoveActor( ActorAddress ), 
-            //       Theron::Network::Layer::Session );
+            Send(  RemoveActor( ActorAddress ), 
+                   Network::GetAddress( Network::Layer::Session ) );
             Publishers.erase( ActorAddress );
           }
           break;
@@ -154,9 +155,9 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             proton::map< std::string, std::string > ActorAddresses;
             proton::get( TheMessage.body(), ActorAddresses );
           
-            //Send(  ResolutionResponse( ActorAddresses.get("RequestedActor"), 
-            //                           ActorAddresses.get("RequestingActor") ), 
-            //       Theron::Network::Layer::Session );
+            Send( ResolutionResponse( ActorAddresses.get("RequestedActor"), 
+                                      ActorAddresses.get("RequestingActor") ), 
+                  Network::GetAddress( Network::Layer::Session ) );
           }
           break;
         case Protocol::Action::ResolveAddress:
@@ -171,9 +172,9 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             proton::map< std::string, std::string > ActorAddresses;
             proton::get( TheMessage.body(), ActorAddresses );
 
-            //Send(  ResolutionRequest( ActorAddresses.get("RequestedActor"), 
-            //                          ActorAddresses.get("RequestingActor") ), 
-            //       Theron::Network::Layer::Session ); 
+            Send( ResolutionRequest( ActorAddresses.get("RequestedActor"), 
+                                     ActorAddresses.get("RequestingActor") ), 
+                  Network::GetAddress( Network::Layer::Session ) ); 
           }
           break;
         case Protocol::Action::EndpointShutDown:
@@ -187,8 +188,8 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             MessageType::AddressType 
             ClosingEndpoint( proton::get< std::string >( TheMessage.body() ) );
             
-            //Send(  EndpointShutDown( ClosingEndpoint ), 
-            //       Theron::Network::Layer::Session ); 
+            Send( Network::ClosingEndpoint( ClosingEndpoint ), 
+                  Network::GetAddress( Network::Layer::Session ) ); 
           
             // Then remove all subscriptions held against this endpoint
           
@@ -207,8 +208,7 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
     Inbound( TheMessage.reply_to(), TheMessage.to(), 
              std::make_shared< proton::message >( TheMessage ) );
   
-    //Send( Inbound, Theron::AMQ::Network::GetAddress(
-    //							 Theron::Network::Layer::Session) );
+    Send( Inbound, Network::GetAddress( Network::Layer::Session ) );
   }
   
   DeliveryStatus.accept();
@@ -314,10 +314,10 @@ void NetworkLayer::ResolveAddress(
 {
   if ( TheRequest.RequestedActor.IsLocalActor() )
   {
-    GlobalAddress ActorAddress( TheRequest.RequestedActor.AsSting(),
+    GlobalAddress ActorAddress( TheRequest.RequestedActor.AsString(),
                                 EndpointString );
-    //Send( ResolutionResponse( ActorAddress, ActorAddress), 
-    //      Theron::Network::Layer::Session );
+    Send( ResolutionResponse( ActorAddress, ActorAddress), 
+          Network::GetAddress( Network::Layer::Session ) );
   }
   else
   {
@@ -459,14 +459,24 @@ void NetworkLayer::ManageTopics( const TopicSubscription & TheMessage,
 {
   switch( TheMessage.Command )
   {
-    case TopicSubscription::Action::OpenSubscription:
+    case TopicSubscription::Action::Subscription:
       ActionQueue.add( [=,this](){
         AMQBroker.open_receiver( TheMessage.TheTopic );
+      });
+      break;
+    case TopicSubscription::Action::Publisher:
+      ActionQueue.add( [=, this](){ 
+        AMQBroker.open_sender( TheMessage.TheTopic ); 
       });
       break;
     case TopicSubscription::Action::CloseSubscription:
       ActionQueue.add( [=,this](){
         Subscribers.erase( TheMessage.TheTopic );
+      });
+      break;
+    case TopicSubscription::Action::ClosePublisher:
+      ActionQueue.add( [=,this](){
+        Publishers.erase( TheMessage.TheTopic );
       });
       break;
   }
@@ -507,7 +517,8 @@ NetworkLayer::NetworkLayer(
   
   // The handler for the connection options is set to this network layer 
   // class. It could not be set in the initialisation section above since 
-  // the this pointer does not exist before after the initialisation block.
+  // the 'this' pointer does not formally exist before after the initialisation
+  // block.
   
   ConnectionOptions.handler( *this );
   
@@ -515,6 +526,12 @@ NetworkLayer::NetworkLayer(
   // done by the various message handlers and event handlers
   
   EventLoopExecuter = std::thread( [&](){ AMQEventLoop.run(); } );
+
+  // Most of the message handlers are already registered by the generic 
+  // Network Layer base class and overridden here, and only one new message
+  // handler must be registered.
+
+  RegisterHandler( this, &NetworkLayer::ManageTopics );
 }
 
 // The main closing happens when the Network Layer receives a stop message. 

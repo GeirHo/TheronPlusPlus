@@ -292,6 +292,14 @@ public:
   // Local variables
   // ---------------------------------------------------------------------------
   //
+  // Since the external address of the sending actor is created on the fly 
+  // from its actor address and the endpoint identification, the latter must 
+  // be stored and and used to form the external address of local actors.
+  
+protected:
+
+  const std::string EndpointName;
+  
   // When messages arrives from remote actors they should be forwarded to known
   // actors on this endpoint. An actor can be known in two ways: either by 
   // explicit registration, or implicitly by sending a message to a remote 
@@ -302,12 +310,6 @@ public:
 private:
   
   std::unordered_map< ExternalAddress, Address > LocalActorRegistry;
-  
-  // Since the external address of the sending actor is created on the fly 
-  // from its actor address and the endpoint identification, the latter must 
-  // be stored and and used to form the external address of local actors.
-  
-  const std::string EndpointName;
   
   // The addresses of local actors wanting to receive notifications about new 
   // peers are kept in a simple set to avoid duplicates.
@@ -549,8 +551,10 @@ private:
   // cached pending the address resolution if the actor is unknown, otherwise
   // is is immediately passed on to be forwarded by the link layer.
 
-  void OutboundMessage( const InternalMessage & TheMessage,
-                        const Address ThePresentationLayer )
+protected:
+
+  virtual void OutboundMessage( const InternalMessage & TheMessage,
+                                const Address ThePresentationLayer )
 	{
     // The external address of the local sender is constructed first
     
@@ -595,6 +599,8 @@ private:
   // address of the searched remote actor, and the global address of the 
   // local requesting actor. It will simply store the global address of the 
   // remote actor, and forward any cached messages. 
+
+private:
 
   void StoreExternalAddress(
 		   const NetworkLayerType::ResolutionResponse & AddressRecord,
@@ -737,7 +743,7 @@ public:
 		NetworkConnected( true )
   {
     RegisterHandler( this, &SessionLayer<ExternalMessage>::Stop                     );
-    RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoteEndpointClosing     );
+    RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoteEndpointClosing    );
 		RegisterHandler( this, &SessionLayer<ExternalMessage>::RegisterActor            );
     RegisterHandler( this, &SessionLayer<ExternalMessage>::CheckLocalActor    	    );
 		RegisterHandler( this, &SessionLayer<ExternalMessage>::RemoveLocalActor    	    );

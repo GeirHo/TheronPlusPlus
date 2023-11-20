@@ -76,16 +76,18 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
-#include "Communication/AMQ/AMQMessage.hpp"
 
 // Headers for the Theron++ communication layers
 
 #include "Communication/LinkMessage.hpp"
 #include "Communication/NetworkLayer.hpp"
 
+// Active Message Queue network headers
+
+#include "Communication/AMQ/AMQMessage.hpp"
+
 namespace Theron::AMQ
 {
-  
 // The AMQ topic names are just standard strings.
 
 using TopicName = std::string; 
@@ -111,8 +113,8 @@ constexpr std::string DiscoveryTopic{ "TheronPlusPlus" };
 class NetworkLayer
 : virtual public Actor,
   virtual public StandardFallbackHandler,
-  public Theron::NetworkLayer< AMQ::Message >,
-  public proton::messaging_handler
+  virtual public Theron::NetworkLayer< Message >,
+  virtual public proton::messaging_handler
 {
   // ---------------------------------------------------------------------------
 	// Connectivity related variables
@@ -295,47 +297,30 @@ protected:
                                 
   virtual void ActorRemoval( const RemoveActor & TheCommand,
 														 const Address TheSessionLayer ) override;
-                             
-  // The endpoint shut down is more complicated because that means that all 
-  // subscriptions against that end-point are invalidated. There is a dedicated
-  // message that is used to inform the Session Layer that all references to 
-  // the remote endpoint should be removed. At the same time all subscriptions
-  // held against the endpoint will automatically be removed by the Network 
-  // layer.
-                             
-public:
-  
-  class ShutDownMessage
-  {
-  public:
-    
-    const AMQ::GlobalAddress EndpointName;
-    
-    ShutDownMessage( const AMQ::GlobalAddress & TheClosingEndpoint )
-    : EndpointName( TheClosingEndpoint )
-    {}
-    
-    ShutDownMessage ( void ) = delete;
-    ~ShutDownMessage( void ) = default;
-  };
 
-  // ---------------------------------------------------------------------------
+ // ---------------------------------------------------------------------------
 	// Topic subscriptions
 	// ---------------------------------------------------------------------------
 	//
   // Subscriptions to individual topics are made by a dedicated message as 
   // the topic may not be associated with a remote endpoint and therefore there
   // is no external address to be resolved. There are two possible actions for 
-  // the topic subscription: it can be opened or it can be closed. 
+  // the topic subscription: it can be opened as a subscription, it can be 
+  // opened as a publisher. In both cases the topic can be closed when it is 
+  // no longer needed.
                                
+public:
+
   class TopicSubscription
   {
   public:
     
     enum class Action
     {
-      OpenSubscription,
-      CloseSubscription
+      Subscription,
+      Publisher,
+      CloseSubscription,
+      ClosePublisher
     };
     
     const Action    Command;
@@ -346,10 +331,15 @@ public:
     {}
     
     TopicSubscription( void )  = delete;
+    TopicSubscription( const TopicSubscription & Other ) = default;
     ~TopicSubscription( void ) = default;
   };
-  
+
 protected:
+
+  // The handler for this allows the Session Layer to set up subscriptions. 
+  // The actors must subscribe to the Session layer to allow it to forward 
+  // incoming messages from subscribed topics to multiple local Actors.
   
   virtual void ManageTopics( const TopicSubscription & TheMessage, 
                              const Address TheSessionLayer );

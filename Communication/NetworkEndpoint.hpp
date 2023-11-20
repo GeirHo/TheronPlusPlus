@@ -144,7 +144,13 @@ public:
 
   static Address GetAddress( Layer Role );
 
-  // The whole point of static function is that it does not have the 'this'
+  // As this function overshadows the similar function from the actor, the
+  // actor function is explicitly reused (differences in argument lists is
+  // enough for the compiler to distinguish the two variants.)
+
+  using Actor::GetAddress;
+
+  // The whole point of the static function is that it does not have the 'this'
   // pointer, and so in order to be able to call the address functions for 
   // the various layers, a static pointer to the Network class must be 
   // provided. This is initialised to 'this' in the constructor.

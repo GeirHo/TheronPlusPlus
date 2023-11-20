@@ -49,56 +49,51 @@ namespace Theron::AMQ
 class GlobalAddress
 : public Theron::GlobalAddress
 {
+public:
 
-	// There are two cases to consider when reporting this as a string: the 
-	// address could be for a remote actor on a given endpoint, but it could
-	// also be just an AMQ topic. In the latter case there is no endpoint to 
-	// identify the location of the topic, and the @endpint should not be a 
-	// part of the string representation of the topic name.
-	
-	virtual std::string AsString( void ) const override
-	{  
-		if ( EndpointID.empty() )
-			return ActorID;
-		else
-		  return ActorID + '@' + EndpointID; 
-	}
-	
-	// Constructors. 
+  // There are two cases to consider when reporting this as a string: the 
+  // address could be for a remote actor on a given endpoint, but it could
+  // also be just an AMQ topic. In the latter case there is no endpoint to 
+  // identify the location of the topic, and the @endpint should not be a 
+  // part of the string representation of the topic name.
+  
+  virtual std::string AsString( void ) const override
+  {  
+    if ( EndpointID.empty() )
+      return ActorID;
+    else
+      return ActorID + '@' + EndpointID; 
+  }
+  
+  // Constructors. 
 
-	inline
-	GlobalAddress( const Address & TheActor, const Address & TheEndpoint )
-	: Theron::GlobalAddress( TheActor, TheEndpoint )
-	{}
+  inline
+  GlobalAddress( const Address & TheActor, const Address & TheEndpoint )
+  : Theron::GlobalAddress( TheActor, TheEndpoint )
+  {}
 
-	inline
-	GlobalAddress( const Address & TheActor, const std::string & TheEndpoint )
-	: Theron::GlobalAddress( TheActor, TheEndpoint )
-	{}
+  inline
+  GlobalAddress( const Address & TheActor, const std::string & TheEndpoint )
+  : Theron::GlobalAddress( TheActor, TheEndpoint )
+  {}
 
-	inline
-	GlobalAddress( const std::string & TheActor, const std::string & TheEndpoint )
-	: Theron::GlobalAddress( TheActor, TheEndpoint )
-	{}
+  inline
+  GlobalAddress( const std::string & TheActor, const std::string & TheEndpoint )
+  : Theron::GlobalAddress( TheActor, TheEndpoint )
+  {}
 
-	inline GlobalAddress( const GlobalAddress & Other )
-	: Theron::GlobalAddress( Other )
-	{}
+  inline GlobalAddress( const GlobalAddress & Other )
+  : Theron::GlobalAddress( Other )
+  {}
 
-	inline GlobalAddress( const std::string & StringAddress )
-	{
-		if ( StringAddress.contains('@') )
-	  {
-			auto AtSign = StringAddress.find('@');
-			ActorID     = StringAddress.substr( 0, AtSign );
-			EndpointID  = StringAddress.substr( AtSign + 1 );
-		}
-		else
-			ActorID = StringAddress;
-	}
+  inline GlobalAddress( const std::string & StringAddress )
+  : Theron::GlobalAddress( StringAddress.substr( 0, StringAddress.find('@') ),
+                           StringAddress.substr( StringAddress.find('@')+1 ) )
+  {}
 
-	GlobalAddress( void ) = delete;
-  virtual ~GlobalAddress( void ) = default;
+  GlobalAddress( void ) = delete;
+  virtual ~GlobalAddress( void )
+  {};
 };
 
 /*==============================================================================
@@ -119,28 +114,21 @@ class GlobalAddress
 // reply-to field to a proper address and add it to the message. 
 //
 // The message definition can in this case nicely be implemented by the standard
-// Link Message. However, a proper class definition must be made because the 
-// message is supposed to offer a way to find the actor address of the remote
-// actor based on its global address. In this case it is easy since the global
-// address provides a way to read out the address directly.
+// Link Message. 
 
 class Message 
 : public LinkMessage< GlobalAddress, std::shared_ptr< proton::message > >
 {
 public:
-	
-	virtual 
-	Address ActorAddress( const AddressType & ExternalActor ) const override
-	{ return ExternalActor.ActorAddress(); }
-	
+    
   Message( const GlobalAddress & From, const GlobalAddress & To, 
-					 const std::shared_ptr< proton::message > TheMessage )
-	: LinkMessage< GlobalAddress, 
-								 std::shared_ptr< proton::message > >( From, To, TheMessage )
-	{}
-	
-	Message() = delete;
-	virtual ~Message() = default;
+           const std::shared_ptr< proton::message > TheMessage )
+  : LinkMessage< GlobalAddress, std::shared_ptr< proton::message > >
+    ( From, To, TheMessage )
+  {}
+  
+  Message() = delete;
+  virtual ~Message() = default;
 };
 
 } // End name space Theron++ AMQ

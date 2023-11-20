@@ -17,8 +17,8 @@ Author and Copyright: Geir Horn, University of Oslo, 2018-2019
 License: LGPL 3.0
 ==============================================================================*/
 
-#ifndef THERON_AMQ_MESSAGES
-#define THERON_AMQ_MESSAGES
+#ifndef THERON_CMS_AMQ_MESSAGES
+#define THERON_CMS_AMQ_MESSAGES
 
 // Standard headers
 
@@ -823,4 +823,4 @@ void Message::Value< std::string >::StoreProperty(
 
 
 }      // End name space Theron Active MQ
-#endif // THERON_AMQ_MESSAGES
+#endif // THERON_CMS_AMQ_MESSAGES
