@@ -77,15 +77,6 @@ enum YieldStrategy
 
 class EndPoint;
 
-// The remote identity of an actor is basically a string, and the actor
-// pointer is set to the local actor that has registered as the Presentation
-// Layer. The presentation layer is responsible for serialising and
-// de-serialising message that can then be transmitted as text strings to
-// remote network endpoints. This actor type must be forward declared.
-
-template< class ProtocolPayload >
-class PresentationLayer;
-
 // Finally the polymorphic message must be forward declared to avoid circular
 // inclusion of headers.
 
@@ -195,166 +186,166 @@ class Identification : public std::enable_shared_from_this< Identification >
 {
 public:
 
-	// The Numerical ID of an actor must be long enough to hold the counter of all
-	// actors created during the application's lifetime.
+  // The Numerical ID of an actor must be long enough to hold the counter of all
+  // actors created during the application's lifetime.
 
-	using IDType = unsigned long;
+  using IDType = unsigned long;
 
-	// It also maintains the actor name and the actual ID assigned to this
-	// actor. Note that these have to be constant for the full duration of the
-	// actor's lifetime
+  // It also maintains the actor name and the actual ID assigned to this
+  // actor. Note that these have to be constant for the full duration of the
+  // actor's lifetime
 
-	const IDType 			NumericalID;
-	const std::string Name;
+  const IDType 			NumericalID;
+  const std::string Name;
 
 private:
 
-	// It maintains a global counter which should be long enough to ensure that
-	// there are enough IDs for actors. This is incremented by each actor to
-	// avoid that any two actors get the same ID
+  // It maintains a global counter which should be long enough to ensure that
+  // there are enough IDs for actors. This is incremented by each actor to
+  // avoid that any two actors get the same ID
 
-	static std::atomic< IDType > TotalActorsCreated;
+  static std::atomic< IDType > TotalActorsCreated;
 
-	// There is a small function to increment the total number of actors and
-	// return that ID. It should be noted that since the increment is done before
-	// the value is returned, the real actors will be numbered from 1... and hence
-	// 0 is a valid address for the object Address::Null (see below).
+  // There is a small function to increment the total number of actors and
+  // return that ID. It should be noted that since the increment is done before
+  // the value is returned, the real actors will be numbered from 1... and hence
+  // 0 is a valid address for the object Address::Null (see below).
 
-	inline static IDType GetNewID( void )
-	{	return ++TotalActorsCreated;	}
+  inline static IDType GetNewID( void )
+  {	return ++TotalActorsCreated;	}
 
-	// There is a pointer to the actor for which this is the ID. This
-	// will be the real actor on this endpoint, and for actors on remote
-	// endpoints, it will be the Presentation Layer actor which is responsible for
-	// the serialisation and forwarding of the message to the remote actor.
-	// This pointer is Null if no Presentation Layer is registered. Note the
-	// precedence: The Identification object is created when the first address
-	// object is created for a named actor. If no Presentation Layer is registered
-	// the pointer becomes Null, otherwise it will point to the Presentation
-	// Layer actor. If then an actor with the same name is created, the actor
-	// pointer will be set to point to this local actor. When the local actor is
-	// deleted, this pointer is set to Null as all addresses referencing this
-	// Identification object must be removed before a new Identification object
-	// can be created for a remote actor of the same name.
+  // There is a pointer to the actor for which this is the ID. This
+  // will be the real actor on this endpoint, and for actors on remote
+  // endpoints, it will be the Presentation Layer actor which is responsible for
+  // the serialisation and forwarding of the message to the remote actor.
+  // This pointer is Null if no Presentation Layer is registered. Note the
+  // precedence: The Identification object is created when the first address
+  // object is created for a named actor. If no Presentation Layer is registered
+  // the pointer becomes Null, otherwise it will point to the Presentation
+  // Layer actor. If then an actor with the same name is created, the actor
+  // pointer will be set to point to this local actor. When the local actor is
+  // deleted, this pointer is set to Null as all addresses referencing this
+  // Identification object must be removed before a new Identification object
+  // can be created for a remote actor of the same name.
 
-	Actor * ActorPointer;
+  Actor * ActorPointer;
 
-	// It will also keep track of the known actors, both by name and by ID.
-	// All actors must have an identification, locally or remotely. It may be
-	// necessary to look up actors based on their name, and the best way
-	// to do this is using an unordered map since a lookup should be O(1).
-	// These maps are protected since it is the responsibility of the derived
-	// identity classes to ensure that the name and ID is correctly stored.
+  // It will also keep track of the known actors, both by name and by ID.
+  // All actors must have an identification, locally or remotely. It may be
+  // necessary to look up actors based on their name, and the best way
+  // to do this is using an unordered map since a lookup should be O(1).
+  // These maps are protected since it is the responsibility of the derived
+  // identity classes to ensure that the name and ID is correctly stored.
 
-	static std::unordered_map< std::string, Identification * > ActorsByName;
+  static std::unordered_map< std::string, Identification * > ActorsByName;
 
-	// In the same way there is a lookup map to find the pointer based on the
-	// actor's ID. This could have been a vector, but it would have been ever
-	// growing. Having a map allows the storage of only active actors.
+  // In the same way there is a lookup map to find the pointer based on the
+  // actor's ID. This could have been a vector, but it would have been ever
+  // growing. Having a map allows the storage of only active actors.
 
-	static std::unordered_map< IDType, Identification * > ActorsByID;
+  static std::unordered_map< IDType, Identification * > ActorsByID;
 
-	// Since these three elements are shared among all actors, and actors can
-	// be created by other actors in the message handlers or otherwise, the
-	// elements can be operated upon from different threads. It is therefore
-	// necessary to ensure sequential access by locking a mutex.
+  // Since these three elements are shared among all actors, and actors can
+  // be created by other actors in the message handlers or otherwise, the
+  // elements can be operated upon from different threads. It is therefore
+  // necessary to ensure sequential access by locking a mutex.
 
-	static std::recursive_mutex InformationAccess;
+  static std::recursive_mutex InformationAccess;
 
   // The addresses of the presentation layers are stored in a set to ensure
-	// that if there is a presentation layer available, it will be able to
-	// handle messages, and to be resilient against duplicate registrations.
+  // that if there is a presentation layer available, it will be able to
+  // handle messages, and to be resilient against duplicate registrations.
 
-	static std::set< Address > PresentationLayerServers;
+  static std::set< Address > PresentationLayerServers;
 
-	// The constructor is private and takes a name string only, and assigns a
-	// unique ID to the Identification object. The reason for keeping it private
-	// is to ensure that the generator function is used when creating an
-	// identification object. If the name string is not given a default name
-	// "ActorNN" will be assigned where the NN is the number of the actor. It
-	// eventually register the identification object in the two lookups.
+  // The constructor is private and takes a name string only, and assigns a
+  // unique ID to the Identification object. The reason for keeping it private
+  // is to ensure that the generator function is used when creating an
+  // identification object. If the name string is not given a default name
+  // "ActorNN" will be assigned where the NN is the number of the actor. It
+  // eventually register the identification object in the two lookups.
 
-	Identification( const std::string & ActorName = std::string() );
+  Identification( const std::string & ActorName = std::string() );
 
-	// The smart pointer to this Identification can be created with a simple
-	// support function. Even though it is now fundamentally just a renaming of
-	// the standard mechanism, it does allow flexibility for the future where
-	// the function could be made virtual to obtain derived identities.
+  // The smart pointer to this Identification can be created with a simple
+  // support function. Even though it is now fundamentally just a renaming of
+  // the standard mechanism, it does allow flexibility for the future where
+  // the function could be made virtual to obtain derived identities.
 
-	inline std::shared_ptr< Identification > GetSmartPointer( void )
-	{	return shared_from_this();	}
+  inline std::shared_ptr< Identification > GetSmartPointer( void )
+  {	return shared_from_this();	}
 
 public:
 
-	// Identification objects must be created by a supporting generator function
-	// that checks that there is no Identification object already defined. In
-	// this case it will just return an address (reference) to that
-	// Identification object, after potentially setting its actor pointer to
-	// the actor. The last behaviour is needed in the case that an Identification
-	// is first created to an actor by name, and then the actual actor is
-	// constructed later. Several addresses my then refer to the actor-by-name
-	// (as a remote actor) already and the integrity of these must be kept. Hence
-	// a new Identification object cannot be created, which is why there is no
-	// public constructor.
+  // Identification objects must be created by a supporting generator function
+  // that checks that there is no Identification object already defined. In
+  // this case it will just return an address (reference) to that
+  // Identification object, after potentially setting its actor pointer to
+  // the actor. The last behaviour is needed in the case that an Identification
+  // is first created to an actor by name, and then the actual actor is
+  // constructed later. Several addresses my then refer to the actor-by-name
+  // (as a remote actor) already and the integrity of these must be kept. Hence
+  // a new Identification object cannot be created, which is why there is no
+  // public constructor.
 
-	static Address Create( const std::string & ActorName = std::string(),
-												 Actor * const TheActor = nullptr );
+  static Address Create( const std::string & ActorName = std::string(),
+                         Actor * const TheActor = nullptr );
 
-	// There are static functions to obtain an address by name or by numerical
-	// ID.
+  // There are static functions to obtain an address by name or by numerical
+  // ID.
 
-	static Address Lookup( const std::string & ActorName );
-	static Address Lookup( const IDType TheID );
+  static Address Lookup( const std::string & ActorName );
+  static Address Lookup( const IDType TheID );
 
-	// Other actors may need to obtain a pointer to this actor, and this can
-	// only be done through a legal address object. It is not declared in-line
-	// since it uses the internals of the actor definition. This function will
-	// throw invalid_argument if the address is not for a valid and running actor.
+  // Other actors may need to obtain a pointer to this actor, and this can
+  // only be done through a legal address object. It is not declared in-line
+  // since it uses the internals of the actor definition. This function will
+  // throw invalid_argument if the address is not for a valid and running actor.
 
-	static Actor * GetActor( const Address & ActorAddress );
+  static Actor * GetActor( const Address & ActorAddress );
 
-	// There is a static function used by the actor's destructor to clear the
-	// actor pointer.
+  // There is a static function used by the actor's destructor to clear the
+  // actor pointer.
 
-	static void ClearActor( const Address & ActorAddress );
+  static void ClearActor( const Address & ActorAddress );
 
-	// There is a simple test to see if the actor pointer is defined. Note that
-	// the actor pointer is only defined for actors on the local endpoint so this
-	// is implicitly a test that the actor is not remote.
+  // There is a simple test to see if the actor pointer is defined. Note that
+  // the actor pointer is only defined for actors on the local endpoint so this
+  // is implicitly a test that the actor is not remote.
 
-	inline bool HasActor( void )
-	{	return ActorPointer != nullptr;	}
+  inline bool HasActor( void )
+  {	return ActorPointer != nullptr;	}
 
-	// A message can be routed to an actor identified by this Identification
-	// object only if it is a local actor, i.e. the actor pointer is set, OR
-	// the presentation layer is set. It is not in-line because it uses the
-	// address implementation to know if the presentation layer is valid.
+  // A message can be routed to an actor identified by this Identification
+  // object only if it is a local actor, i.e. the actor pointer is set, OR
+  // the presentation layer is set. It is not in-line because it uses the
+  // address implementation to know if the presentation layer is valid.
 
-	bool AllowRouting( void );
+  bool AllowRouting( void );
 
-	// A static function is provided to set the presentation layer address
+  // A static function is provided to set the presentation layer address
 
-	static 
-	void SetPresentationLayerServer( const Address & ThePresentationLayerSever );
+  static 
+  void SetPresentationLayerServer( const Address & ThePresentationLayerSever );
 
-	// It is a recurring problem to keep main() alive until all actors have done
-	// their work. The following function can be called to all actors have empty
-	// queues and no running message handlers. It should then be safe to close the
-	// application
+  // It is a recurring problem to keep main() alive until all actors have done
+  // their work. The following function can be called to all actors have empty
+  // queues and no running message handlers. It should then be safe to close the
+  // application
 
-	static void WaitForGlobalTermination( void );
+  static void WaitForGlobalTermination( void );
 
-	// It is not possible to copy an Identification, or copy assign an
-	// Identification object.
+  // It is not possible to copy an Identification, or copy assign an
+  // Identification object.
 
-	Identification( const Identification & OtherID ) = delete;
-	Identification & operator = ( const Identification & OtherID ) = delete;
+  Identification( const Identification & OtherID ) = delete;
+  Identification & operator = ( const Identification & OtherID ) = delete;
 
-	// The destructor removes the named actor and the ID from the registries,
-	// and since it implies a structural change of the maps, the lock must be
-	// acquired. It is automatically released when the destructor terminates.
+  // The destructor removes the named actor and the ID from the registries,
+  // and since it implies a structural change of the maps, the lock must be
+  // acquired. It is automatically released when the destructor terminates.
 
-	~Identification( void );
+  ~Identification( void );
 };
 
 /*=============================================================================
@@ -376,179 +367,179 @@ class Address : protected std::shared_ptr< Identification >
 {
 private:
 
-	// There is a standard constructor from another shared Identification pointer
+  // There is a standard constructor from another shared Identification pointer
 
-	Address( std::shared_ptr< Identification > & OtherAddress )
-	: std::shared_ptr< Identification >( OtherAddress )
-	{ }
+  Address( std::shared_ptr< Identification > & OtherAddress )
+  : std::shared_ptr< Identification >( OtherAddress )
+  { }
 
-	// A similar constructor is needed to move the other address pointer if it
-	// is assigned as a temporary variable.
+  // A similar constructor is needed to move the other address pointer if it
+  // is assigned as a temporary variable.
 
-	Address( std::shared_ptr< Identification > && OtherAddress )
-	: std::shared_ptr< Identification >( OtherAddress )
-	{ }
+  Address( std::shared_ptr< Identification > && OtherAddress )
+  : std::shared_ptr< Identification >( OtherAddress )
+  { }
 
-	// The identification class is allowed to use the shared pointer constructors
+  // The identification class is allowed to use the shared pointer constructors
 
-	friend class Identification;
+  friend class Identification;
 
 public:
 
-	// The copy constructor is currently just doing the same as the shared
-	// pointer constructor since the address has now own data fields to be copied
+  // The copy constructor is currently just doing the same as the shared
+  // pointer constructor since the address has now own data fields to be copied
 
-	inline Address( const Address & OtherAddress )
-	: std::shared_ptr< Identification >( OtherAddress )
-	{	}
+  inline Address( const Address & OtherAddress )
+  : std::shared_ptr< Identification >( OtherAddress )
+  {	}
 
-	// The move constructor is similarly trivial
+  // The move constructor is similarly trivial
 
-	inline Address( Address && OtherAddress )
-	: std::shared_ptr< Identification >( OtherAddress )
-	{ }
+  inline Address( Address && OtherAddress )
+  : std::shared_ptr< Identification >( OtherAddress )
+  { }
 
-	// The void constructor simply default initialises the pointer
+  // The void constructor simply default initialises the pointer
 
   inline Address( void )
-	: std::shared_ptr<Identification>()
-	{}
+  : std::shared_ptr<Identification>()
+  {}
 
   // There is constructor to find an address by name and it is suspected that
-	// this will be used also for the plain string defined by Theron
-	// (const char *const name). These will simply use the Actor identification's
-	// lookup, and then delegate to the above constructors.
+  // this will be used also for the plain string defined by Theron
+  // (const char *const name). These will simply use the Actor identification's
+  // lookup, and then delegate to the above constructors.
 
-	inline Address( const std::string & Name )
-	: Address( Identification::Lookup( Name ) )
-	{
-		// The lookup may fail if no actor, either locally or remotely, exists by
-		// that name. In that case, it is understood that this is a reference to
-		// a remote actor, or to a local actor not yet created, and the
-		// corresponding address object is constructed and assigned to this
-		// address.
+  inline Address( const std::string & Name )
+  : Address( Identification::Lookup( Name ) )
+  {
+    // The lookup may fail if no actor, either locally or remotely, exists by
+    // that name. In that case, it is understood that this is a reference to
+    // a remote actor, or to a local actor not yet created, and the
+    // corresponding address object is constructed and assigned to this
+    // address.
 
-		if ( get() == nullptr )
-			*this = Identification::Create( Name );
-	}
+    if ( get() == nullptr )
+      *this = Identification::Create( Name );
+  }
 
-	// Oddly enough, but Theron has no constructor to get an address by the
-	// numerical ID of the actor, however here one is provided now.
+  // Oddly enough, but Theron has no constructor to get an address by the
+  // numerical ID of the actor, however here one is provided now.
 
-	inline Address( const Identification::IDType & ID )
-	: Address( Identification::Lookup( ID ) )
-	{	}
+  inline Address( const Identification::IDType & ID )
+  : Address( Identification::Lookup( ID ) )
+  {	}
 
-	// There is an assignment operator that basically makes a copy of the
-	// other Address. However, since it is called on an already existing
-	// address, it must assign to its own shared pointer
+  // There is an assignment operator that basically makes a copy of the
+  // other Address. However, since it is called on an already existing
+  // address, it must assign to its own shared pointer
 
-	inline Address & operator= ( const Address & OtherAddress )
-	{
-		std::shared_ptr< Identification >::operator = ( OtherAddress );
+  inline Address & operator= ( const Address & OtherAddress )
+  {
+    std::shared_ptr< Identification >::operator = ( OtherAddress );
 
-		return *this;
-	}
+    return *this;
+  }
 
-	// It should have a static function Null to allow test addresses
+  // It should have a static function Null to allow test addresses
 
-	static const Address Null( void )
-	{	return Address();	}
+  static const Address Null( void )
+  {	return Address();	}
 
-	// There is an implicit conversion to a boolean to check if the address is
-	// valid or not. An address is valid if it points at an Identification object,
-	// AND the Identification object can be used for routing.
+  // There is an implicit conversion to a boolean to check if the address is
+  // valid or not. An address is valid if it points at an Identification object,
+  // AND the Identification object can be used for routing.
 
-	inline operator bool (void ) const
-	{	return (get() != nullptr) && get()->AllowRouting();	}
+  inline operator bool (void ) const
+  {	return (get() != nullptr) && get()->AllowRouting();	}
 
-	// There are comparison operators to allow the address to be used in standard
-	// containers.
+  // There are comparison operators to allow the address to be used in standard
+  // containers.
 
-	inline bool operator == ( const Address & OtherAddress ) const
-	{
-		if ( get() != nullptr )
-			if ( OtherAddress.get() != nullptr )
-				return get()->NumericalID == OtherAddress->NumericalID;
-			else
-				return false; // Other address is Null
-		else
-			if ( OtherAddress.get() == nullptr )
-				return true;  // both are Null
-			else
-				return false; // Other address is not Null, but this is
-	}
+  inline bool operator == ( const Address & OtherAddress ) const
+  {
+    if ( get() != nullptr )
+      if ( OtherAddress.get() != nullptr )
+        return get()->NumericalID == OtherAddress->NumericalID;
+      else
+        return false; // Other address is Null
+    else
+      if ( OtherAddress.get() == nullptr )
+        return true;  // both are Null
+      else
+        return false; // Other address is not Null, but this is
+  }
 
-	inline bool operator != ( const Address & OtherAddress ) const
-	{
-		if ( get() != nullptr )
-			if ( OtherAddress.get() != nullptr )
-				return get()->NumericalID != OtherAddress->NumericalID;
-			else
-				return true; // Other address is Null
-		else
-			if ( OtherAddress.get() == nullptr )
-				return false; // Both are Null
-			else
-				return true; // Other address is not Null, but this is
-	}
+  inline bool operator != ( const Address & OtherAddress ) const
+  {
+    if ( get() != nullptr )
+      if ( OtherAddress.get() != nullptr )
+        return get()->NumericalID != OtherAddress->NumericalID;
+      else
+        return true; // Other address is Null
+    else
+      if ( OtherAddress.get() == nullptr )
+        return false; // Both are Null
+      else
+        return true; // Other address is not Null, but this is
+  }
 
-	// The less-than operator is more interesting since the address could be
-	// Null and how does that compare with other addresses? It is here defined
-	// that a Null address will be larger than any other address since it is
-	// assumed that this operator defines sorting order in containers and then
-	// it makes sense if the Null operator comes last.
+  // The less-than operator is more interesting since the address could be
+  // Null and how does that compare with other addresses? It is here defined
+  // that a Null address will be larger than any other address since it is
+  // assumed that this operator defines sorting order in containers and then
+  // it makes sense if the Null operator comes last.
 
-	bool operator < ( const Address & OtherAddress ) const
-	{
-		if ( get() == nullptr )
-			return true;
-		else
-			if ( OtherAddress.get() == nullptr ) return true;
-		  else
-				return get()->NumericalID < OtherAddress->NumericalID;
-	}
+  bool operator < ( const Address & OtherAddress ) const
+  {
+    if ( get() == nullptr )
+      return true;
+    else
+      if ( OtherAddress.get() == nullptr ) return true;
+      else
+        return get()->NumericalID < OtherAddress->NumericalID;
+  }
 
-	// There is another function to check if a given address is a local actor.
+  // There is another function to check if a given address is a local actor.
 
-	inline bool IsLocalActor( void ) const
-	{
-		return ( get() != nullptr ) && ( get()->HasActor() );
-	}
+  inline bool IsLocalActor( void ) const
+  {
+    return ( get() != nullptr ) && ( get()->HasActor() );
+  }
 
-	// Then it must provide access to the actor's name and ID that can be
-	// taken from the actor's stored information. If these are called on a Null
-	// address, they will NULL in some form.
+  // Then it must provide access to the actor's name and ID that can be
+  // taken from the actor's stored information. If these are called on a Null
+  // address, they will NULL in some form.
 
-	inline std::string AsString( void ) const
-	{
-		if ( get() == nullptr )
-			return "Address::Null";
-	  else
-			return get()->Name;
-	}
+  inline std::string AsString( void ) const
+  {
+    if ( get() == nullptr )
+      return "Address::Null";
+    else
+      return get()->Name;
+  }
 
-	inline Identification::IDType AsInteger( void ) const
-	{
-		if ( get() == nullptr )
-			return Identification::IDType(0);
-		else
-			return get()->NumericalID;
-	}
+  inline Identification::IDType AsInteger( void ) const
+  {
+    if ( get() == nullptr )
+      return Identification::IDType(0);
+    else
+      return get()->NumericalID;
+  }
 
-	inline Identification::IDType AsUInt64( void ) const
-	{	return AsInteger();	}
+  inline Identification::IDType AsUInt64( void ) const
+  {	return AsInteger();	}
 
-	// There is a legacy function to obtain the numerical ID of the framework,
-	// which is here taken identical to the actor pointed to by this address.
+  // There is a legacy function to obtain the numerical ID of the framework,
+  // which is here taken identical to the actor pointed to by this address.
 
-	inline Identification::IDType GetFramework( void ) const
-	{
-		if ( get() == nullptr )
-			return Identification::IDType(0);
-		else
-		  return get()->NumericalID;
-	}
+  inline Identification::IDType GetFramework( void ) const
+  {
+    if ( get() == nullptr )
+      return Identification::IDType(0);
+    else
+      return get()->NumericalID;
+  }
 };
 
 // The actor itself has its own ID as an address
@@ -562,7 +553,7 @@ Address ActorID;
 public:
 inline Address GetAddress( void ) const
 {
-	return ActorID;
+  return ActorID;
 }
 
 // There is a function to check if an address corresponds to a local actor.
@@ -572,7 +563,7 @@ inline Address GetAddress( void ) const
 
 inline static bool IsLocalActor( const Address & RequestedActorID )
 {
-	return RequestedActorID.IsLocalActor();
+  return RequestedActorID.IsLocalActor();
 }
 
 // In the same way one may look up an actor name as a string. This will then
@@ -580,7 +571,7 @@ inline static bool IsLocalActor( const Address & RequestedActorID )
 
 inline static bool IsLocalActor( const std::string & ActorName )
 {
-	return Address( ActorName ).IsLocalActor();
+  return Address( ActorName ).IsLocalActor();
 }
 
 // The Presentation layer address needed to support external communication can
@@ -590,7 +581,7 @@ inline static bool IsLocalActor( const std::string & ActorName )
 // with this function.
 
 inline static void SetPresentationLayerServer(
-									 const Address & ThePresentationLayerSever )
+                   const Address & ThePresentationLayerSever )
 { Identification::SetPresentationLayerServer( ThePresentationLayerSever ); }
 
 /*=============================================================================
@@ -626,42 +617,43 @@ class GenericMessage
 {
 public:
 
-	const Address From, To;
+  const Address From, To;
 
-	inline GenericMessage( const Address & Sender, const Address & Receiver )
-	: From( Sender ), To( Receiver )
-	{ }
+  inline GenericMessage( const Address & Sender, const Address & Receiver )
+  : From( Sender ), To( Receiver )
+  { }
 
-	inline GenericMessage( void )
-	: From(), To()
-	{ }
+  inline GenericMessage( void )
+  : From(), To()
+  { }
 
-	// The copy constructor simply relay the construction to the standard
-	// constructor
+  // The copy constructor simply relay the construction to the standard
+  // constructor
 
-	inline GenericMessage( const GenericMessage & OtherMessage )
-	: GenericMessage( OtherMessage.From, OtherMessage.To )
-	{ }
+  inline GenericMessage( const GenericMessage & OtherMessage )
+  : GenericMessage( OtherMessage.From, OtherMessage.To )
+  { }
 
-	// Serialisation is supported through a virtual function returning a pointer
-	// to the serial message. This is overloaded by the typed message class below
-	// if the message type does support serialisation.
+  // Communication with actors on other endpoints is supported through a 
+  // virtual function returning a pointer to the external message. This 
+  // function is overloaded by the typed message class below
+  // if the message type does support external transmission.
 
-	virtual std::shared_ptr< PolymorphicProtocolHandler > 
-	GetPolymorphicMessagePointer(void);
+  virtual std::shared_ptr< PolymorphicProtocolHandler > 
+  GetPolymorphicMessagePointer(void);
 
-	// There is also a virtual function to get a printable name string indicating 
-	// the message type. This must be provided by the specific message types
-	
-	virtual std::string GetMessageTypeName( void ) const
-	{ return std::string( "Generic message base class" ); }
-	
-	// It is important to make this class polymorphic by having at least one
-	// virtual method, and it must in order to ensure proper destruction of the
-	// derived messages.
+  // There is also a virtual function to get a printable name string indicating 
+  // the message type. This must be provided by the specific message types
+  
+  virtual std::string GetMessageTypeName( void ) const
+  { return std::string( "Generic message base class" ); }
+  
+  // It is important to make this class polymorphic by having at least one
+  // virtual method, and it must in order to ensure proper destruction of the
+  // derived messages.
 
-	virtual ~GenericMessage( void )
-	{ }
+  virtual ~GenericMessage( void )
+  { }
 };
 
 // -----------------------------------------------------------------------------
@@ -684,99 +676,99 @@ class MessageQueue : protected std::queue< std::shared_ptr< GenericMessage > >
 {
 private:
 
-	// The messages queue has a mutex to serialise access to the queue, and it
-	// supports the notification of two events: One for the arrival of a new
-	// message and one for the completed message handling. One for ingress
-	// messages and one for egress.
+  // The messages queue has a mutex to serialise access to the queue, and it
+  // supports the notification of two events: One for the arrival of a new
+  // message and one for the completed message handling. One for ingress
+  // messages and one for egress.
 
-	std::mutex 						  QueueGuard;
-	std::condition_variable NewMessage, MessageDone;
+  std::mutex 						  QueueGuard;
+  std::condition_variable NewMessage, MessageDone;
 
-	// An interesting aspect with waiting for these events is that the condition
-	// triggering the event may have changed when the thread waiting for the event
-	// is started. For instance, if one is waiting for a new message on an empty
-	// queue, this message could already be processed by the time the thread
-	// waiting for this signal gets an opportunity to run. Checking the size of
-	// the queue would then again yield an empty queue, and there should be no
-	// reason to terminate the wait. This condition would not happen if the
-	// following requirements are fulfilled by the thread implementation:
-	//
-	// 	1) A notifying all waiting threads will immediately make them ready to
+  // An interesting aspect with waiting for these events is that the condition
+  // triggering the event may have changed when the thread waiting for the event
+  // is started. For instance, if one is waiting for a new message on an empty
+  // queue, this message could already be processed by the time the thread
+  // waiting for this signal gets an opportunity to run. Checking the size of
+  // the queue would then again yield an empty queue, and there should be no
+  // reason to terminate the wait. This condition would not happen if the
+  // following requirements are fulfilled by the thread implementation:
+  //
+  // 	1) A notifying all waiting threads will immediately make them ready to
   //     run and they will all try to lock the mutex.
-	//  2) Access to the mutex is given in order of request. In other words,
-	//     all the threads woken by the notification will have locked the mutex
-	//     before the lock would again be acquired from this thread to add or
-	//     delete messages.
-	//
-	// It has not been possible to find any documentation for this behaviour,
-	// although it is reasonable.
+  //  2) Access to the mutex is given in order of request. In other words,
+  //     all the threads woken by the notification will have locked the mutex
+  //     before the lock would again be acquired from this thread to add or
+  //     delete messages.
+  //
+  // It has not been possible to find any documentation for this behaviour,
+  // although it is reasonable.
 
 public:
 
-	// The fundamental operations is to store a message and to delete the first
-	// message of the queue. The two operations will signal the corresponding
-	// condition variable.
+  // The fundamental operations is to store a message and to delete the first
+  // message of the queue. The two operations will signal the corresponding
+  // condition variable.
 
-	void StoreMessage( const std::shared_ptr< GenericMessage > & TheMessage );
-	void DeleteFirstMessage( void );
+  void StoreMessage( const std::shared_ptr< GenericMessage > & TheMessage );
+  void DeleteFirstMessage( void );
 
-	// The owning actor will need to access the first message in the queue, and
-	// since messages in the queue can only be deleted by the owning actor when
-	// the message has been handled, it is a safe operation to read the first
-	// element and the standard 'front' function for the queue is directly used
+  // The owning actor will need to access the first message in the queue, and
+  // since messages in the queue can only be deleted by the owning actor when
+  // the message has been handled, it is a safe operation to read the first
+  // element and the standard 'front' function for the queue is directly used
 
-	using std::queue< std::shared_ptr< GenericMessage > >::front;
+  using std::queue< std::shared_ptr< GenericMessage > >::front;
 
-	// The size type of the queue is also allowed for external access to ensure
-	// that other types are using the correct type
+  // The size type of the queue is also allowed for external access to ensure
+  // that other types are using the correct type
 
-	using std::queue< std::shared_ptr< GenericMessage > >::size_type;
+  using std::queue< std::shared_ptr< GenericMessage > >::size_type;
 
-	// Reading the current size of the queue should be allowed
+  // Reading the current size of the queue should be allowed
 
-	using std::queue< std::shared_ptr< GenericMessage > >::size;
+  using std::queue< std::shared_ptr< GenericMessage > >::size;
 
-	// There is a function to check if the queue is empty, and to ensure the
-	// correctness of the test, it must prevent new messages from arriving while
-	// the test is performed. It can also be that one would like to wait for the
-	// next message if the queue is empty. It therefore supports two alternatives
+  // There is a function to check if the queue is empty, and to ensure the
+  // correctness of the test, it must prevent new messages from arriving while
+  // the test is performed. It can also be that one would like to wait for the
+  // next message if the queue is empty. It therefore supports two alternatives
 
-	enum class QueueEmpty
-	{
-		Return,
-		Wait
-	};
+  enum class QueueEmpty
+  {
+    Return,
+    Wait
+  };
 
-	bool HasMessage( QueueEmpty Action = QueueEmpty::Return );
+  bool HasMessage( QueueEmpty Action = QueueEmpty::Return );
 
-	// It could also be that one would like to wait for the next message to
-	// arrive. This function will therefore block the calling thread until the
-	// next message arrives and the new message condition is signalled. It
-	// optionally takes an address of a sender to wait for and if this is given
-	// it will continue to wait until a message from that sender is received.
-	// It is up to the application to ensure that this will not block forever in
-	// that case; or in the case there will never be another message for this
-	// actor.
+  // It could also be that one would like to wait for the next message to
+  // arrive. This function will therefore block the calling thread until the
+  // next message arrives and the new message condition is signalled. It
+  // optionally takes an address of a sender to wait for and if this is given
+  // it will continue to wait until a message from that sender is received.
+  // It is up to the application to ensure that this will not block forever in
+  // that case; or in the case there will never be another message for this
+  // actor.
 
-	void WaitForNextMessage( const Address & SenderToWaitFor = Address::Null() );
+  void WaitForNextMessage( const Address & SenderToWaitFor = Address::Null() );
 
-	// Finally, there is a method to wait for the queue to become empty. Again,
-	// this cannot be called from one of the actor's message handlers as that
-	// will create a deadlock, but it could be necessary for one actor to wait
-	// until another actor has processed all of its messages.
+  // Finally, there is a method to wait for the queue to become empty. Again,
+  // this cannot be called from one of the actor's message handlers as that
+  // will create a deadlock, but it could be necessary for one actor to wait
+  // until another actor has processed all of its messages.
 
-	void WaitUntilEmpty( void );
+  void WaitUntilEmpty( void );
 
-	// The constructor is simply a place holder for initialising the queue and
-	// the locks
+  // The constructor is simply a place holder for initialising the queue and
+  // the locks
 
-	MessageQueue( void )
-	: std::queue< std::shared_ptr< GenericMessage > >(),
-	  QueueGuard(), NewMessage(), MessageDone()
-	{ }
+  MessageQueue( void )
+  : std::queue< std::shared_ptr< GenericMessage > >(),
+    QueueGuard(), NewMessage(), MessageDone()
+  { }
 
-	// The destructor does nothing special and the default destructor is good
-	// enough.
+  // The destructor does nothing special and the default destructor is good
+  // enough.
 
 } Mailbox;
 
@@ -801,44 +793,44 @@ class Message : public GenericMessage
 {
 public:
 
-	const std::shared_ptr< MessageType > TheMessage;
+  const std::shared_ptr< MessageType > TheMessage;
 
-	Message( const std::shared_ptr< MessageType > & MessageCopy,
-					 const Address & From, const Address & To )
-	: GenericMessage( From, To ), TheMessage( MessageCopy )
-	{ }
+  Message( const std::shared_ptr< MessageType > & MessageCopy,
+           const Address & From, const Address & To )
+  : GenericMessage( From, To ), TheMessage( MessageCopy )
+  { }
 
-	Message( const Message< MessageType > & OtherMessage )
-	: GenericMessage( OtherMessage ), TheMessage( OtherMessage.TheMessage )
-	{ }
+  Message( const Message< MessageType > & OtherMessage )
+  : GenericMessage( OtherMessage ), TheMessage( OtherMessage.TheMessage )
+  { }
 
-	// A message that can be serialised must be derived from the Serial Message
-	// type, and a check for this can be done at compile time. The "if constexpr"
-	// is a C++17 feature that allow the compiler to compute the condition at
-	// compile time and not generate code if the condition is false. Prior to
-	// this it would require all branches to compile, and it would have been
-	// necessary to use std::enable_if on a template representing the two
-	// branches.
+  // A message that can be serialised must be derived from the Serial Message
+  // type, and a check for this can be done at compile time. The "if constexpr"
+  // is a C++17 feature that allow the compiler to compute the condition at
+  // compile time and not generate code if the condition is false. Prior to
+  // this it would require all branches to compile, and it would have been
+  // necessary to use std::enable_if on a template representing the two
+  // branches.
 
-	virtual std::shared_ptr< PolymorphicProtocolHandler >	
-	GetPolymorphicMessagePointer( void ) override
-	{
-		if constexpr ( std::is_base_of<  PolymorphicProtocolHandler, MessageType >::value )
-			return TheMessage;
-		else
-			return std::shared_ptr< PolymorphicProtocolHandler >();
-	}
+  virtual std::shared_ptr< PolymorphicProtocolHandler >	
+  GetPolymorphicMessagePointer( void ) override
+  {
+    if constexpr ( std::is_base_of<  PolymorphicProtocolHandler, MessageType >::value )
+      return TheMessage;
+    else
+      return std::shared_ptr< PolymorphicProtocolHandler >();
+  }
 
-	// There is a support function to report the type of the message in a 
-	// human readable form for error messages.
-	
-	virtual std::string GetMessageTypeName( void ) const override
-	{	return boost::core::demangle( typeid( MessageType ).name() );	}
-	
-	// The virtual destructor is just a place holder
+  // There is a support function to report the type of the message in a 
+  // human readable form for error messages.
+  
+  virtual std::string GetMessageTypeName( void ) const override
+  {	return boost::core::demangle( typeid( MessageType ).name() );	}
+  
+  // The virtual destructor is just a place holder
 
-	virtual ~Message( void )
-	{ }
+  virtual ~Message( void )
+  { }
 };
 
 //
@@ -870,19 +862,19 @@ bool EnqueueMessage( const std::shared_ptr< GenericMessage > & TheMessage );
 
 inline bool
 EnqueueMessage(const Address TheReceiver,
-							 const std::shared_ptr<GenericMessage> & TheMessage )
+               const std::shared_ptr<GenericMessage> & TheMessage )
 {
-	if ( TheReceiver )
-		Identification::GetActor( TheReceiver )->EnqueueMessage( TheMessage );
+  if ( TheReceiver )
+    Identification::GetActor( TheReceiver )->EnqueueMessage( TheMessage );
   else
-	{
+  {
     std::ostringstream ErrorMessage;
 
-		ErrorMessage << __FILE__ << " at line " << __LINE__ << ":"
-		             << "Delegated message enqueue: The address of the receiving "
-								 << "actor must be a legal address";
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ":"
+                 << "Delegated message enqueue: The address of the receiving "
+                 << "actor must be a legal address";
 
-	  throw std::invalid_argument( ErrorMessage.str() );
+    throw std::invalid_argument( ErrorMessage.str() );
   }
 
   return true;
@@ -919,13 +911,13 @@ public:
 
 template< class MessageType >
 static bool Send( const MessageType & TheMessage,
-				  const Address & TheSender,
-				  const Address & TheReceiver )
+          const Address & TheSender,
+          const Address & TheReceiver )
 {
-	static_assert( std::is_copy_constructible< MessageType >::value,
-								"The message to send must be copy constructible"	);
+  static_assert( std::is_copy_constructible< MessageType >::value,
+                "The message to send must be copy constructible"	);
 
-	Actor * ReceivingActor;
+  Actor * ReceivingActor;
 
   if ( TheReceiver )
       ReceivingActor = Identification::GetActor( TheReceiver );
@@ -933,18 +925,18 @@ static bool Send( const MessageType & TheMessage,
   {
     std::ostringstream ErrorMessage;
 
-		ErrorMessage << __FILE__ << " at line " << __LINE__ << ":"
-		             << "Send message: The address of the receiving actor must "
-								 << "be a legal address";
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ":"
+                 << "Send message: The address of the receiving actor must "
+                 << "be a legal address";
 
-	  throw std::invalid_argument( ErrorMessage.str() );
+    throw std::invalid_argument( ErrorMessage.str() );
   }
 
-	auto MessageCopy = std::make_shared< MessageType >( TheMessage );
+  auto MessageCopy = std::make_shared< MessageType >( TheMessage );
 
-	return
-	ReceivingActor->EnqueueMessage( std::make_shared< Message< MessageType> >(
-																	MessageCopy, TheSender, TheReceiver	));
+  return
+  ReceivingActor->EnqueueMessage( std::make_shared< Message< MessageType> >(
+                                  MessageCopy, TheSender, TheReceiver	));
 }
 
 // Theron's actor has a simplified version of the send function basically just
@@ -954,9 +946,9 @@ protected:
 
 template< class MessageType >
 inline bool Send( const MessageType & TheMessage,
-									const Address & TheReceiver     ) const
+                  const Address & TheReceiver     ) const
 {
-	return Send( TheMessage, GetAddress(), TheReceiver );
+  return Send( TheMessage, GetAddress(), TheReceiver );
 }
 
 /*=============================================================================
@@ -976,42 +968,42 @@ class GenericHandler
 {
 public:
 
-	enum class State
-	{
-		Normal,
-		Executing,
-		Deleted
-	};
+  enum class State
+  {
+    Normal,
+    Executing,
+    Deleted
+  };
 
 protected:
 
-	State CurrentStatus;
+  State CurrentStatus;
 
 public:
 
-	// A function to get the handler state.
+  // A function to get the handler state.
 
-	inline State GetStatus( void )
-	{	return CurrentStatus;	}
+  inline State GetStatus( void )
+  {	return CurrentStatus;	}
 
-	// And another one to set the status that is only used from the de-registration
-	// function if this this handler should be deleted.
+  // And another one to set the status that is only used from the de-registration
+  // function if this this handler should be deleted.
 
-	inline void SetStatus( const State NewState )
-	{ CurrentStatus = NewState; }
+  inline void SetStatus( const State NewState )
+  { CurrentStatus = NewState; }
 
-	// There is a function to execute the handler on a given message
+  // There is a function to execute the handler on a given message
 
-	virtual bool ProcessMessage(
-													std::shared_ptr< GenericMessage > & TheMessage ) = 0;
+  virtual bool ProcessMessage(
+                          std::shared_ptr< GenericMessage > & TheMessage ) = 0;
 
-	// The constructor simply sets the status to normal
+  // The constructor simply sets the status to normal
 
-	GenericHandler( void )
-	{ CurrentStatus = State::Normal; }
+  GenericHandler( void )
+  { CurrentStatus = State::Normal; }
 
-	virtual ~GenericHandler( void )
-	{ }
+  virtual ~GenericHandler( void )
+  { }
 };
 
 // The actual type specific handler is a template on the message type handled
@@ -1024,52 +1016,52 @@ class Handler : public GenericHandler
 {
 public:
 
-	// The handler must store the function to process the message. This has the
-	// same signature as the actual handler, and it is specified to call the
-	// function on the actor having this handler.
+  // The handler must store the function to process the message. This has the
+  // same signature as the actual handler, and it is specified to call the
+  // function on the actor having this handler.
 
-	void (ActorType::*HandlerFunction)( const MessageType &, const Address );
+  void (ActorType::*HandlerFunction)( const MessageType &, const Address );
 
-	// The pointer to the actor having this handler function is also stored
-	// since it is the easiest way to make sure it is the right actor type.
+  // The pointer to the actor having this handler function is also stored
+  // since it is the easiest way to make sure it is the right actor type.
 
-	ActorType * const TheActor;
+  ActorType * const TheActor;
 
-	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
-	{
-		std::shared_ptr< Message< MessageType > > TypedMessage =
-							std::dynamic_pointer_cast< Message< MessageType > >( TheMessage );
+  virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
+  {
+    std::shared_ptr< Message< MessageType > > TypedMessage =
+              std::dynamic_pointer_cast< Message< MessageType > >( TheMessage );
 
-		if ( TypedMessage )
-		{
-			// The message could be converted to this message type, and the handler
-			// can be invoked through the handler pointer on the stored actor
+    if ( TypedMessage )
+    {
+      // The message could be converted to this message type, and the handler
+      // can be invoked through the handler pointer on the stored actor
 
-			(TheActor->*HandlerFunction)( *(TypedMessage->TheMessage),
-																	    TypedMessage->From );
-			return true;
-		}
-		else
-			return false;
-	}
+      (TheActor->*HandlerFunction)( *(TypedMessage->TheMessage),
+                                      TypedMessage->From );
+      return true;
+    }
+    else
+      return false;
+  }
 
-	// The constructor stores the handler function.
+  // The constructor stores the handler function.
 
-	Handler( ActorType * HandlingActor,
+  Handler( ActorType * HandlingActor,
      void (ActorType::*GivenHandler)( const MessageType &, const Address ))
-	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
-	{ }
+  : GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
+  { }
 
-	// There is a copy constructor to allow this to be used with standard
-	// containers
+  // There is a copy constructor to allow this to be used with standard
+  // containers
 
-	Handler( const Handler<ActorType, MessageType> & OtherHandler )
-	: GenericHandler(), HandlerFunction( OtherHandler.HandlerFunction ),
-	  TheActor( OtherHandler.TheActor )
-	{ }
+  Handler( const Handler<ActorType, MessageType> & OtherHandler )
+  : GenericHandler(), HandlerFunction( OtherHandler.HandlerFunction ),
+    TheActor( OtherHandler.TheActor )
+  { }
 
-	virtual ~Handler( void )
-	{ }
+  virtual ~Handler( void )
+  { }
 };
 
 // The list of handlers registered for this actor is kept in a simple list, and
@@ -1105,13 +1097,13 @@ protected:
 
 template< class ActorType, class MessageType >
 inline bool RegisterHandler( ActorType  * const TheActor,
-							 void ( ActorType::* TheHandler)(	const MessageType & TheMessage,
-																								const Address From ) )
+               void ( ActorType::* TheHandler)(	const MessageType & TheMessage,
+                                                const Address From ) )
 {
-	TheActor->MessageHandlers.push_back(
-	std::make_shared< Handler< ActorType, MessageType > >(TheActor, TheHandler) );
+  TheActor->MessageHandlers.push_back(
+  std::make_shared< Handler< ActorType, MessageType > >(TheActor, TheHandler) );
 
-	return true;
+  return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -1125,58 +1117,58 @@ inline bool RegisterHandler( ActorType  * const TheActor,
 
 template< class ActorType, class MessageType >
 inline bool DeregisterHandler( ActorType  * const HandlingActor,
-							    void (ActorType::* TheHandler)(const MessageType & TheMessage,
-																								 const Address From ) )
+                  void (ActorType::* TheHandler)(const MessageType & TheMessage,
+                                                 const Address From ) )
 {
-	// To compare the actor and the handler function pointer, it is necessary to
-	// know that that the handler is of the right type, and RTTI is used for
-	// this by trying to cast dynamically the handler to a pointer to the
-	// a message handler for the actor and message type. This is done by a
-	// comparator function.
-	//
-	// A subtle point is that even if the handler should be removed, it cannot
-	// be removed if it is the currently running handler. In this case, its state
-	// will be set to deleted, but the comparator will (wrongly!) return false
-	// to prevent the removal of that particular handler before it has terminated.
+  // To compare the actor and the handler function pointer, it is necessary to
+  // know that that the handler is of the right type, and RTTI is used for
+  // this by trying to cast dynamically the handler to a pointer to the
+  // a message handler for the actor and message type. This is done by a
+  // comparator function.
+  //
+  // A subtle point is that even if the handler should be removed, it cannot
+  // be removed if it is the currently running handler. In this case, its state
+  // will be set to deleted, but the comparator will (wrongly!) return false
+  // to prevent the removal of that particular handler before it has terminated.
 
-	auto ToBeRemoved = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
-	->bool{
-		std::shared_ptr< Handler< ActorType, MessageType > > TypedHandler =
-		 std::dynamic_pointer_cast< Handler< ActorType, MessageType > >(AnyHandler);
+  auto ToBeRemoved = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
+  ->bool{
+    std::shared_ptr< Handler< ActorType, MessageType > > TypedHandler =
+     std::dynamic_pointer_cast< Handler< ActorType, MessageType > >(AnyHandler);
 
-		if (  TypedHandler &&
-			  ( TypedHandler->TheActor == HandlingActor ) &&
-				( TypedHandler->HandlerFunction == TheHandler ) )
-		{
-			// The handler is identical and can be removed unless it is executing
-			if ( AnyHandler->GetStatus() == GenericHandler::State::Executing )
-		  {
-				AnyHandler->SetStatus( GenericHandler::State::Deleted );
-				return false;
-			}
-			else
-				return true;
-		}
-		else
-			return false;
-	};
+    if (  TypedHandler &&
+        ( TypedHandler->TheActor == HandlingActor ) &&
+        ( TypedHandler->HandlerFunction == TheHandler ) )
+    {
+      // The handler is identical and can be removed unless it is executing
+      if ( AnyHandler->GetStatus() == GenericHandler::State::Executing )
+      {
+        AnyHandler->SetStatus( GenericHandler::State::Deleted );
+        return false;
+      }
+      else
+        return true;
+    }
+    else
+      return false;
+  };
 
-	// In order to return an indication whether something was removed or not,
-	// the size of the handler list must be checked before and after the
-	// removal.
+  // In order to return an indication whether something was removed or not,
+  // the size of the handler list must be checked before and after the
+  // removal.
 
-	auto InitialHandlerCount = HandlingActor->MessageHandlers.size();
+  auto InitialHandlerCount = HandlingActor->MessageHandlers.size();
 
-	// With the comparator it is easy to remove the handlers of this type
+  // With the comparator it is easy to remove the handlers of this type
 
-	HandlingActor->MessageHandlers.remove_if( ToBeRemoved );
+  HandlingActor->MessageHandlers.remove_if( ToBeRemoved );
 
-	// Then a meaningful feedback can be given
+  // Then a meaningful feedback can be given
 
-	if ( InitialHandlerCount == HandlingActor->MessageHandlers.size() )
-		return false;
-	else
-		return true;
+  if ( InitialHandlerCount == HandlingActor->MessageHandlers.size() )
+    return false;
+  else
+    return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -1189,34 +1181,34 @@ inline bool DeregisterHandler( ActorType  * const HandlingActor,
 
 template< class ActorType, class MessageType >
 inline bool IsHandlerRegistered ( ActorType  * const HandlingActor,
-							    void (ActorType::* TheHandler)(const MessageType & TheMessage,
-																								 const Address From ) )
+                  void (ActorType::* TheHandler)(const MessageType & TheMessage,
+                                                 const Address From ) )
 {
-	// To compare the actor and the handler function pointer, it is necessary to
-	// know that that the handler is of the right type, and RTTI is used for
-	// this by trying to cast dynamically the handler to a pointer to the
-	// a message handler for the actor and message type. This is done by a
-	// comparator function.
+  // To compare the actor and the handler function pointer, it is necessary to
+  // know that that the handler is of the right type, and RTTI is used for
+  // this by trying to cast dynamically the handler to a pointer to the
+  // a message handler for the actor and message type. This is done by a
+  // comparator function.
 
-	auto IsHandler = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
-	->bool{
-		std::shared_ptr< Handler< ActorType, MessageType > > TypedHandler =
-		 std::dynamic_pointer_cast< Handler< ActorType, MessageType > >(AnyHandler);
+  auto IsHandler = [=]( const std::shared_ptr< GenericHandler > & AnyHandler )
+  ->bool{
+    std::shared_ptr< Handler< ActorType, MessageType > > TypedHandler =
+     std::dynamic_pointer_cast< Handler< ActorType, MessageType > >(AnyHandler);
 
-		if (  TypedHandler &&
-			  ( TypedHandler->TheActor == HandlingActor ) &&
-				( TypedHandler->HandlerFunction == TheHandler ) )
-			return true;
-		else
-			return false;
-	};
+    if (  TypedHandler &&
+        ( TypedHandler->TheActor == HandlingActor ) &&
+        ( TypedHandler->HandlerFunction == TheHandler ) )
+      return true;
+    else
+      return false;
+  };
 
-	// Then the standard search algorithm can be used to find an occurrence of
-	// the given actor and handler function.
+  // Then the standard search algorithm can be used to find an occurrence of
+  // the given actor and handler function.
 
-	return
-	std::any_of( HandlingActor->MessageHandlers.begin(),
-							 HandlingActor->MessageHandlers.end(), IsHandler );
+  return
+  std::any_of( HandlingActor->MessageHandlers.begin(),
+               HandlingActor->MessageHandlers.end(), IsHandler );
 }
 
 // -----------------------------------------------------------------------------
@@ -1238,24 +1230,24 @@ class DefaultHandlerFrom : public GenericHandler
 {
 private:
 
-	void (ActorType::*HandlerFunction)( const Address );
-	ActorType * TheActor;
+  void (ActorType::*HandlerFunction)( const Address );
+  ActorType * TheActor;
 
 public:
 
-	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
-	{
-		(TheActor->* HandlerFunction)( TheMessage->From );
-		return true;
-	}
+  virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
+  {
+    (TheActor->* HandlerFunction)( TheMessage->From );
+    return true;
+  }
 
-	inline DefaultHandlerFrom( ActorType * HandlingActor,
-											const void (ActorType::*GivenHandler)( const Address ) )
-	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
-	{ }
+  inline DefaultHandlerFrom( ActorType * HandlingActor,
+                      const void (ActorType::*GivenHandler)( const Address ) )
+  : GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
+  { }
 
-	virtual ~DefaultHandlerFrom( void )
-	{ }
+  virtual ~DefaultHandlerFrom( void )
+  { }
 };
 
 // And the function to register the handler
@@ -1264,12 +1256,12 @@ protected:
 
 template< class ActorType >
 inline bool SetDefaultHandler( ActorType  *const TheActor,
-											  void ( ActorType::*TheHandler )( const Address From ))
+                        void ( ActorType::*TheHandler )( const Address From ))
 {
-	TheActor->DefaultHandler = std::make_shared< DefaultHandlerFrom< ActorType> >(
-														 TheActor, TheHandler );
+  TheActor->DefaultHandler = std::make_shared< DefaultHandlerFrom< ActorType> >(
+                             TheActor, TheHandler );
 
-	return true;
+  return true;
 }
 
 // The alternative callback function takes a void data pointer, its size and
@@ -1284,34 +1276,34 @@ class DefaultHandlerData : public GenericHandler
 {
 private:
 
-	void (ActorType::*HandlerFunction) ( const void *const, const uint32_t,
-																			 const Address );
-	ActorType * TheActor;
+  void (ActorType::*HandlerFunction) ( const void *const, const uint32_t,
+                                       const Address );
+  ActorType * TheActor;
 
 public:
 
-	virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
-	{
-		std::ostringstream ErrorMessage;
+  virtual bool ProcessMessage( std::shared_ptr< GenericMessage > & TheMessage )
+  {
+    std::ostringstream ErrorMessage;
 
-		ErrorMessage << "Message type is " << typeid( TheMessage ).name();
+    ErrorMessage << "Message type is " << typeid( TheMessage ).name();
 
-		std::string Description( ErrorMessage.str() );
+    std::string Description( ErrorMessage.str() );
 
-		(TheActor->*HandlerFunction)( &Description, sizeof( Description ),
-																  TheMessage->From );
+    (TheActor->*HandlerFunction)( &Description, sizeof( Description ),
+                                  TheMessage->From );
 
-		return true;
-	}
+    return true;
+  }
 
-	inline DefaultHandlerData( ActorType * HandlingActor,
-				 void (ActorType::*GivenHandler) (
-				 const void *const, const uint32_t, const Address )  )
-	: GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
-	{	}
+  inline DefaultHandlerData( ActorType * HandlingActor,
+         void (ActorType::*GivenHandler) (
+         const void *const, const uint32_t, const Address )  )
+  : GenericHandler(), HandlerFunction( GivenHandler ), TheActor( HandlingActor )
+  {	}
 
-	virtual ~DefaultHandlerData( void )
-	{ }
+  virtual ~DefaultHandlerData( void )
+  { }
 };
 
 // And the function to set this kind of handler.
@@ -1320,12 +1312,12 @@ protected:
 
 template< class ActorType >
 inline bool SetDefaultHandler( ActorType *const TheActor,
-	     void (ActorType::*TheHandler)( const void *const Data,
-																			const uint32_t Size, const Address From ))
+       void (ActorType::*TheHandler)( const void *const Data,
+                                      const uint32_t Size, const Address From ))
 {
- 	TheActor->DefaultHandler = std::make_shared< DefaultHandlerData< ActorType > >(
-													   TheActor, TheHandler );
-	return true;
+   TheActor->DefaultHandler = std::make_shared< DefaultHandlerData< ActorType > >(
+                             TheActor, TheHandler );
+  return true;
 }
 
 /*=============================================================================
@@ -1372,8 +1364,8 @@ protected:
 
 enum class MessageError
 {
-	Throw,
-	Ignore
+  Throw,
+  Ignore
 } MessageErrorPolicy;
 
 // -----------------------------------------------------------------------------
@@ -1422,7 +1414,7 @@ protected:
 inline
 void WaitForNextMessage( const Address & AddressToWaitFor = Address::Null() )
 {
-	Mailbox.WaitForNextMessage( AddressToWaitFor );
+  Mailbox.WaitForNextMessage( AddressToWaitFor );
 }
 
 // There is a small helper function that waits for the Postman to complete the
@@ -1445,7 +1437,7 @@ void DrainMailbox( void );
 
 inline static void WaitForGlobalTermination( void )
 {
-	Identification::WaitForGlobalTermination();
+  Identification::WaitForGlobalTermination();
 }
 
 // Waiting for a message to be processed is provided via the virtual call back
@@ -1534,37 +1526,37 @@ class EndPoint
 {
 public:
 
-	// Empty parameters as they are in Theron
+  // Empty parameters as they are in Theron
 
   class Parameters
-	{
-	public:
+  {
+  public:
 
-		Parameters( void )
-		{ }
-	};
+    Parameters( void )
+    { }
+  };
 
 private:
 
-	std::string EndPointName, EndPointLocation;
+  std::string EndPointName, EndPointLocation;
 
 public:
 
-	// The only public method is the one to obtain the name of the endpoint
+  // The only public method is the one to obtain the name of the endpoint
 
-	inline std::string GetName( void )
-	{ return EndPointName; }
+  inline std::string GetName( void )
+  { return EndPointName; }
 
-	// There is also a connect function, but this is anyway deferred to the
-	// Network endpoint (see that class file)
+  // There is also a connect function, but this is anyway deferred to the
+  // Network endpoint (see that class file)
 
-	EndPoint( const char * const Name, const char * const Location,
-						const Parameters params = Parameters() )
-	: EndPointName( Name ), EndPointLocation( Location )
-	{ }
+  EndPoint( const char * const Name, const char * const Location,
+            const Parameters params = Parameters() )
+  : EndPointName( Name ), EndPointLocation( Location )
+  { }
 
-	~EndPoint( void )
-	{ }
+  ~EndPoint( void )
+  { }
 };
 
 // The Framework has a set of parameters mainly concerned with the the
@@ -1574,96 +1566,96 @@ class Framework : virtual public Actor
 {
 public:
 
-	class Parameters
-	{
-	public:
+  class Parameters
+  {
+  public:
 
-		unsigned int  mThreadCount,
-								  mNodeMask,
-								  mProcessorMask;
-	  YieldStrategy mYieldStrategy;
-		float         mThreadPriority;
+    unsigned int  mThreadCount,
+                  mNodeMask,
+                  mProcessorMask;
+    YieldStrategy mYieldStrategy;
+    float         mThreadPriority;
 
-		Parameters( const uint32_t threadCount = 16, const uint32_t nodeMask = 0x1,
-								const uint32_t processorMask = 0xFFFFFFFF,
-							  const YieldStrategy yieldStrategy
-																		  = YieldStrategy::YIELD_STRATEGY_CONDITION,
-							 const float priority=0.0f )
-		: mThreadCount( threadCount ), mNodeMask( nodeMask ),
-		  mProcessorMask( processorMask ), mYieldStrategy( yieldStrategy ),
-		  mThreadPriority( priority )
-		{ }
-	};
+    Parameters( const uint32_t threadCount = 16, const uint32_t nodeMask = 0x1,
+                const uint32_t processorMask = 0xFFFFFFFF,
+                const YieldStrategy yieldStrategy
+                                      = YieldStrategy::YIELD_STRATEGY_CONDITION,
+               const float priority=0.0f )
+    : mThreadCount( threadCount ), mNodeMask( nodeMask ),
+      mProcessorMask( processorMask ), mYieldStrategy( yieldStrategy ),
+      mThreadPriority( priority )
+    { }
+  };
 
-	// The following set of parameter related functions have absolutely no effect
-	// since the framework does nothing
+  // The following set of parameter related functions have absolutely no effect
+  // since the framework does nothing
 
-	inline void SetMaxThreads(const unsigned int count)
-	{ }
+  inline void SetMaxThreads(const unsigned int count)
+  { }
 
-	inline void SetMinThreads(const unsigned int count)
-	{ }
+  inline void SetMinThreads(const unsigned int count)
+  { }
 
-	inline unsigned int GetMaxThreads( void ) const
-	{ return 1; }
+  inline unsigned int GetMaxThreads( void ) const
+  { return 1; }
 
-	inline unsigned int GetMinThreads( void ) const
-	{ return 1; }
+  inline unsigned int GetMinThreads( void ) const
+  { return 1; }
 
-	inline unsigned int GetNumThreads( void ) const
-	{ return 1; }
+  inline unsigned int GetNumThreads( void ) const
+  { return 1; }
 
-	inline unsigned int GetPeakThreads( void ) const
-	{ return 1; }
+  inline unsigned int GetPeakThreads( void ) const
+  { return 1; }
 
-	inline unsigned int GetNumCounters( void ) const
-	{ return 0; }
+  inline unsigned int GetNumCounters( void ) const
+  { return 0; }
 
-	inline void ResetCounters( void )
-	{ }
+  inline void ResetCounters( void )
+  { }
 
-	// The Theron Framework has a method to set the fall back handler with respect
-	// to an actor. However, this is no different from the actors default hander,
-	// and it is therefore defined as a implicit call on those functions. It must
-	// be defined for both version of the fall back handler arguments.
+  // The Theron Framework has a method to set the fall back handler with respect
+  // to an actor. However, this is no different from the actors default hander,
+  // and it is therefore defined as a implicit call on those functions. It must
+  // be defined for both version of the fall back handler arguments.
 
-	template< class ActorType >
-	inline bool SetFallbackHandler( ActorType  *const TheActor,
-												  void ( ActorType::*TheHandler )( const Address From ))
-	{
-		return Actor::SetDefaultHandler( TheActor, TheHandler );
-	}
+  template< class ActorType >
+  inline bool SetFallbackHandler( ActorType  *const TheActor,
+                          void ( ActorType::*TheHandler )( const Address From ))
+  {
+    return Actor::SetDefaultHandler( TheActor, TheHandler );
+  }
 
-	template <class ActorType>
-	inline bool SetFallbackHandler( ActorType *const TheActor,
+  template <class ActorType>
+  inline bool SetFallbackHandler( ActorType *const TheActor,
    void (ActorType::*TheHandler)( const void *const Data,
-																	const uint32_t Size, const Address From ))
-	{
-		return Actor::SetDefaultHandler( TheActor, TheHandler );
-	}
+                                  const uint32_t Size, const Address From ))
+  {
+    return Actor::SetDefaultHandler( TheActor, TheHandler );
+  }
 
-	// The framework constructors mainly delegates to the Actor constructor to
-	// do the work. When no name is passed, the actor is called "Framework", which
-	// should prevent the construction of two actors with the same name.
+  // The framework constructors mainly delegates to the Actor constructor to
+  // do the work. When no name is passed, the actor is called "Framework", which
+  // should prevent the construction of two actors with the same name.
 
-	Framework( const unsigned int ThreadCount = 0 )
-	: Actor( "Framework" )
-	{
-		Actor::GlobalFramework = this;
-	}
+  Framework( const unsigned int ThreadCount = 0 )
+  : Actor( "Framework" )
+  {
+    Actor::GlobalFramework = this;
+  }
 
-	Framework( const Parameters & params )
-	: Actor( "Framework" )
-	{
-		Actor::GlobalFramework = this;
-	}
+  Framework( const Parameters & params )
+  : Actor( "Framework" )
+  {
+    Actor::GlobalFramework = this;
+  }
 
-	Framework( EndPoint & endPoint, const char *const name = 0,
-						 const Parameters & params = Parameters() )
-	: Actor( std::string( name ).empty() ? "Framework" : name )
-	{
-		Actor::GlobalFramework = this;
-	}
+  Framework( EndPoint & endPoint, const char *const name = 0,
+             const Parameters & params = Parameters() )
+  : Actor( std::string( name ).empty() ? "Framework" : name )
+  {
+    Actor::GlobalFramework = this;
+  }
 };
 
 // -----------------------------------------------------------------------------
@@ -1687,109 +1679,109 @@ class Receiver : public virtual Actor
 {
 private:
 
-	// There is a counter for messages that has arrived an not yet Consumed or
-	// waited for. 
+  // There is a counter for messages that has arrived an not yet Consumed or
+  // waited for. 
 
-	MessageCount Unconsumed;
+  MessageCount Unconsumed;
 
-	// Access to this counter will be protected by a mutex.
+  // Access to this counter will be protected by a mutex.
 
-	std::mutex CounterGuard;
+  std::mutex CounterGuard;
 
-	// The actual wait is ensured by a condition variable waiting for a change
-	// in the unconsumed counter, and therefore use the counter guard mutex.
+  // The actual wait is ensured by a condition variable waiting for a change
+  // in the unconsumed counter, and therefore use the counter guard mutex.
 
-	std::condition_variable OneMessageArrived;
+  std::condition_variable OneMessageArrived;
 
 
 
 protected:
 
-	// The main hook for the receiver functionality in extending the functionality
-	// of the actor is the new message function. This will add to the count of
-	// unconsumed messages and notify the wait handler.
+  // The main hook for the receiver functionality in extending the functionality
+  // of the actor is the new message function. This will add to the count of
+  // unconsumed messages and notify the wait handler.
 
-	virtual void MessageProcessed( void )
-	{
-		std::lock_guard< std::mutex > Lock( CounterGuard );
+  virtual void MessageProcessed( void )
+  {
+    std::lock_guard< std::mutex > Lock( CounterGuard );
 
-		Unconsumed++;
-		OneMessageArrived.notify_one();
-	}
+    Unconsumed++;
+    OneMessageArrived.notify_one();
+  }
 
 public:
 
-	// The Consume function takes a number of messages up to the message limit
-	// or to the end of the buffer and hands these over to the Actor's enqueue
-	// function for processing. After passing on the messages it will wait for
-	// the Postman to complete the processing of these messages before terminating
-	// with the number of messages that could be processed.
+  // The Consume function takes a number of messages up to the message limit
+  // or to the end of the buffer and hands these over to the Actor's enqueue
+  // function for processing. After passing on the messages it will wait for
+  // the Postman to complete the processing of these messages before terminating
+  // with the number of messages that could be processed.
 
-	inline MessageCount Consume( MessageCount MessageLimit )
-	{
-		std::lock_guard< std::mutex > Lock( CounterGuard );
+  inline MessageCount Consume( MessageCount MessageLimit )
+  {
+    std::lock_guard< std::mutex > Lock( CounterGuard );
 
-		MessageCount Served = std::min( static_cast< MessageCount >( Unconsumed ),
-																		MessageLimit );
+    MessageCount Served = std::min( static_cast< MessageCount >( Unconsumed ),
+                                    MessageLimit );
 
-		Unconsumed -= Served;
+    Unconsumed -= Served;
 
-		return Served;
-	}
+    return Served;
+  }
 
-	// The Count function simply returns the number of messages still unconsumed
-	// by calls to the counter or the wait function.
+  // The Count function simply returns the number of messages still unconsumed
+  // by calls to the counter or the wait function.
 
-	inline MessageCount Count( void )
-	{ return Unconsumed; }
+  inline MessageCount Count( void )
+  { return Unconsumed; }
 
-	// The reset function just clears the counter.
+  // The reset function just clears the counter.
 
-	inline void Reset( void )
-	{
-		std::lock_guard< std::mutex > Lock( CounterGuard );
-		Unconsumed = 0;
-	}
+  inline void Reset( void )
+  {
+    std::lock_guard< std::mutex > Lock( CounterGuard );
+    Unconsumed = 0;
+  }
 
-	// The wait function in Theron only blocks if the there are no unconsumed
-	// messages. If there are messages to consume, it will just return the number
-	// of messages to consume up to the maximum limit. It means that calling the
-	// Wait function with an argument of say, 4, with 3 messages unconsumed will
-	// make the function return 3 and not wait for the forth message. This
-	// behaviour seems strange, but since the whole purpose of this implementation
-	// is to copy the Theron Receiver, the same behaviour is implemented here.
+  // The wait function in Theron only blocks if the there are no unconsumed
+  // messages. If there are messages to consume, it will just return the number
+  // of messages to consume up to the maximum limit. It means that calling the
+  // Wait function with an argument of say, 4, with 3 messages unconsumed will
+  // make the function return 3 and not wait for the forth message. This
+  // behaviour seems strange, but since the whole purpose of this implementation
+  // is to copy the Theron Receiver, the same behaviour is implemented here.
 
-	inline MessageCount Wait( MessageCount MessageLimit = 1 )
-	{
-		std::unique_lock< std::mutex > Lock( CounterGuard );
+  inline MessageCount Wait( MessageCount MessageLimit = 1 )
+  {
+    std::unique_lock< std::mutex > Lock( CounterGuard );
 
-		// The wait function will wait for one message. It will not block if there
-		// are already unconsumed messages.
+    // The wait function will wait for one message. It will not block if there
+    // are already unconsumed messages.
 
-		OneMessageArrived.wait( Lock, [&](void)->bool{ return Unconsumed > 0; });
+    OneMessageArrived.wait( Lock, [&](void)->bool{ return Unconsumed > 0; });
 
-		// Theoretically, more than one message could have arrived from the
-		// point in time when the Wait function is called until the return of
-		// the function. The Consume function can be called on its own and it must
-		// therefore lock the mutex, which means that the lock should be released
-		// prior to this call.
+    // Theoretically, more than one message could have arrived from the
+    // point in time when the Wait function is called until the return of
+    // the function. The Consume function can be called on its own and it must
+    // therefore lock the mutex, which means that the lock should be released
+    // prior to this call.
 
-		Lock.unlock();
+    Lock.unlock();
 
-		return Consume( MessageLimit );
-	}
+    return Consume( MessageLimit );
+  }
 
-	// The receiver has two constructors, one without argument that will give
-	// the receiver a default ActorNN name, and one for which a name can be
-	// given, but also an endpoint reference is needed.
+  // The receiver has two constructors, one without argument that will give
+  // the receiver a default ActorNN name, and one for which a name can be
+  // given, but also an endpoint reference is needed.
 
-	Receiver( void )
-	: Actor(), Unconsumed(0), CounterGuard(), OneMessageArrived()
-	{ }
+  Receiver( void )
+  : Actor(), Unconsumed(0), CounterGuard(), OneMessageArrived()
+  { }
 
-	Receiver( EndPoint & endPoint, const char *const name = 0 )
-	: Actor( name ), Unconsumed(0), CounterGuard(), OneMessageArrived()
-	{ }
+  Receiver( EndPoint & endPoint, const char *const name = 0 )
+  : Actor( name ), Unconsumed(0), CounterGuard(), OneMessageArrived()
+  { }
 };
 
 }	// Name space Theron
