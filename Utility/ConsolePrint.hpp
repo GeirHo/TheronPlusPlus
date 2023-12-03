@@ -16,8 +16,9 @@ with the manipulator "endl" or with a flush, each of which sends the stream
 to the print agent and clears the local buffer. Note that one of the two must
 be given for the formatted output to reach the console.
 
-Author: Geir Horn, 2013-2016
-Lisence: LGPL 3.0
+Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
+License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 Revisions:
   Geir Horn, 2016: Put the class under the Theron name space,
@@ -25,6 +26,7 @@ Revisions:
 		   Added ostream constructor argument
 		   Drain functionality moved to the destructor
 		   Stream will use the server's execution framework
+       Added exception for missing server when console print is created
 =============================================================================*/
 
 #ifndef CONSOLE_PRINT
@@ -36,6 +38,7 @@ Revisions:
 #include <memory>														// For shared pointers
 #include <type_traits>											// For compile time checks
 #include <stdexcept>												// Standard exceptions
+#include <source_location>                  // Improved reporting of errors
 
 #include "Actor.hpp"												// The Theron++ framework
 #include "StandardFallbackHandler.hpp"			// Debugging and error handling
@@ -130,8 +133,10 @@ private:
 		if ( TheServer != nullptr )
  		{
 			std::ostringstream ErrorMessage;
+      std::source_location Location = std::source_location::current();
 			
-			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+			ErrorMessage << Location.file_name() << " at line " << Location.line() 
+                   << " in function "<< Location.function_name() << ": "
 									 << "Only one Console Print Server can be used";
 			
 			throw std::logic_error( ErrorMessage.str() );
@@ -217,6 +222,19 @@ public:
     : std::ostringstream()
     { 	
 			TheConsole = ConsolePrintServer::TheServer->GetAddress();
+
+      if( TheConsole == Address() )
+      {
+        std::ostringstream ErrorMessage;
+        std::source_location Location = std::source_location::current();
+			
+			  ErrorMessage << Location.file_name() << " at line " << Location.line() 
+                     << " in function "<< Location.function_name() << ": "
+					  				 << "The Console Print Server must be created prior to "
+                     << " instantiating the Console Print output stream";
+			
+			  throw std::logic_error( ErrorMessage.str() );
+      }
     };
 
     // The flush method sends the content of the stream to the print 
@@ -231,8 +249,7 @@ public:
 
 			  // Clear the string
 
-			  clear();
-			  str("");
+			  clear(); str("");
 			}
 	
 			return this;

@@ -383,9 +383,9 @@ protected:
   // removed. It is also necessary to inform local subscribers that all known
   // actors on the remote endpoint have been removed.
 
-  virtual void RemoteEndpointClosing( 
-               const Network::ClosingEndpoint & ClosingMessage, 
-               const Address TheNetworkLayer )
+  void RemoteEndpointClosing( 
+          const Network::ClosingEndpoint & ClosingMessage, 
+          const Address TheNetworkLayer )
   {
     // The addresses used by local actors on this endpoint to send 
     // messages to actors on the closing endpoint is collected. 
@@ -483,8 +483,10 @@ private:
 	// is marked as disconnected and the last local actor closes. Only then can 
 	// the Network Layer close.
 	
-  void RemoveLocalActor( const RemoveActorCommand & Command,
-                         const Address ClosingActor )
+protected:
+
+  virtual void RemoveLocalActor( const RemoveActorCommand & Command,
+                                 const Address ClosingActor )
   {
     ExternalAddress GlobalActorID( ClosignActor, EndpointName );
     
@@ -520,6 +522,8 @@ private:
   // internal actor as it it just the raw actor address that should be sent 
   // to the subscriber. It could be that no peers are known to the system, 
   // in which an empty set of addresses will be returned.
+
+private:
 
   void SubscribeToPeerDiscovery( const NewPeerSubscription & Command,
                                  const Address SubscribingActor )

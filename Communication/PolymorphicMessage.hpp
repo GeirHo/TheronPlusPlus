@@ -137,13 +137,17 @@ protected:
   // the message is outbound, and from the Networking Actor subclass when 
   // the message is inbound.
   
-  template< ProtocolPayload > friend class PresentationLayer;
-  template< ProtocolPayload > friend class NetworkingActor;
+  template< typename > friend class PresentationLayer;
+  template< typename > friend class NetworkingActor;
   
   // The error reporting provides the information regarding the message type
   // so that a properly formatted error text can be provided if there is a 
   // mismatch between the presentation layer address and the payload of the 
-  // polymorphic message.
+  // polymorphic message. This string can also be used to identify the binary
+  // message type for messages transmitted over the network, and it should 
+  // work fine if the same compiler is used on all parts of the actor system.
+  // Otherwise, one should use a manual typename for the message type 
+  // identifier.
   
   virtual std::string GetProtocolTypeName( void ) const override
   { return boost::core::demangle( typeid( ProtocolPayload ).name() ); }
