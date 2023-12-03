@@ -87,6 +87,8 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 // Standard headers
 
+#include <string_view>            // For constant strings
+
 // Qpid Proton interface headers
 
 #include "proton/message.hpp"
@@ -166,21 +168,33 @@ protected:
   //
   // Finally, the names for the Session Layer server and the Presentation Layer
   // server can be given. They are only used to create the named actors,
-  // and default names are used if they are not given. 
+  // and default names are used if they are not given. These are defined as 
+  // standard string views as they needs to be passed in order to be able to 
+  // change and pass the connection options.
+
+public:
+
+  static constexpr std::string_view NetworkLayerLabel{"AMQNetworkLayer"};
+  static constexpr std::string_view SessionLayerLabel{"AMQSessionLayer"};
+  static constexpr std::string_view 
+                          PresentationLayerLabel{"AMQPresentationLayer"};
 
 protected:
 
   Network( const std::string & EndpointName,
            const std::string & AMQServerIP,
-           const unsigned    & AMQServerPort = 61616,
-           const std::string & NetworkLayerName = "AMQNetworkLayer",
-           const std::string & SessionServerName = "AMQSessionLayer",
-           const std::string & PresentationServerName = "AMQPresentationLayer",
+           const unsigned    & AMQServerPort = 1616,
+           const std::string & NetworkLayerName 
+               = std::string( NetworkLayerLabel ),
+           const std::string & SessionServerName 
+              = std::string( SessionLayerLabel ),
+           const std::string & PresentationServerName 
+              = std::string( PresentationLayerLabel ),
            const proton::connection_options & GivenConnectionOptions 
-                  = proton::connection_options(),
+               = proton::connection_options(),
            const proton::message::property_map & GivenMessageOptions 
-                  = proton::message::property_map()  )
-  : Actor( EndPointName ), 
+               = proton::message::property_map()  )
+  : Actor( EndpointName ), 
     StandardFallbackHandler( Actor::GetAddress().AsString() ),
     Theron::Network( Actor::GetAddress().AsString() ),
     NetworkServer( GlobalAddress( NetworkLayerName, EndpointName ),

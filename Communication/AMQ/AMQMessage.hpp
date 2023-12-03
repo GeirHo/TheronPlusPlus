@@ -120,6 +120,16 @@ class Message
 : public LinkMessage< GlobalAddress, std::shared_ptr< proton::message > >
 {
 public:
+
+  // There is a small utility function to generate an "handle" to the 
+  // message, which is in practice a shared pointer and here there is
+  // no difference.
+
+  static inline PayloadType NewMessageHandle( void )
+  { return std::make_shared< proton::message >(); }
+
+  // The constructor for the message requires also the sender and the receiver
+  // addresses in the global address format.
     
   Message( const GlobalAddress & From, const GlobalAddress & To, 
            const std::shared_ptr< proton::message > TheMessage )

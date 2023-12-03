@@ -53,6 +53,10 @@ class SessionLayer
   virtual public StandardFallbackHandler,
 	virtual public Theron::SessionLayer< AMQ::Message >
 {
+private:
+
+  using GenericSessionLayer = Theron::SessionLayer< AMQ::Message >;
+
 public:
 
   // --------------------------------------------------------------------------
@@ -96,6 +100,19 @@ protected:
   
   virtual void ManageTopics( const TopicSubscription & TheMessage, 
                              const Address PubSubActor );
+
+  // --------------------------------------------------------------------------
+  // Managing actors
+  // --------------------------------------------------------------------------
+  //
+  // If an actor closes without unsubscribing from the topics inbound messages
+  // will continuously be forwarded to the non-existing actor and this could 
+  // cause problems. Therefore, if an actor closes without having unsubscribed
+  // from any topics, it will be automatically unsubscribed. To ensure this, 
+  // the handler function for remove actor message must be overloaded.
+                    
+  virtual void RemoveLocalActor( const RemoveActorCommand & Command,
+                                 const Address ClosingActor ) override;
 
   // --------------------------------------------------------------------------
   // Messages on topics

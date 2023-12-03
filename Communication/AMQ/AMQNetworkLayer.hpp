@@ -116,13 +116,14 @@ class NetworkLayer
   virtual public Theron::NetworkLayer< Message >,
   virtual public proton::messaging_handler
 {
-  // ---------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
 	// Connectivity related variables
-	// ---------------------------------------------------------------------------
+	// --------------------------------------------------------------------------
 	//
-  // The first variables are the event loop state machine, the thread to execute
-  // this event loop, and the connection object managing the connection with 
-  // the broker. There is also a flag to indicate the status of the connection.
+  // The first variables are the event loop state machine, the thread to 
+  // execute this event loop, and the connection object managing the connection
+  // with the broker. There is also a flag to indicate the status of the 
+  // connection.
   
 private:
   
@@ -326,7 +327,7 @@ public:
     const Action    Command;
     const TopicName TheTopic;
     
-    TopicSubscription( Action & WhatToDo, TopicName & GivenTopic )
+    TopicSubscription( const Action & WhatToDo, const TopicName & GivenTopic )
     : Command( WhatToDo ), TheTopic( GivenTopic )
     {}
     

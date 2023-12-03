@@ -13,6 +13,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 #include <ranges>     // Container ranges
 #include <algorithm>  // Standard algorithms
+#include <vector>     // Vectors 
 
 // The Theron++ headers
 
@@ -95,6 +96,69 @@ void SessionLayer::ManageTopics( const TopicSubscription & TheMessage,
 }
 
 // ----------------------------------------------------------------------------
+// Removing local actors
+// ----------------------------------------------------------------------------
+//
+// When a local actor closes, all its topic subscriptions should be deleted. 
+// This means invoking the above function to manage topics for each of the 
+// topics subcribed to or published to must be removed one by one. It is 
+// tempting to remove the subscriptions as they are found, but if the closing 
+// actor is the only one subscribing to a topic, the topic will also be removed
+// and this has the side effect that the subscriber or publisher map is changed
+// and iterators may be invalidated. The solution is to collect the names of 
+// the topics subscribed to or published to first, and then remove them by 
+// their names.
+
+void SessionLayer::RemoveLocalActor( const RemoveActorCommand & Command,
+                                     const Address ClosingActor )
+{
+  // Removing the subscriptions first
+
+  auto FoundSubscriptions = std::ranges::views::keys( 
+      std::ranges::views::filter( TopicSubscribers, 
+      [&]( const auto & SubsriptionRecord){ 
+        return SubsriptionRecord.second.contains( ClosingActor ); 
+  }) );
+
+  if( !FoundSubscriptions.empty() )
+  {
+    std::vector< TopicName > 
+    SubscribedTopic( FoundSubscriptions.begin(), FoundSubscriptions.end() );
+
+    std::ranges::for_each( SubscribedTopic, [&]( const TopicName & TheTopic ){
+      ManageTopics( TopicSubscription( 
+      TopicSubscription::Action::CloseSubscription, TheTopic ), ClosingActor );
+    });
+  }
+    
+  // The same actions are repeated for the topics to which the actor is 
+  // publishing
+
+  auto FoundPublications = std::ranges::views::keys( 
+      std::ranges::views::filter( TopicPublishers, 
+      [&]( const auto & PublicationRecord){ 
+        return PublicationRecord.second.contains( ClosingActor ); 
+  }) );
+
+  if( !FoundPublications.empty() )
+  {
+    std::vector< TopicName >
+    PublicationTopic( FoundPublications.begin(), FoundPublications.end() );
+
+    std::ranges::for_each( PublicationTopic, [&]( const TopicName & TheTopic ){
+      ManageTopics( TopicSubscription( 
+      TopicSubscription::Action::ClosePublisher, TheTopic ), ClosingActor );
+    });
+  }
+
+  // After closing all subscribed and published topics associated with the 
+  // closing agent, the generic Session Layer can take over and remove the 
+  // actor-to-actor sessions associated with the closing actor.
+
+  GenericSessionLayer::RemoveLocalActor( Command, ClosingActor );
+}
+
+// ----------------------------------------------------------------------------
 // Inbound messages
 // ----------------------------------------------------------------------------
 //  
@@ -102,21 +166,35 @@ void SessionLayer::ManageTopics( const TopicSubscription & TheMessage,
 // and if so the message will be sent to all subscribers. If not, it is 
 // taken to be a message from a remote actor and passed on for handling by 
 // the generic Session Layer.
+//
+// Normally, there should be one message type per topic, and the message 
+// identifier should be in the message content type. This works if the remote
+// sender knows the message identifier. Since pure topics are not for actor 
+// to actor communication, it is likely that the sender will not set the 
+// content type file of the message, and if this is not set, the Session Layer
+// will set it to the topic name.
 
 void SessionLayer::InboundMessage( const AMQ::Message & TheMessage,
 										               const Address TheNetworkLayer )
 {
-  if( TopicSubscribers.contains( TheMessage.GetSender().ActorName() ) )
+  TopicName TheTopic( TheMessage.GetSender().ActorName() );
+
+  if( TopicSubscribers.contains( TheTopic ) )
   {
     Address SenderTopic( TheMessage.GetSender().ActorAddress() ),
             ThePresentationLayer( 
             Network::GetAddress( Network::Layer::Presentation ) );
 
+    auto MessageToActors( TheMessage.GetPayload() );
+
+    if( std::string_view( MessageToActors->content_type() ).empty() )
+      MessageToActors->content_type( TheTopic );
+
     std::ranges::for_each( 
       TopicSubscribers[ TheMessage.GetSender().ActorName() ],
       [&,this](const Address & Subscriber){
         Send( InternalMessage( SenderTopic, Subscriber, 
-                               TheMessage.GetPayload() ), 
+                               MessageToActors ), 
               ThePresentationLayer ); 
     });
   }
