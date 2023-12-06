@@ -180,6 +180,7 @@ public:
     // taken from the exposition of the container compatible range on the page
     // https://en.cppreference.com/w/cpp/ranges/to#container_compatible_range
 
+    #ifdef __cpp_lib_containers_ranges
     template< class RangeType >
     requires std::ranges::input_range< RangeType > &&
              std::convertible_to< std::ranges::range_reference_t< RangeType >, 
@@ -187,9 +188,32 @@ public:
     NewPeerAdded( RangeType & AddressRange )
     : std::set< Address >( AddressRange )
     {}
+    #else
+    template< class RangeType >
+    requires std::ranges::input_range< RangeType > &&
+             std::convertible_to< std::ranges::range_reference_t< RangeType >, 
+                                  Address >
+    NewPeerAdded( RangeType & AddressRange )
+    : std::set< Address >( AddressRange.cbegin(), AddressRange.cend() )
+    {}
+    #endif 
+  
 
+    // The insert ranges is a C++23 feature that may not be implemented yet
+    // and this provide the implementation if needed
 
-    NewPeerAdded()  = delete;
+    #ifndef __cpp_lib_containers_ranges
+
+      template< class RangeType >
+      requires std::ranges::input_range< RangeType > &&
+               std::convertible_to< std::ranges::range_reference_t< RangeType >, 
+                                    Address >
+      void insert_range( const RangeType & AddressRange )
+      { insert( AddressRange.cbegin(), AddressRange.cend() ); }
+
+    #endif
+
+    NewPeerAdded()  = default;
     ~NewPeerAdded() = default;
   };
 
@@ -211,15 +235,26 @@ public:
     // message above and basically requires a range with a type that is or is 
     // convertible to an actor address.
 
+    #ifdef __cpp_lib_containers_ranges
     template< class RangeType >
     requires std::ranges::input_range< RangeType > &&
              std::convertible_to< std::ranges::range_reference_t< RangeType >, 
                                   Address >
-    PeerRemoved( RangeType & AddressRange )
+    PeerRemoved( RangeType && AddressRange )
     : std::set< Address >( AddressRange )
     {}
+    #else
+    template< class RangeType >
+    requires std::ranges::input_range< RangeType > &&
+             std::convertible_to< std::ranges::range_reference_t< RangeType >, 
+                                  Address >
+    PeerRemoved( RangeType && AddressRange )
+    : std::set< Address >( AddressRange.cbegin(), AddressRange.cend())
+    {}    
+    #endif
 
-    PeerRemoved()  = delete;
+
+    PeerRemoved()  = default;
     ~PeerRemoved() = default;
   };
 
@@ -287,6 +322,11 @@ public:
   // The expected network layer type is also defined based on the message 
                           
   using NetworkLayerType = NetworkLayer< ExternalMessage >;
+
+  // The messages of the network layer to be reused are redeclared.
+
+  using ResolutionRequest  = NetworkLayerType::ResolutionRequest;
+  using ResolutionResponse = NetworkLayerType::ResolutionResponse;
 
   // ---------------------------------------------------------------------------
   // Local variables
@@ -371,7 +411,7 @@ protected:
 	{
 		Send( StopMessage, Network::GetAddress( Network::Layer::Presentation ) );
 
-    std::ranges::for_each( std::view::values( LocalActorRegistry ),
+    std::ranges::for_each( std::views::values( LocalActorRegistry ),
       [&,this]( const Address & LocalActor ){
         Send( StopMessage, LocalActor ); });
 
@@ -391,10 +431,10 @@ protected:
     // messages to actors on the closing endpoint is collected. 
 
     PeerRemoved RemovedActorAddresses( 
-      std::ranges::view::keys(
-        std::ranges::view::filter( ExternalActors,
+      std::ranges::views::keys(
+        std::ranges::views::filter( ExternalActors,
           [&](const auto & ActorRecord){ 
-          return ActorRecord.second.Endpoint() == ClosingMessage.Identifier 
+          return ActorRecord.second.Endpoint() == ClosingMessage.Identifier; 
         }) )
     );
 
@@ -410,7 +450,7 @@ protected:
 
     std::ranges::for_each( RemovedActorAddresses, 
       [&,this](const Address & RemovedActor){ 
-        ExternalAddress.erase( RemovedActor ) });
+        ExternalActors.erase( RemovedActor ); });
   }
 
   // ---------------------------------------------------------------------------
@@ -436,7 +476,7 @@ private:
      ExternalAddress( LocalActor, EndpointName ), LocalActor );
     
     std::ranges::for_each( NewPeerSubscribers, 
-      [this](const Address & Subscriber){
+      [&,this](const Address & Subscriber){
         Send( NewPeerAdded( LocalActor ), Subscriber );
     });
 	}
@@ -457,7 +497,7 @@ private:
       
       LocalActorRegistry.try_emplace(GlobalActorID, TheRequest.RequestedActor);
       
-      Send( NetworkLayerType::ResolutionResponse( 
+      Send( typename NetworkLayerType::ResolutionResponse( 
             GlobalActorID, TheRequest.RequestingActor ),
             Network::GetAddress( Network::Layer::Network ) );
     }
@@ -488,17 +528,17 @@ protected:
   virtual void RemoveLocalActor( const RemoveActorCommand & Command,
                                  const Address ClosingActor )
   {
-    ExternalAddress GlobalActorID( ClosignActor, EndpointName );
+    ExternalAddress GlobalActorID( ClosingActor, EndpointName );
     
     if( LocalActorRegistry.contains( GlobalActorID ) )
     {
-			Send( NetworkLayerType::RemoveActor( GlobalActorID ),
+			Send( typename NetworkLayerType::RemoveActor( GlobalActorID ),
 				    Network::GetAddress( Network::Layer::Network ) );
       
       LocalActorRegistry.erase( GlobalActorID );
       
       if( !NetworkConnected && LocalActorRegistry.empty() )
-        Send( Network::ShutDown(), 
+        Send( typename Network::ShutDown(), 
               Network::GetAddress( Network::Layer::Network ) );
     }
 
@@ -506,8 +546,8 @@ protected:
     // be notified.
 
     std::ranges::for_each( NewPeerSubscribers, 
-      [this](const Address & Subscriber){
-        Send( PeerRemoved( LocalActor ), Subscriber );
+      [&,this](const Address & Subscriber){
+        Send( PeerRemoved( ClosingActor ), Subscriber );
   });    
   }
 
@@ -530,11 +570,11 @@ private:
   {
     NewPeerAdded ExistingPeers;
 
-    ExistingPeers.insert_range( std::view::keys( ExternalActors ) );
-    ExistingPeers.insert_range( std::view::values( LocalActorRegistry ) );
+    ExistingPeers.insert_range( std::views::keys( ExternalActors ) );
+    ExistingPeers.insert_range( std::views::values( LocalActorRegistry ) );
     
     Send( ExistingPeers, SubscribingActor );
-    NewPeerSubscribers.insert( RequestingActor );
+    NewPeerSubscribers.insert( SubscribingActor );
   }
 
   // The inverse function cancelling a subscription is simpler since it is 
@@ -573,7 +613,7 @@ protected:
     // and the external message can be constructed based on the looked up 
     // external address and the global address of the sending actor.
     
-    if( ExternalActors.contains( TheMessage.GetReceiver() ) )
+    if( ExternalActors.contains( TheMessage.To ) )
     {
       Send( ExternalMessage( SenderAddress, 
                              ExternalActors[ TheMessage.To ], 
@@ -586,8 +626,8 @@ protected:
       // request is initiated before the message is cached using the receiver 
       // actor's address as key.
       
-      Send( NetworkLayerType::ResolutionRequest(
-            TheMessage.GetReceiver(), SenderAddress ),
+      Send( typename NetworkLayerType::ResolutionRequest(
+            TheMessage.To, SenderAddress ),
             Network::GetAddress( Network::Layer::Network ) );
       
       // Then caching the message waiting for the address to be resolved some 
@@ -626,11 +666,11 @@ private:
     {
       auto [First, Last] = MessageCache.equal_range( RemoteActor );
       
-      for( auto & [_, TheMessage] : std::ranges::sub_range( First, Last ) )
-        Send( ExternalMessage( ExternalAddress( TheMessage.GetSender(), 
+      for( auto & [_, TheMessage] : std::ranges::subrange( First, Last ) )
+        Send( ExternalMessage( ExternalAddress( TheMessage.From, 
                                                 EndpointName ),
                                AddressRecord.RequestedActor,
-                               TheMessage.GetPayload() ),
+                               TheMessage.MessagePayload ),
               Network::GetAddress( Network::Layer::Network ) );
               
       MessageCache.erase( First, Last );
@@ -641,10 +681,11 @@ private:
   // remote actors, and it should also notify peer subscribers. If the actor
   // is not known, then nothing will happen.
 
-  void RemoveRemoteActor( const NetworkLayer::RemoveActor & Command, 
+  void RemoveRemoteActor( const NetworkLayerType::RemoveActor & Command, 
                           const Address TheNetworkLayer )
 	{
-		auto AddressRecord = ExternalActors.find( Command.GlobalAddress );
+		auto AddressRecord = ExternalActors.find( 
+                                        Command.GlobalAddress.ActorAddress() );
 
 		if ( AddressRecord != ExternalActors.end() )
 		{
@@ -652,14 +693,16 @@ private:
 
       std::ranges::for_each( NewPeerSubscribers, 
         [&,this]( const Address & Subscriber ){
-          Send( PeerRemoved( AddressRecord->second ), Subscriber );
+          Send( PeerRemoved( AddressRecord->second.ActorAddress() ), 
+                Subscriber );
         });
 
 			// Any messages cached for this remote actor will simply be deleted.
 			// hence the sending actor should be robust and aware that a message
 			// may not arrive if the actors are volatile.
 
-			auto [First, Last] = MessageCache.equal_range( AddressRecord->second );
+			auto [First, Last] = MessageCache.equal_range( 
+                                        AddressRecord->second.ActorAddress() );
 			MessageCache.erase( First, Last );
 
 			// Finally, the address record can be deleted.
@@ -740,9 +783,9 @@ public:
 
   SessionLayer(const std::string & TheEndPoint, const std::string & ServerName)
   : Actor( ServerName ),
-    StandardFallbackHandler( ServerName ),
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
     SessionLayerMessages(),
-    LocalActorRegistry(), EndpointName( TheEndPoint ), NewPeerSubscribers(),
+    EndpointName( TheEndPoint ), LocalActorRegistry(), NewPeerSubscribers(),
     ExternalActors(), MessageCache(),
 		NetworkConnected( true )
   {
@@ -769,7 +812,8 @@ public:
 
   // The destructor has nothing to do, but is a place holder for derived classes
 
-  virtual ~SessionLayer() = default;
+  virtual ~SessionLayer()
+  {};
 };
 
 }	// End name space Theron

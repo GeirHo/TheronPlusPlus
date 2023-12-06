@@ -77,6 +77,8 @@ public:
 	{
 		SetDefaultHandler( this, &StandardFallbackHandler::FallbackHandler );
 	}
+
+	virtual ~StandardFallbackHandler() = default;
 		
 }; 	// End class standard fall back handler
 } 	// End name space Theron

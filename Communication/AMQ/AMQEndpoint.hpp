@@ -174,22 +174,18 @@ protected:
 
 public:
 
-  static constexpr std::string_view NetworkLayerLabel{"AMQNetworkLayer"};
-  static constexpr std::string_view SessionLayerLabel{"AMQSessionLayer"};
-  static constexpr std::string_view 
-                          PresentationLayerLabel{"AMQPresentationLayer"};
+  static constexpr std::string NetworkLayerLabel = "AMQNetwork";
+  static constexpr std::string SessionLayerLabel = "AMQSession";
+  static constexpr std::string PresentationLayerLabel = "AMQPresentation";
 
 protected:
 
   Network( const std::string & EndpointName,
            const std::string & AMQServerIP,
            const unsigned    & AMQServerPort = 1616,
-           const std::string & NetworkLayerName 
-               = std::string( NetworkLayerLabel ),
-           const std::string & SessionServerName 
-              = std::string( SessionLayerLabel ),
-           const std::string & PresentationServerName 
-              = std::string( PresentationLayerLabel ),
+           const std::string & NetworkLayerName = NetworkLayerLabel,
+           const std::string & SessionServerName = SessionLayerLabel,
+           const std::string & PresentationServerName = PresentationLayerLabel,
            const proton::connection_options & GivenConnectionOptions 
                = proton::connection_options(),
            const proton::message::property_map & GivenMessageOptions 

@@ -91,9 +91,10 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <functional>														// Functional programming
 #include <map>																	// Standard maps
 #include <source_location>											// For error reporting
-#include <strstream> 														// Formatted errors 
+#include <sstream> 														  // Formatted errors 
 #include <stdexcept>                            // Standard exceptions
 #include <algorithm>														// Standard algorithms
+#include <concepts>                             // For template parameters
 
 #include "Actor.hpp"							              // The Theron++ Actor Framework
 #include "Utility/StandardFallbackHandler.hpp"  // Catch unhanded messages
@@ -212,9 +213,12 @@ private:
       // If the payload does not correspond to any of the available messages,
       // an exception will be thrown as this situation should not occur.
 
-      if ( std::ranges::find_if( MessageTypes, [&]( auto & Initialiser){ 
-          return Initialiser->second( Payload, Sender ); } )
-          == MessageTypes.end() )
+      ProtocolPayload ThePayload( Payload.GetPayload() );
+
+      if( std::ranges::count_if( std::ranges::views::values( MessageTypes ), 
+              [&]( auto & InitialiserFunction)->bool{ 
+              return InitialiserFunction( ThePayload, Sender ); })
+          == 0 )
       {
         std::ostringstream ErrorMessage;
         std::source_location Location = std::source_location::current();
@@ -244,18 +248,15 @@ private:
 protected: 
 
   template< class ActorType,  class MessageType >
+  requires std::derived_from< ActorType, Actor > && 
+           std::default_initializable< MessageType >
   inline bool RegisterHandler( ActorType  * const TheActor,
-               void ( ActorType::* TheHandler)(	const MessageType & TheMessage,
+               void (ActorType::* TheHandler)(	const MessageType & TheMessage,
                                                 const Address From ) )
   {
     if constexpr ( std::is_base_of< PolymorphicMessage< ProtocolPayload >, 
                                     MessageType>::value )
-    {
-      static_assert( std::is_default_constructible< MessageType >::value,
-      "A polymorphic message must have a default constructor, and cannot be an abstract class");
-
       RegisterMessageType< MessageType >();
-    }
 
     return Actor::RegisterHandler( TheActor, TheHandler );
   }

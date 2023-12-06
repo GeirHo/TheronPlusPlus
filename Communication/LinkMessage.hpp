@@ -114,7 +114,7 @@ public:
 	: ActorID( Other.ActorID ), EndpointID( Other.EndpointID )
 	{}
 
-	GlobalAddress( void ) = delete;
+	GlobalAddress( void ) = default;
 	virtual ~GlobalAddress( void ) noexcept = default;
 };
 

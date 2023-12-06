@@ -139,17 +139,7 @@ protected:
   // endpoint to obtain the addresses. A static function is therefore provided
   // to call indirectly these functions. This is defined in the code file for 
   // the generic Network Endpoint.
-  
-public:
-
-  static Address GetAddress( Layer Role );
-
-  // As this function overshadows the similar function from the actor, the
-  // actor function is explicitly reused (differences in argument lists is
-  // enough for the compiler to distinguish the two variants.)
-
-  using Actor::GetAddress;
-
+  //
   // The whole point of the static function is that it does not have the 'this'
   // pointer, and so in order to be able to call the address functions for 
   // the various layers, a static pointer to the Network class must be 
@@ -158,6 +148,16 @@ public:
 private:
 
   static const Network * TheNetwork; 
+
+public:
+
+  static Address GetAddress( Layer Role );
+  
+  // As this function overshadows the similar function from the actor, the
+  // actor function is explicitly reused (differences in argument lists is
+  // enough for the compiler to distinguish the two variants.)
+
+  using Actor::GetAddress;
 
   // ---------------------------------------------------------------------------
   // Shut-down management
@@ -297,7 +297,7 @@ public:
 // compile.
 
 template< class NetworkType >
-requires std::derived_from< Network, NetworkType >
+requires std::derived_from< NetworkType, Network >
 class NetworkEndpoint
 : virtual public Actor,
   virtual public StandardFallbackHandler,
@@ -334,7 +334,7 @@ public:
 public:
 
  template< typename ... NetworkParameterTypes >
- NetworkEndpoint( const std::string & EnpointName,
+ NetworkEndpoint( const std::string & EndpointName,
                   NetworkParameterTypes && ... NetworkParameterValues )
   : Actor( EndpointName ), 
     StandardFallbackHandler( Actor::GetAddress().AsString() ),

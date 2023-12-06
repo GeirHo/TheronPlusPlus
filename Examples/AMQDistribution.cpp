@@ -365,7 +365,7 @@ protected:
 public:
 
   class TopicMessage
-  : public Theron::AMQ::JSONMessage
+  : virtual public Theron::AMQ::JSONMessage
   {
   protected:
 
@@ -378,11 +378,14 @@ public:
 
   public:
 
-    TopicMessage( const std::string & TopicName )
-    : JSONMessage( TopicName )
+    TopicMessage( const std::string & MessageIdentifier )
+    : JSONMessage( MessageIdentifier )
     {}
 
-    TopicMessage() = delete;
+    TopicMessage()
+    : JSONMessage( "TopicSubscriber::TopicMessage" )
+    {}
+
     TopicMessage( const TopicMessage & Other )
     : JSONMessage( Other.GetMessageIdentifier(), Other )
     {}

@@ -43,7 +43,9 @@ using JSON = nlohmann::json;
 // The Theron++ messages
 
 #include "Communication/PolymorphicMessage.hpp"
+#include "Communication/NetworkEndpoint.hpp" 
 #include "Communication/AMQ/AMQMessage.hpp"
+#include "Communication/AMQ/AMQEndpoint.hpp"
 
 namespace Theron::AMQ
 {
@@ -51,7 +53,7 @@ namespace Theron::AMQ
 class JSONMessage
 : virtual public Theron::PolymorphicMessage<
                  typename Theron::AMQ::Message::PayloadType >,
-  public JSON
+  virtual public JSON
 {
  public:
 
@@ -100,7 +102,8 @@ protected:
   virtual ProtocolPayload GetPayload( void ) const override;
   virtual bool 
   Initialize( const ProtocolPayload & ThePayload ) noexcept override;
-
+  virtual Address PresentationLayerAddress( void ) const override;
+  
 public:
 
   // The constructor requires the unique message identifier to recognise 
@@ -110,7 +113,7 @@ public:
   : JSON(), UniqueMessageIdentifier( TheMessageID )
   {}
 
-  // The default constructor is not allowed 
+  // The default constructor not allowed 
 
   JSONMessage() = delete;
   

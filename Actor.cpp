@@ -10,13 +10,12 @@ License: LGPL 3.0
 
 #include "Actor.hpp"							             // The Actor definition
 #include "Communication/PresentationLayer.hpp" // The Presentation Layer
-#include "Communication/SerialMessage.hpp"     // Serialized messages
 
 // In the case that this is compiled with a GNU compiler the actor's postman
 // thread will be named with the actor's name.
 
 #ifdef _GNU_SOURCE
-	#include <pthread.h>
+  #include <pthread.h>
 #endif
 
 /*=============================================================================
@@ -29,14 +28,14 @@ License: LGPL 3.0
 // object.
 
 std::atomic< Theron::Actor::Identification::IDType >
-				Theron::Actor::Identification::TotalActorsCreated(0);
+        Theron::Actor::Identification::TotalActorsCreated(0);
 
 std::unordered_map< std::string, Theron::Actor::Identification * >
-				Theron::Actor::Identification::ActorsByName;
+        Theron::Actor::Identification::ActorsByName;
 
 std::unordered_map< Theron::Actor::Identification::IDType,
-										Theron::Actor::Identification * >
-				Theron::Actor::Identification::ActorsByID;
+                    Theron::Actor::Identification * >
+        Theron::Actor::Identification::ActorsByID;
 
 std::recursive_mutex Theron::Actor::Identification::InformationAccess;
 
@@ -71,9 +70,9 @@ Theron::Framework * Theron::Actor::GlobalFramework = nullptr;
 // handling.
 
 void Theron::Actor::Identification::SetPresentationLayerServer(
-																		const Address & ThePresentationLayerSever )
+                                    const Address & ThePresentationLayerSever )
 {
-	PresentationLayerServers.insert( ThePresentationLayerSever );
+  PresentationLayerServers.insert( ThePresentationLayerSever );
 }
 
 // Creating an Identification object is subject to an initial verification that
@@ -83,117 +82,117 @@ void Theron::Actor::Identification::SetPresentationLayerServer(
 // actor's constructor)
 
 Theron::Actor::Address Theron::Actor::Identification::Create(
-								 const std::string & ActorName, Theron::Actor * const TheActor )
+                 const std::string & ActorName, Theron::Actor * const TheActor )
 {
-	// In order to ensure that the Identification object of an existing actor is
-	// not destructed in parallel with the creation of a reference to the same
-	// object, access to the maps must be locked.
+  // In order to ensure that the Identification object of an existing actor is
+  // not destructed in parallel with the creation of a reference to the same
+  // object, access to the maps must be locked.
 
-	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	// The found Identification object is stored. There is a very subtle learning
-	// point: This could have been a raw pointer, but that would leave the
-	// shared pointer of the base class of the identification void. The shared
-	// pointer constructor ensures that it is possible to say 'enable shared from
-	// this', and so a shared pointer must be set to take care of the newly
-	// created Identification object. Furthermore, since the share pointer
-	// constructor updates the 'enable shared from this' base class, that base
-	// class could not be protected.
+  // The found Identification object is stored. There is a very subtle learning
+  // point: This could have been a raw pointer, but that would leave the
+  // shared pointer of the base class of the identification void. The shared
+  // pointer constructor ensures that it is possible to say 'enable shared from
+  // this', and so a shared pointer must be set to take care of the newly
+  // created Identification object. Furthermore, since the share pointer
+  // constructor updates the 'enable shared from this' base class, that base
+  // class could not be protected.
 
-	std::shared_ptr< Identification > TheActorID;
+  std::shared_ptr< Identification > TheActorID;
 
-	// The lookup is considered first: If the name is not given, then a new ID
-	// with automatically assigned name must be created, otherwise a check is
-	// made to find an actor with the given name. If no actor is found, then a
-	// new Identification is again constructed. Note that the constructor of the
-	// Identification object takes care of inserting the Identification object
-	// in the two lookup maps.
+  // The lookup is considered first: If the name is not given, then a new ID
+  // with automatically assigned name must be created, otherwise a check is
+  // made to find an actor with the given name. If no actor is found, then a
+  // new Identification is again constructed. Note that the constructor of the
+  // Identification object takes care of inserting the Identification object
+  // in the two lookup maps.
 
-	if ( ActorName.empty() )
+  if ( ActorName.empty() )
     TheActorID = std::shared_ptr< Identification >( new Identification() );
-	else
+  else
   {
-		auto ExistingActor = ActorsByName.find( ActorName );
+    auto ExistingActor = ActorsByName.find( ActorName );
 
-		if ( ExistingActor == ActorsByName.end() )
-			TheActorID = std::shared_ptr< Identification >(
-																							new Identification( ActorName ) );
-		else
-			TheActorID = ExistingActor->second->GetSmartPointer();
-	}
+    if ( ExistingActor == ActorsByName.end() )
+      TheActorID = std::shared_ptr< Identification >(
+                                              new Identification( ActorName ) );
+    else
+      TheActorID = ExistingActor->second->GetSmartPointer();
+  }
 
-	// An actor is allowed to steal the Actor Pointer if this actor pointer is
-	// either unassigned or set to the Presentation Layer actor indicating that
-	// this Identification could be for a remote object which is now confirmed
-	// to be a local identity. If no actor pointer is given, the the Actor Pointer
-	// of the Identification object is set to the Presentation Layer server if
-	// that is known. Otherwise, if an actor pointer is given to this function
-	// for a named actor that is already set to another actor that is not the
-	// Presentation Layer actor, there is a serious logical error in the
-	// application and an exception will be thrown.
+  // An actor is allowed to steal the Actor Pointer if this actor pointer is
+  // either unassigned or set to the Presentation Layer actor indicating that
+  // this Identification could be for a remote object which is now confirmed
+  // to be a local identity. If no actor pointer is given, the the Actor Pointer
+  // of the Identification object is set to the Presentation Layer server if
+  // that is known. Otherwise, if an actor pointer is given to this function
+  // for a named actor that is already set to another actor that is not the
+  // Presentation Layer actor, there is a serious logical error in the
+  // application and an exception will be thrown.
 
-	if ( TheActor != nullptr )
+  if ( TheActor != nullptr )
   {
-		if ((TheActorID->ActorPointer == nullptr) ||
-				(( !PresentationLayerServers.empty() ) &&
-				 ( TheActorID->ActorPointer ==
-					   PresentationLayerServers.begin()->get()->ActorPointer) ) )
-			TheActorID->ActorPointer = TheActor;
-		else if( TheActor != TheActorID->ActorPointer )
-		{
-			std::ostringstream ErrorMessage;
+    if ((TheActorID->ActorPointer == nullptr) ||
+        (( !PresentationLayerServers.empty() ) &&
+         ( TheActorID->ActorPointer ==
+             PresentationLayerServers.begin()->get()->ActorPointer) ) )
+      TheActorID->ActorPointer = TheActor;
+    else if( TheActor != TheActorID->ActorPointer )
+    {
+      std::ostringstream ErrorMessage;
 
-			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-									 << "Attempt to Create an Identification with name "
-									 << ActorName << " and address " << TheActor
-									 << " but this named Identification already points "
-									 << " to the actor at " << TheActorID->ActorPointer;
+      ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+                   << "Attempt to Create an Identification with name "
+                   << ActorName << " and address " << TheActor
+                   << " but this named Identification already points "
+                   << " to the actor at " << TheActorID->ActorPointer;
 
-		  throw std::logic_error( ErrorMessage.str() );
-		}
-	}
-	else if ( !PresentationLayerServers.empty() )
-		TheActorID->ActorPointer =
-			PresentationLayerServers.begin()->get()->ActorPointer;
+      throw std::logic_error( ErrorMessage.str() );
+    }
+  }
+  else if ( !PresentationLayerServers.empty() )
+    TheActorID->ActorPointer =
+      PresentationLayerServers.begin()->get()->ActorPointer;
 
-	// At this point the Identification pointer is correctly set, and the
-	// address constructed from its shared pointer can be returned.
+  // At this point the Identification pointer is correctly set, and the
+  // address constructed from its shared pointer can be returned.
 
-	return Address( TheActorID );
+  return Address( TheActorID );
 }
 
 // The static function to return the actor pointer based on a an address will
 // throw an invalid argument if the given address is Null
 
 Theron::Actor * Theron::Actor::Identification::GetActor(
-																	 const Theron::Actor::Address & ActorAddress )
+                                   const Theron::Actor::Address & ActorAddress )
 {
-	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	if ( ActorAddress )
+  if ( ActorAddress )
   {
-		Actor * TheActor = ActorAddress->ActorPointer;
-		if ( TheActor != nullptr )
-			return TheActor;
-		else
-		{
-			std::ostringstream ErrorMessage;
+    Actor * TheActor = ActorAddress->ActorPointer;
+    if ( TheActor != nullptr )
+      return TheActor;
+    else
+    {
+      std::ostringstream ErrorMessage;
 
-			ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-									 << "GetActor: NULL actor pointer";
+      ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+                   << "GetActor: NULL actor pointer";
 
-			throw std::invalid_argument( ErrorMessage.str() );
-		}
+      throw std::invalid_argument( ErrorMessage.str() );
+    }
   }
-	else
-	{
-		std::ostringstream ErrorMessage;
+  else
+  {
+    std::ostringstream ErrorMessage;
 
-		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-								 << "GetActor: NULL actor address";
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+                 << "GetActor: NULL actor address";
 
-		throw std::invalid_argument( ErrorMessage.str() );
-	}
+    throw std::invalid_argument( ErrorMessage.str() );
+  }
 
 }
 
@@ -202,32 +201,32 @@ Theron::Actor * Theron::Actor::Identification::GetActor(
 // may result in an invalid address if the given actor name is not found.
 
 Theron::Actor::Address Theron::Actor::Identification::Lookup(
-																								 const std::string & ActorName )
+                                                 const std::string & ActorName )
 {
-	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	auto TheActor = ActorsByName.find( ActorName );
+  auto TheActor = ActorsByName.find( ActorName );
 
-	if ( TheActor == ActorsByName.end() )
-		return Address();
-	else
-		return TheActor->second->GetSmartPointer();
+  if ( TheActor == ActorsByName.end() )
+    return Address();
+  else
+    return TheActor->second->GetSmartPointer();
 }
 
 // The second lookup function is almost identical except that it uses the ID
 // map to find the actor.
 
 Theron::Actor::Address Theron::Actor::Identification::Lookup(
-																														const IDType TheID )
+                                                            const IDType TheID )
 {
-	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	auto TheActor = ActorsByID.find( TheID );
+  auto TheActor = ActorsByID.find( TheID );
 
-	if ( TheActor == ActorsByID.end() )
-		return Address();
-	else
-		return TheActor->second->GetSmartPointer();
+  if ( TheActor == ActorsByID.end() )
+    return Address();
+  else
+    return TheActor->second->GetSmartPointer();
 }
 
 // Clearing the actor is just setting the actor pointer to the null pointer
@@ -245,25 +244,25 @@ Theron::Actor::Address Theron::Actor::Identification::Lookup(
 // the pointer should be set to the null pointer.
 
 void Theron::Actor::Identification::ClearActor(
-																	const Theron::Actor::Address & ActorAddress )
+                                  const Theron::Actor::Address & ActorAddress )
 {
-	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	if ( ActorAddress == *PresentationLayerServers.begin() )
+  if ( ActorAddress == *PresentationLayerServers.begin() )
   {
-		Actor * NewHandler = nullptr;
+    Actor * NewHandler = nullptr;
 
-		PresentationLayerServers.erase( ActorAddress );
+    PresentationLayerServers.erase( ActorAddress );
 
-		if ( !PresentationLayerServers.empty() )
-			NewHandler = PresentationLayerServers.begin()->get()->ActorPointer;
+    if ( !PresentationLayerServers.empty() )
+      NewHandler = PresentationLayerServers.begin()->get()->ActorPointer;
 
-		for ( auto & TheID : ActorsByID )
-			if ( TheID.second->ActorPointer == ActorAddress->ActorPointer )
-				TheID.second->ActorPointer = NewHandler;
-	}
-	else
-		ActorAddress->ActorPointer = nullptr;
+    for ( auto & TheID : ActorsByID )
+      if ( TheID.second->ActorPointer == ActorAddress->ActorPointer )
+        TheID.second->ActorPointer = NewHandler;
+  }
+  else
+    ActorAddress->ActorPointer = nullptr;
 }
 
 // -----------------------------------------------------------------------------
@@ -276,8 +275,8 @@ void Theron::Actor::Identification::ClearActor(
 
 bool Theron::Actor::Identification::AllowRouting( void )
 {
-	return ( ActorPointer != nullptr ) ||
-				 ( !PresentationLayerServers.empty() ) ;
+  return ( ActorPointer != nullptr ) ||
+         ( !PresentationLayerServers.empty() ) ;
 }
 
 // -----------------------------------------------------------------------------
@@ -292,13 +291,13 @@ bool Theron::Actor::Identification::AllowRouting( void )
 Theron::Actor::Identification::Identification( const std::string & ActorName )
 : enable_shared_from_this(),
   NumericalID( GetNewID() ),  Name( ActorName.empty() ?
-		  "Actor" + std::to_string( NumericalID ) : ActorName ),
+      "Actor" + std::to_string( NumericalID ) : ActorName ),
   ActorPointer( nullptr )
 {
-	std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
+  std::lock_guard< std::recursive_mutex > Lock( InformationAccess );
 
-	ActorsByName.emplace( Name,        this );
-	ActorsByID.emplace  ( NumericalID, this );
+  ActorsByName.emplace( Name,        this );
+  ActorsByID.emplace  ( NumericalID, this );
 }
 
 // The destructor simply reverses this registration after locking the access
@@ -308,8 +307,8 @@ Theron::Actor::Identification::~Identification( void )
 {
   std::lock_guard< std::recursive_mutex > Lock( InformationAccess )	;
 
-	ActorsByName.erase( Name 			  );
-	ActorsByID.erase  ( NumericalID );
+  ActorsByName.erase( Name 			  );
+  ActorsByID.erase  ( NumericalID );
 }
 
 
@@ -325,7 +324,7 @@ Theron::Actor::Identification::~Identification( void )
 std::shared_ptr< Theron::PolymorphicProtocolHandler > 
 Theron::Actor::GenericMessage::GetPolymorphicMessagePointer()
 {
-	return std::shared_ptr< Theron::PolymorphicProtocolHandler >();
+  return std::shared_ptr< Theron::PolymorphicProtocolHandler >();
 }
 
 // The mailbox stores a message by simply enqueue it after locking the mutex
@@ -333,11 +332,11 @@ Theron::Actor::GenericMessage::GetPolymorphicMessagePointer()
 // adding the message to the queue it will signal the new message condition.
 
 void Theron::Actor::MessageQueue::StoreMessage(
-													  const std::shared_ptr<GenericMessage> & TheMessage )
+                            const std::shared_ptr<GenericMessage> & TheMessage )
 {
-	std::unique_lock< std::mutex > QueueLock( QueueGuard );
-	push( TheMessage );
-	NewMessage.notify_all();
+  std::unique_lock< std::mutex > QueueLock( QueueGuard );
+  push( TheMessage );
+  NewMessage.notify_all();
 }
 
 // When an actor sends a message to another actor, it will call the
@@ -351,10 +350,10 @@ void Theron::Actor::MessageQueue::StoreMessage(
 // to the right handler.
 
 bool Theron::Actor::EnqueueMessage(
-													const	std::shared_ptr< GenericMessage > & TheMessage )
+                          const	std::shared_ptr< GenericMessage > & TheMessage )
 {
-	Mailbox.StoreMessage( TheMessage );
-	return true;
+  Mailbox.StoreMessage( TheMessage );
+  return true;
 }
 
 // A message is deleted from the dispatching function after it has been given
@@ -364,9 +363,9 @@ bool Theron::Actor::EnqueueMessage(
 
 void Theron::Actor::MessageQueue::DeleteFirstMessage( void )
 {
-	std::unique_lock< std::mutex > QueueLock( QueueGuard );
-	pop();
-	MessageDone.notify_all();
+  std::unique_lock< std::mutex > QueueLock( QueueGuard );
+  pop();
+  MessageDone.notify_all();
 }
 
 // The method to check if the queue is empty will wait for a message if that
@@ -375,21 +374,21 @@ void Theron::Actor::MessageQueue::DeleteFirstMessage( void )
 // events will be created by other actors, i.e. other threads.
 
 bool Theron::Actor::MessageQueue::HasMessage(
-																Theron::Actor::MessageQueue::QueueEmpty Action )
+                                Theron::Actor::MessageQueue::QueueEmpty Action )
 {
-	std::unique_lock< std::mutex > QueueLock( QueueGuard );
-	if ( empty() )
+  std::unique_lock< std::mutex > QueueLock( QueueGuard );
+  if ( empty() )
   {
-		if ( Action == QueueEmpty::Wait )
-		{
-			NewMessage.wait( QueueLock, [&](void)->bool{ return size() > 0; } );
-			return true;
-		}
-		else
-			return false;
-	}
-	else
-		return true;
+    if ( Action == QueueEmpty::Wait )
+    {
+      NewMessage.wait( QueueLock, [&](void)->bool{ return size() > 0; } );
+      return true;
+    }
+    else
+      return false;
+  }
+  else
+    return true;
 }
 
 // Waiting for the next message to arrive is a forced version of the check for
@@ -398,24 +397,24 @@ bool Theron::Actor::MessageQueue::HasMessage(
 // function on the actor's interface.
 
 void Theron::Actor::MessageQueue::WaitForNextMessage(
-																const Theron::Actor::Address & SenderToWaitFor )
+                                const Theron::Actor::Address & SenderToWaitFor )
 {
-	// The lock is taken and the current queue size is remembered
+  // The lock is taken and the current queue size is remembered
 
-	std::unique_lock< std::mutex > QueueLock( QueueGuard );
-	auto IngressQueueSize = size();
+  std::unique_lock< std::mutex > QueueLock( QueueGuard );
+  auto IngressQueueSize = size();
 
-	// The condition depends on what the given address is. If it is Null then
-	// the wait should terminate whenever there is a new message. If an address
-	// is given the wait should terminate when there the newly received message
-	// is from the specified sender.
+  // The condition depends on what the given address is. If it is Null then
+  // the wait should terminate whenever there is a new message. If an address
+  // is given the wait should terminate when there the newly received message
+  // is from the specified sender.
 
-	if ( SenderToWaitFor == Address::Null() )
-		NewMessage.wait( QueueLock,
-										 [&](void)->bool{ return size() > IngressQueueSize; } );
-	else
-		NewMessage.wait( QueueLock,
-										 [&](void)->bool{ return back()->From == SenderToWaitFor;});
+  if ( SenderToWaitFor == Address::Null() )
+    NewMessage.wait( QueueLock,
+                     [&](void)->bool{ return size() > IngressQueueSize; } );
+  else
+    NewMessage.wait( QueueLock,
+                     [&](void)->bool{ return back()->From == SenderToWaitFor;});
 }
 
 // Waiting for the the queue to drain is potentially the only wait that could
@@ -426,10 +425,10 @@ void Theron::Actor::MessageQueue::WaitForNextMessage(
 
 void Theron::Actor::MessageQueue::WaitUntilEmpty( void )
 {
-	std::unique_lock< std::mutex > QueueLock( QueueGuard );
+  std::unique_lock< std::mutex > QueueLock( QueueGuard );
 
-	// Since the condition is tested before the wait triggers, it is safe to call
-	// the wait directly even if the queue should already be empty.
+  // Since the condition is tested before the wait triggers, it is safe to call
+  // the wait directly even if the queue should already be empty.
 
   MessageDone.wait( QueueLock, [&](void)->bool{ return empty(); } );
 }
@@ -456,153 +455,153 @@ void Theron::Actor::MessageQueue::WaitUntilEmpty( void )
 
 void Theron::Actor::DispatchMessages( void )
 {
-	// Messages are continuously dispatched as long as there are more messages
-	// and the actor is running. Note that the order of these tests is important
-	// when the actor terminates because the destructor will first wait for the
-	// queue to drain, and then set the running flag to false before submitting
-	// an empty message that will stop the wait on a message, but cause the while
-	// loop to terminate because the actor is no longer running and thereby avoid
-	// processing the empty message.
+  // Messages are continuously dispatched as long as there are more messages
+  // and the actor is running. Note that the order of these tests is important
+  // when the actor terminates because the destructor will first wait for the
+  // queue to drain, and then set the running flag to false before submitting
+  // an empty message that will stop the wait on a message, but cause the while
+  // loop to terminate because the actor is no longer running and thereby avoid
+  // processing the empty message.
 
-	while ( Mailbox.HasMessage( MessageQueue::QueueEmpty::Wait ) && ActorRunning )
+  while ( Mailbox.HasMessage( MessageQueue::QueueEmpty::Wait ) && ActorRunning )
   {
-	  // There is an iterator to the current handler, and a flag indicating that
-		// the message has been served by at least one handler.
+    // There is an iterator to the current handler, and a flag indicating that
+    // the message has been served by at least one handler.
 
-		auto CurrentHandler = MessageHandlers.begin();
-		bool MessageServed  = false;
+    auto CurrentHandler = MessageHandlers.begin();
+    bool MessageServed  = false;
 
-		// It is an overhead to call Mailbox front for each handler as the first
-		// message in the queue can be cached
+    // It is an overhead to call Mailbox front for each handler as the first
+    // message in the queue can be cached
 
-		auto TheMessage = Mailbox.front();
+    auto TheMessage = Mailbox.front();
 
-		// ...and then loop over all handlers to allow them to manage the message
-		// if they are able to.
+    // ...and then loop over all handlers to allow them to manage the message
+    // if they are able to.
 
-		while ( CurrentHandler != MessageHandlers.end() )
-		{
-			// There is a minor problem related to the handler call since invoking the
-			// message handler may create or destroy handlers. A mutex cannot help
-			// since the handler is executing in this thread, and since it runs on
-			// the same stack all operations implicitly made by the handler
-			// on the handler list will have terminated when control is returned to
-			// this method. Insertions are not problematic since they will appear at
-			// the end of the list, and will just be included in the continued
-			// iterations here. Deletions are similarly not problematic unless the
-			// handler de-register itself.
-			//
-			// In this case it does not help having an iterator to the next element
-			// as there is also no guarantee that that also that pointer will not be
-			// deleted. The only safe way is to ensure that the handler object for
-			// the current handler is not deleted. A copy of the current handler is
-			// therefore made, and its status is set to executing.
+    while ( CurrentHandler != MessageHandlers.end() )
+    {
+      // There is a minor problem related to the handler call since invoking the
+      // message handler may create or destroy handlers. A mutex cannot help
+      // since the handler is executing in this thread, and since it runs on
+      // the same stack all operations implicitly made by the handler
+      // on the handler list will have terminated when control is returned to
+      // this method. Insertions are not problematic since they will appear at
+      // the end of the list, and will just be included in the continued
+      // iterations here. Deletions are similarly not problematic unless the
+      // handler de-register itself.
+      //
+      // In this case it does not help having an iterator to the next element
+      // as there is also no guarantee that that also that pointer will not be
+      // deleted. The only safe way is to ensure that the handler object for
+      // the current handler is not deleted. A copy of the current handler is
+      // therefore made, and its status is set to executing.
 
-			auto ExecutingHandler = CurrentHandler;
-			(*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
+      auto ExecutingHandler = CurrentHandler;
+      (*ExecutingHandler)->SetStatus( GenericHandler::State::Executing );
 
-			// Then the handler can process the message, and if this results in the
-			// handler de-registering this handler, it will return with the deleted
-			// state.
+      // Then the handler can process the message, and if this results in the
+      // handler de-registering this handler, it will return with the deleted
+      // state.
 
-			if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
-		  {
-				MessageServed = true;
+      if( (*CurrentHandler)->ProcessMessage( TheMessage ) )
+      {
+        MessageServed = true;
 
-				// One learn over time which messages that are most frequently used,
-				// and move the forwarding functions for these messages forward in
-				// the handler structure. There are several known strategies known
-				// from the literature. The most famous one is to move the created
-				// message to the front of the list. However, this runs the risk that
-				// if the list is in an organised state, a simple access to one of
-				// the infrequently sent messages will will destroy the organisation
-				// and it will take many messages before the list is again organised.
+        // One learn over time which messages that are most frequently used,
+        // and move the forwarding functions for these messages forward in
+        // the handler structure. There are several known strategies known
+        // from the literature. The most famous one is to move the created
+        // message to the front of the list. However, this runs the risk that
+        // if the list is in an organised state, a simple access to one of
+        // the infrequently sent messages will will destroy the organisation
+        // and it will take many messages before the list is again organised.
 
-				// Alternatively, the received message can be moved k elements forward
-				// in the list. A compromise between these two is to move the element
-				// to position k+1 if it it is in the end part of the list (move
-				// almost to front), and the transpose the element with the element
-				// in front if it is in the 2..k positions of the list. This
-				// heuristic is known as the POS(k) rule. Two different strategies
-				// are suggested in Oommen et al. (1990): "Deterministic optimal and
-				// expedient move-to-rear list organizing strategies", Theoretical
-				// Computer Science, Vol. 74, No. 2, pp. 183-197. Their first and
-				// optimal strategy implies keeping a counter for each element, and
-				// then move the accessed element to the rear of the list once it has
-				// been accessed T times. Their expedient strategy implies moving the
-				// element to the rear of the list when it has been accessed T
-				// consecutive times. The implementation cost of the first rule would
-				// be similar to keeping a map sorted on the number of times each
-				// message has arrived - and this map will obviously be exact. Waiting
-				// for T consecutive accesses for an element may again be too slow.
+        // Alternatively, the received message can be moved k elements forward
+        // in the list. A compromise between these two is to move the element
+        // to position k+1 if it it is in the end part of the list (move
+        // almost to front), and the transpose the element with the element
+        // in front if it is in the 2..k positions of the list. This
+        // heuristic is known as the POS(k) rule. Two different strategies
+        // are suggested in Oommen et al. (1990): "Deterministic optimal and
+        // expedient move-to-rear list organizing strategies", Theoretical
+        // Computer Science, Vol. 74, No. 2, pp. 183-197. Their first and
+        // optimal strategy implies keeping a counter for each element, and
+        // then move the accessed element to the rear of the list once it has
+        // been accessed T times. Their expedient strategy implies moving the
+        // element to the rear of the list when it has been accessed T
+        // consecutive times. The implementation cost of the first rule would
+        // be similar to keeping a map sorted on the number of times each
+        // message has arrived - and this map will obviously be exact. Waiting
+        // for T consecutive accesses for an element may again be too slow.
 
-				// The transposition rule suggested by Ronald Rivest (1976): "On
-				// self-organizing sequential search heuristics", Communications of
-				// the ACM, Vol. 19, No. 2, pp. 63-67 is much more efficient. Here a
-				// successfully constructed message will be swapped with the element
-				// immediately in front unless the element is already at the start of
-				// the list. It is necessary to use a separate swap iterator to ensure
-				// that the current handler iterator points to the next handler not
-				// affected by the swap operation.
+        // The transposition rule suggested by Ronald Rivest (1976): "On
+        // self-organizing sequential search heuristics", Communications of
+        // the ACM, Vol. 19, No. 2, pp. 63-67 is much more efficient. Here a
+        // successfully constructed message will be swapped with the element
+        // immediately in front unless the element is already at the start of
+        // the list. It is necessary to use a separate swap iterator to ensure
+        // that the current handler iterator points to the next handler not
+        // affected by the swap operation.
 
-				auto SuccessfulHandler = CurrentHandler++;
+        auto SuccessfulHandler = CurrentHandler++;
 
-				if( SuccessfulHandler != MessageHandlers.begin() )
-					std::iter_swap( SuccessfulHandler, std::prev( SuccessfulHandler ) );
-			}
-			else
-				++CurrentHandler; // necessary because of the transposition rule
+        if( SuccessfulHandler != MessageHandlers.begin() )
+          std::iter_swap( SuccessfulHandler, std::prev( SuccessfulHandler ) );
+      }
+      else
+        ++CurrentHandler; // necessary because of the transposition rule
 
-			// The Current Handler is now safely set to a handler that is valid for
-			// the next execution, and the handler just executed can be deleted, or
-			// its state can be switched back to normal.
+      // The Current Handler is now safely set to a handler that is valid for
+      // the next execution, and the handler just executed can be deleted, or
+      // its state can be switched back to normal.
 
-			if ( (*ExecutingHandler)->GetStatus() == GenericHandler::State::Deleted )
-				MessageHandlers.erase( ExecutingHandler );
-			else
-				(*ExecutingHandler)->SetStatus( GenericHandler::State::Normal );
-		}
+      if ( (*ExecutingHandler)->GetStatus() == GenericHandler::State::Deleted )
+        MessageHandlers.erase( ExecutingHandler );
+      else
+        (*ExecutingHandler)->SetStatus( GenericHandler::State::Normal );
+    }
 
-		// If the message is not served at this point, it should be delivered to
-		// the fall back handler. If that handler does not exist it should either
-		// be ignored or an error message will be thrown.
+    // If the message is not served at this point, it should be delivered to
+    // the fall back handler. If that handler does not exist it should either
+    // be ignored or an error message will be thrown.
 
-		if ( ! MessageServed )
-		{
-			if ( DefaultHandler )
-				DefaultHandler->ProcessMessage( TheMessage );
-			else if ( MessageErrorPolicy == MessageError::Throw )
-		  {
-				std::ostringstream ErrorMessage;
-				auto RawMessagePointer = *(Mailbox.front());
+    if ( ! MessageServed )
+    {
+      if ( DefaultHandler )
+        DefaultHandler->ProcessMessage( TheMessage );
+      else if ( MessageErrorPolicy == MessageError::Throw )
+      {
+        std::ostringstream ErrorMessage;
+        auto RawMessagePointer = *(Mailbox.front());
 
-				ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-										 << "No message handler for the message "
-										 << typeid( RawMessagePointer ).name()
-										 << " from " << RawMessagePointer.From.AsString()
-										 << " to " << RawMessagePointer.To.AsString()
-										 << " and no default message handler!";
+        ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+                     << "No message handler for the message "
+                     << typeid( RawMessagePointer ).name()
+                     << " from " << RawMessagePointer.From.AsString()
+                     << " to " << RawMessagePointer.To.AsString()
+                     << " and no default message handler!";
 
-			  throw std::logic_error( ErrorMessage.str() );
-			}
-		}
+        throw std::logic_error( ErrorMessage.str() );
+      }
+    }
 
-		// The message is fully handled, and it can be popped from the queue and
-		// thereby prepare the queue for processing the next message.
+    // The message is fully handled, and it can be popped from the queue and
+    // thereby prepare the queue for processing the next message.
 
-		Mailbox.DeleteFirstMessage();
+    Mailbox.DeleteFirstMessage();
 
-		// The callback that a new message has arrived and is processed is given
-		// in case derived classes need this information.
+    // The callback that a new message has arrived and is processed is given
+    // in case derived classes need this information.
 
-		MessageProcessed();
+    MessageProcessed();
 
-		// Finally, the thread yields before processing the next message to allow
-		// other threads and actors to progress in parallel.
+    // Finally, the thread yields before processing the next message to allow
+    // other threads and actors to progress in parallel.
 
-		std::this_thread::yield();
+    std::this_thread::yield();
 
-	}     // While Actor is running
+  }     // While Actor is running
 }				// Dispatch function
 
 
@@ -620,18 +619,18 @@ void Theron::Actor::MessageProcessed( void )
 
 void Theron::Actor::DrainMailbox( void )
 {
-	if ( std::this_thread::get_id() != Postman.get_id() )
-		Mailbox.WaitUntilEmpty();
-	else
-	{
-		std::ostringstream ErrorMessage;
+  if ( std::this_thread::get_id() != Postman.get_id() )
+    Mailbox.WaitUntilEmpty();
+  else
+  {
+    std::ostringstream ErrorMessage;
 
-		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-								 << "Actor " << ActorID.AsString()
-								 << "Cannot wait for message DRAIN within the same actor!";
+    ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
+                 << "Actor " << ActorID.AsString()
+                 << "Cannot wait for message DRAIN within the same actor!";
 
-		throw std::logic_error( ErrorMessage.str() );
-	}
+    throw std::logic_error( ErrorMessage.str() );
+  }
 }
 
 // The identification's function to wait for global termination will start
@@ -644,20 +643,20 @@ void Theron::Actor::DrainMailbox( void )
 
 void Theron::Actor::Identification::WaitForGlobalTermination( void )
 {
-	auto ActorReference = ActorsByID.begin();
+  auto ActorReference = ActorsByID.begin();
 
-	while ( ActorReference != ActorsByID.end() )
+  while ( ActorReference != ActorsByID.end() )
   {
-		Actor * TheActor = ActorReference->second->ActorPointer;
+    Actor * TheActor = ActorReference->second->ActorPointer;
 
-		if ( ( TheActor != nullptr ) && ( TheActor->GetNumQueuedMessages() > 0 ) )
-		{
-			TheActor->DrainMailbox();
-			ActorReference = ActorsByID.begin();
-		}
-		else
-			++ActorReference;
-	}
+    if ( ( TheActor != nullptr ) && ( TheActor->GetNumQueuedMessages() > 0 ) )
+    {
+      TheActor->DrainMailbox();
+      ActorReference = ActorsByID.begin();
+    }
+    else
+      ++ActorReference;
+  }
 }
 
 /*=============================================================================
@@ -672,41 +671,41 @@ Theron::Actor::Actor( const std::string & ActorName )
 : ActorID( Identification::Create( ActorName, this ) ),
   Mailbox(), MessageHandlers(), DefaultHandler(), Postman()
 {
-	// The flag indicating if the actor is running is set to true, and currently
-	// there is no message available.
+  // The flag indicating if the actor is running is set to true, and currently
+  // there is no message available.
 
-	ActorRunning = true;
+  ActorRunning = true;
 
-	// The default error handling policy is to throw on unhanded messages
+  // The default error handling policy is to throw on unhanded messages
 
-	MessageErrorPolicy = MessageError::Throw;
+  MessageErrorPolicy = MessageError::Throw;
 
-	// Then the thread can be started. It will wait until it is signalled from
-	// the Enqueue message function.
+  // Then the thread can be started. It will wait until it is signalled from
+  // the Enqueue message function.
 
-	Postman = std::thread( &Actor::DispatchMessages, this );
+  Postman = std::thread( &Actor::DispatchMessages, this );
 
-	// The postman thread should be named with the name of the actor to
-	// facilitate debugging. However, there is no standard way of doing this and
-	// the GNU extensions are used if they are available. Note that the name
-	// must be shorter than 16 characters. The default Actor naming convention
-	// will be used if this condition cannot be met by the given actor name.
-	// Some ideas for how to implement the same for Windows can be found at
-	// https://stackoverflow.com/questions/10121560/stdthread-naming-your-thread
+  // The postman thread should be named with the name of the actor to
+  // facilitate debugging. However, there is no standard way of doing this and
+  // the GNU extensions are used if they are available. Note that the name
+  // must be shorter than 16 characters. The default Actor naming convention
+  // will be used if this condition cannot be met by the given actor name.
+  // Some ideas for how to implement the same for Windows can be found at
+  // https://stackoverflow.com/questions/10121560/stdthread-naming-your-thread
 
-	#ifdef _GNU_SOURCE
-		if ( ActorID.AsString().size() < 16 )
-			pthread_setname_np( Postman.native_handle(),
-													ActorID.AsString().data() );
-		else
-		{
-			std::ostringstream ThreadName;
+  #ifdef _GNU_SOURCE
+    if ( ActorID.AsString().size() < 16 )
+      pthread_setname_np( Postman.native_handle(),
+                          ActorID.AsString().data() );
+    else
+    {
+      std::ostringstream ThreadName;
 
-			ThreadName << "Actor" << ActorID.AsInteger();
+      ThreadName << "Actor" << ActorID.AsInteger();
 
-			pthread_setname_np( Postman.native_handle(), ThreadName.str().data() );
-		}
-	#endif
+      pthread_setname_np( Postman.native_handle(), ThreadName.str().data() );
+    }
+  #endif
 }
 
 // The destructor wait for the mailbox to be drained and then set the flag
@@ -715,30 +714,30 @@ Theron::Actor::Actor( const std::string & ActorName )
 
 Theron::Actor::~Actor()
 {
-	// First the postmaster is told to close. This is done by first waiting for
-	// it to drain the current message queue so that already received messages
-	// can be properly processed.
+  // First the postmaster is told to close. This is done by first waiting for
+  // it to drain the current message queue so that already received messages
+  // can be properly processed.
 
-	Mailbox.WaitUntilEmpty();
+  Mailbox.WaitUntilEmpty();
 
-	// Then the flag is set to ensure that the Postman will stop and not process
-	// any messages arriving after this.
+  // Then the flag is set to ensure that the Postman will stop and not process
+  // any messages arriving after this.
 
-	ActorRunning = false;
+  ActorRunning = false;
 
-	// Other actors should no longer be able to route messages to this actor
-	// and the actor pointer in the Identification object should be cleared.
+  // Other actors should no longer be able to route messages to this actor
+  // and the actor pointer in the Identification object should be cleared.
 
-	Identification::ClearActor( ActorID );
+  Identification::ClearActor( ActorID );
 
-	// To force a stop, an empty message is queued in the case the Postman has
-	// gone into a wait for the next message. This should wake it up and make it
-	// check the actor running flag.
+  // To force a stop, an empty message is queued in the case the Postman has
+  // gone into a wait for the next message. This should wake it up and make it
+  // check the actor running flag.
 
-	Mailbox.StoreMessage( std::make_shared< GenericMessage >() );
+  Mailbox.StoreMessage( std::make_shared< GenericMessage >() );
 
-	// Then it is just to wait for the Postman to finish off
+  // Then it is just to wait for the Postman to finish off
 
-	if ( Postman.joinable() )
-		Postman.join();
+  if ( Postman.joinable() )
+    Postman.join();
 }

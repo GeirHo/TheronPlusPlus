@@ -149,7 +149,7 @@ private:
   // only this can access this definition. However since the session layer is
   // a template class, the friend declaration must also be a template.
 
-  template< class ExternalMessage >
+  template< ValidLinkMessage ExternalMessage > 
   friend class SessionLayer;
 
   // --------------------------------------------------------------------------
@@ -192,10 +192,13 @@ protected:
       // Layer to this Presentation Layer as this implies an incoming message
       // to an actor on this endpoint that should be of type Remote Message.
       // The real sending actor the real destination actor are encoded in the
-      // remote message.
+      // remote message.To check this, the message is first converted to type
+      // specific actor system message instantiated on the remote message as 
+      // payload (see Actor.hpp line 790) since this is derived from the 
+      // received generic message.
 
-      auto InboundMessage =
-           std::dynamic_pointer_cast< Message< RemoteMessage > >( TheMessage );
+      auto InboundMessage = 
+      std::dynamic_pointer_cast< Actor::Message< RemoteMessage > >(TheMessage);
 
       // If the message conversion was successful, then this can be forwarded
       // to the local destination actor as if it was sent from the remote
@@ -203,9 +206,9 @@ protected:
       // to this presentation layer actor.
 
       if ( InboundMessage )
-        Send( InboundMessage->TheMessage->GetPayload(),
-              InboundMessage->TheMessage->GetSender(),
-              InboundMessage->TheMessage->GetReceiver() );
+        Send( InboundMessage->TheMessage->MessagePayload,
+              InboundMessage->TheMessage->From, 
+              InboundMessage->TheMessage->To );
       else
         Actor::EnqueueMessage( TheMessage );
     }

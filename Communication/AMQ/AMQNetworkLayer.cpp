@@ -13,6 +13,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <source_location>    // For error messages showing code location
 #include <stdexcept>          // For standard exceptions
 #include <cerrno>             // Standard error codes
+#include <unordered_map>      // Attribute-value objects
 
 // The Theron++ headers
 
@@ -27,6 +28,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <proton/delivery.hpp>
 #include <proton/sender_options.hpp>
 #include <proton/map.hpp>
+#include <proton/codec/unordered_map.hpp>
 
 namespace Theron::AMQ
 {
@@ -152,11 +154,11 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             // any local Actor would like to send messages to this remote Actor
             // in the future
             
-            proton::map< std::string, std::string > ActorAddresses;
+            std::unordered_map< std::string, std::string > ActorAddresses;
             proton::get( TheMessage.body(), ActorAddresses );
           
-            Send( ResolutionResponse( ActorAddresses.get("RequestedActor"), 
-                                      ActorAddresses.get("RequestingActor") ), 
+            Send( ResolutionResponse( ActorAddresses.at("RequestedActor"), 
+                                      ActorAddresses.at("RequestingActor") ), 
                   Network::GetAddress( Network::Layer::Session ) );
           }
           break;
@@ -169,11 +171,11 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             // not on this node, the message is just ignored by the Session 
             // Layer and no response will be generated.
             
-            proton::map< std::string, std::string > ActorAddresses;
+            std::unordered_map< std::string, std::string > ActorAddresses;
             proton::get( TheMessage.body(), ActorAddresses );
 
-            Send( ResolutionRequest( ActorAddresses.get("RequestedActor"), 
-                                     ActorAddresses.get("RequestingActor") ), 
+            Send( ResolutionRequest( ActorAddresses.at("RequestedActor"), 
+                                     ActorAddresses.at("RequestingActor") ), 
                   Network::GetAddress( Network::Layer::Session ) ); 
           }
           break;
@@ -321,7 +323,7 @@ void NetworkLayer::ResolveAddress(
   }
   else
   {
-    proton::map< std::string, std::string > ActorAddresses{
+    std::unordered_map< std::string, std::string > ActorAddresses{
       { "RequestedActor", TheRequest.RequestedActor.AsString()    },
       { "RequestingActor", TheRequest.RequestingActor.AsString() }
     };
@@ -353,7 +355,7 @@ void NetworkLayer::ResolvedAddress(
   const ResolutionResponse & TheResponse,
 	const Address TheSessionLayer )
 {
-  proton::map< std::string, std::string > ActorAddresses{
+  std::unordered_map< std::string, std::string > ActorAddresses{
     { "RequestedActor", TheResponse.RequestedActor.AsString()  },
     { "RequestingActor", TheResponse.RequestingActor.AsString() }
   };
@@ -370,7 +372,7 @@ void NetworkLayer::ResolvedAddress(
   
   ActionQueue.add(
     [=,this]()
-    { AMQBroker.open_receiver( ActorAddresses.get( "RequestedActor" ) ); }
+    { AMQBroker.open_receiver( ActorAddresses.at("RequestedActor") ); }
   );
   
   ActionQueue.add(
@@ -502,10 +504,10 @@ NetworkLayer::NetworkLayer(
   StandardFallbackHandler( EndpointName.AsString() ),
   Theron::NetworkLayer< AMQ::Message >( EndpointName.AsString() ),
   proton::messaging_handler(),
-  AMQEventLoop( EndpointName.AsString() ), AMQBroker(), 
+  AMQEventLoop( EndpointName.AsString() ), EventLoopExecuter(), AMQBroker(), 
   Connected( false ), Publishers(), Subscribers(), MessageCache(), ActionQueue(),
+  ConnectionOptions( GivenConnectionOptions ),  
   MessageProperties( GivenMessageOptions ),
-  ConnectionOptions( GivenConnectionOptions ),
   EndpointString( EndpointName.Endpoint() )
 {
   // First define the URL string for the connection and store it.

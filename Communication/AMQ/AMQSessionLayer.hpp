@@ -152,7 +152,7 @@ public:
   SessionLayer() = delete;
   SessionLayer( const SessionLayer & Other ) = delete;
 
-  virtual ~SessionLayer();
+  virtual ~SessionLayer( void );
 };
 
 }      // Name space Theron AMQ

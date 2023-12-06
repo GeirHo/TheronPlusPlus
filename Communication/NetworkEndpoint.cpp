@@ -12,28 +12,24 @@
 
 #include "Communication/NetworkEndpoint.hpp"
 
-namespace Theron
-{
-  const Network * Network::TheNetwork; 
+const Theron::Network * Theron::Network::TheNetwork = nullptr; 
 
-	Address Network::GetAddress( Layer Role )
-	{
-	  Address LayerAddress;
-	
-	  switch( Role )
-	  {
-	    case Layer::Network:
-	      LayerAddress = TheNetwork->NetworkLayerAddress();
-	      break;
-	    case Layer::Session:
-	      LayerAddress = TheNetwork->SessionLayerAddress();
-	      break;
-	    case Layer::Presentation:
-	     LayerAddress = TheNetwork->PresentationLayerAddress();
-	     break;
-    }
-	
-	  return LayerAddress;
+Theron::Address Theron::Network::GetAddress( Theron::Network::Layer Role )
+{
+  Theron::Address LayerAddress;
+
+  switch( Role )
+  {
+    case Theron::Network::Layer::Network:
+      LayerAddress = TheNetwork->NetworkLayerAddress();
+      break;
+    case Theron::Network::Layer::Session:
+      LayerAddress = TheNetwork->SessionLayerAddress();
+      break;
+    case Theron::Network::Layer::Presentation:
+      LayerAddress = TheNetwork->PresentationLayerAddress();
+      break;
   }
 
+  return LayerAddress;
 }

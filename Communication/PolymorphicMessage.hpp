@@ -65,7 +65,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <type_traits>               // Compile time message checking
 #include <string>                    // Standard strings
 #include <source_location>	         // For error reporting
-#include <strstream> 				         // Formatted errors 
+#include <sstream> 				           // Formatted errors 
 
 #include <boost/core/demangle.hpp>
 

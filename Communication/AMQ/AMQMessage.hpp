@@ -91,7 +91,7 @@ public:
                            StringAddress.substr( StringAddress.find('@')+1 ) )
   {}
 
-  GlobalAddress( void ) = delete;
+  GlobalAddress( void ) = default;
   virtual ~GlobalAddress( void )
   {};
 };
@@ -142,5 +142,43 @@ public:
 };
 
 } // End name space Theron++ AMQ
+
+/*==============================================================================
+
+  Hashing global addresses
+
+==============================================================================*/
+//
+// This global address will be used in unordered maps that are based on the hash
+// functions for the string representation of the address. These hash functions
+// must belong to the std name space for the standard maps, and to the boost
+// name space for the bi-map used by the session layer. 
+
+// Specialisation for the standard map hash function
+
+namespace std {
+  template<>
+  class hash< Theron::AMQ::GlobalAddress >
+  {
+  public:
+
+    size_t operator() ( const Theron::AMQ::GlobalAddress & TheID ) const
+    { return std::hash< std::string >()( TheID.AsString() ); }
+  };
+} // end name space std
+
+// Specialisation for the boost bi-maps
+
+namespace boost {
+  template<>
+  class hash< Theron::AMQ::GlobalAddress >
+  {
+  public:
+
+    size_t operator() ( const Theron::AMQ::GlobalAddress & TheID ) const
+    { return std::hash< std::string >()( TheID.AsString() ); }
+  };
+} // end name space boost
+
 #endif // THERON_AMQ_MESSAGES
 

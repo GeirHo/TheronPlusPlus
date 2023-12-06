@@ -404,7 +404,7 @@ protected:
                      
 public:
   
-	virtual ~NetworkLayer( void );
+	virtual ~NetworkLayer();
 };
 
 }       // End name space AMQ

@@ -18,6 +18,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <source_location>  // Making informative error messages
 #include <sstream>          // Stream based strings
 #include <stdexcept>        // standard exceptions
+#include <unordered_map>    // For JSON attribute-value objects
 
 // AMQ Proton headers
 
@@ -67,7 +68,7 @@ proton::value JSONMessage::Json2AMQValue( const JSON & TheValue ) const
     case JSON::value_t::number_unsigned:
       return static_cast< uint64_t >( TheValue );
     case JSON::value_t::number_float:
-          return static_cast< double >( TheValue );
+      return static_cast< double >( TheValue );
     case JSON::value_t::binary:
       // The binary type is stored internally as a standerd vector 
       // of unsigned int 8 bits long. It is stored as a binary AMQ 
@@ -84,15 +85,20 @@ proton::value JSONMessage::Json2AMQValue( const JSON & TheValue ) const
     }    
     case JSON::value_t::object:
     {
-      proton::map< std::string, proton::value > AMQValue;
+      std::unordered_map< std::string, proton::value > AMQValue;
 
       for( const auto & TheJSONValue : TheValue.items() )
-        AMQValue.put( TheJSONValue.key(), 
-                      Json2AMQValue( TheJSONValue.value() ) );
+        AMQValue.emplace( TheJSONValue.key(), 
+                          Json2AMQValue( TheJSONValue.value() ) );
 
       return AMQValue;
     }    
   }
+
+  // A dummy return to avoid the compiler error for a function not retruning 
+  // a value. This point should never be reached.
+
+  return proton::value();
 }
 
 // ----------------------------------------------------------------------------
@@ -130,9 +136,14 @@ JSON JSONMessage::AMQValue2Json( const proton::value & TheValue ) const
       return TheConvertedArray;
     }
     case proton::type_id::BINARY:
-      break; // To be done
+      return static_cast< std::string >( 
+             proton::get< proton::binary >( TheValue ) );
+    case proton::type_id::BOOLEAN:
+      return proton::get< bool >( TheValue );
     case proton::type_id::BYTE:
       return proton::get< int8_t  >( TheValue );
+    case proton::type_id::CHAR:
+      return proton::get< wchar_t >( TheValue );
     case proton::type_id::DECIMAL128:
     case proton::type_id::DECIMAL32:
     case proton::type_id::DECIMAL64:
@@ -159,6 +170,8 @@ JSON JSONMessage::AMQValue2Json( const proton::value & TheValue ) const
       return proton::get< double >( TheValue );
     case proton::type_id::FLOAT:
       return proton::get< float >( TheValue );
+    case proton::type_id::INT:
+      return proton::get< int32_t >( TheValue );
     case proton::type_id::LONG:
       return proton::get< int64_t >( TheValue );
     case proton::type_id::MAP:
@@ -205,6 +218,12 @@ JSON JSONMessage::AMQValue2Json( const proton::value & TheValue ) const
       // function to retrun it into a string JSON type
       return proton::get< proton::uuid >( TheValue ).str();
   }
+
+  // Returning a dummy response as this point should never be reached but it 
+  // avoids a cmpiler warning that the function is not returning as the return
+  // depends on the switch cases above.
+
+  return JSON();
 }
 
 /*=============================================================================
@@ -246,13 +265,19 @@ bool JSONMessage::Initialize( const ProtocolPayload & ThePayload ) noexcept
     proton::value TheContent = ThePayload->body();
 
     if( TheContent.type() == proton::type_id::STRING )
-      parse( proton::get< std::string >( TheContent ) );
+      this->JSON::operator=( 
+            parse( proton::get< std::string >( TheContent ) ) );
     else
       this->JSON::operator=( AMQValue2Json( TheContent ) );
+
+    return true;
   }
   else 
     return false;
 }
+
+Address JSONMessage::PresentationLayerAddress( void ) const
+{ return Theron::Network::GetAddress( Theron::Network::Layer::Presentation ); }
 
 
 } // End namespace

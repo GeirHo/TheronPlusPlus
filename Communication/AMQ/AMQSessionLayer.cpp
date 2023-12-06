@@ -52,21 +52,23 @@ void SessionLayer::ManageTopics( const TopicSubscription & TheMessage,
           TopicSubscribers[ TheMessage.TheTopic ].insert( PubSubActor );
       else
       {
-        TopicSubscribers.emplace( TheMessage.TheTopic, PubSubActor );
+        TopicSubscribers[ TheMessage.TheTopic ].insert( PubSubActor );
         Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
       }
       break;
     case TopicSubscription::Action::CloseSubscription:
-      auto Subscribers = TopicSubscribers.find( TheMessage.TheTopic );
-
-      if( Subscribers != TopicSubscribers.end() )
       {
-        if ( Subscribers->second.size() > 1 )
-          Subscribers->second.erase( PubSubActor );
-        else
+        auto Subscribers = TopicSubscribers.find( TheMessage.TheTopic );
+
+        if( Subscribers != TopicSubscribers.end() )
         {
-          Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
-          TopicSubscribers.erase( Subscribers );
+          if ( Subscribers->second.size() > 1 )
+            Subscribers->second.erase( PubSubActor );
+          else
+          {
+            Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
+            TopicSubscribers.erase( Subscribers );
+          }
         }
       }
       break;
@@ -75,23 +77,26 @@ void SessionLayer::ManageTopics( const TopicSubscription & TheMessage,
         TopicPublishers[ TheMessage.TheTopic ].insert( PubSubActor );
       else
       {
-        TopicPublishers.emplace( TheMessage.TheTopic, PubSubActor );
+        TopicPublishers[ TheMessage.TheTopic ].insert( PubSubActor );
         Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
       }
       break;
     case TopicSubscription::Action::ClosePublisher:
-      auto Publishers = TopicPublishers.find( TheMessage.TheTopic );
-
-      if( Publishers != TopicPublishers.end() )
       {
-        if( Publishers->second.size() > 1 )
-          Publishers->second.erase( PubSubActor );
-        else
+        auto Publishers = TopicPublishers.find( TheMessage.TheTopic );
+
+        if( Publishers != TopicPublishers.end() )
         {
-          Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
-          TopicPublishers.erase( Publishers );
+          if( Publishers->second.size() > 1 )
+            Publishers->second.erase( PubSubActor );
+          else
+          {
+            Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
+            TopicPublishers.erase( Publishers );
+          }
         }
       }
+      break;
   };
 }
 
@@ -243,5 +248,8 @@ SessionLayer::SessionLayer( const std::string & TheEndPoint,
 {
   RegisterHandler( this, &SessionLayer::ManageTopics );
 }
+
+SessionLayer::~SessionLayer( void )
+{}
 
 } // End name space Theron AMQ
