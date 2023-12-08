@@ -188,6 +188,7 @@ public:
     NewPeerAdded( RangeType & AddressRange )
     : std::set< Address >( AddressRange )
     {}
+    #pragma message("C++23: Range inserters available! Rewrite SessionLayer.hpp!")
     #else
     template< class RangeType >
     requires std::ranges::input_range< RangeType > &&
