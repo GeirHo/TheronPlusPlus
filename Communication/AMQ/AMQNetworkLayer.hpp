@@ -185,6 +185,23 @@ private:
   const std::string EndpointString;
   
   // ---------------------------------------------------------------------------
+	// Support functions
+	// ---------------------------------------------------------------------------
+	//
+  // There are two types of AMQ targets for messages: Queues or topics. The 
+  // former is used for direct communication, and the second is used for many 
+  // to many. The AMQ Broker should be instructed to create new queues or topics
+  // if a sender or receiver is created for a label that does not already exist.
+  // However, the exact behaviour depends on the server configuration, and to 
+  // ensure that only topics will be used, explicit settings will be used when
+  // the sender or receiver is created. To avoid duplication of code, support
+  // functions are used. For more details, see
+  // https://access.redhat.com/documentation/en-us/red_hat_amq_clients/2.11/html/using_the_amq_cpp_client/senders_and_receivers
+
+  void CreateSender  ( const TopicName & TheTarget );
+  void CreateReceiver( const TopicName & TheTarget );
+
+  // ---------------------------------------------------------------------------
 	// Communication event handlers
 	// ---------------------------------------------------------------------------
 	//

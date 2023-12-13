@@ -14,6 +14,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <stdexcept>          // For standard exceptions
 #include <cerrno>             // Standard error codes
 #include <unordered_map>      // Attribute-value objects
+#include <vector>             // For passing sequence of parameters
 
 // The Theron++ headers
 
@@ -27,11 +28,52 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <proton/target.hpp>
 #include <proton/delivery.hpp>
 #include <proton/sender_options.hpp>
+#include <proton/target_options.hpp>
+#include <proton/receiver_options.hpp>
+#include <proton/source_options.hpp>
 #include <proton/map.hpp>
 #include <proton/codec/unordered_map.hpp>
 
 namespace Theron::AMQ
 {
+
+/*==============================================================================
+
+ Support functions
+
+==============================================================================*/
+//
+// The support functions are used to create the senders and receivers for given
+// topic names since the process involves setting the options for the senders
+// and receivers to ensure that topics are created if the given target topic 
+// does not exist already on the message broker.
+
+void NetworkLayer::CreateSender(const TopicName & TheTarget)
+{
+  proton::sender_options LinkParameters;
+  proton::target_options TopicParameters;
+    
+  TopicParameters.capabilities( std::vector< proton::symbol >{ "topic" } );
+  TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
+  LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
+  LinkParameters.target( TopicParameters );
+    
+  AMQBroker.open_sender( TheTarget, LinkParameters );
+}
+
+void NetworkLayer::CreateReceiver(const TopicName & TheTarget)
+{
+  proton::receiver_options LinkParameters;
+  proton::source_options   TopicParameters;
+
+  TopicParameters.capabilities( std::vector< proton::symbol >{ "topic" } );
+  TopicParameters.distribution_mode( proton::source::distribution_mode::COPY );
+  TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
+  LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
+  LinkParameters.source( TopicParameters );
+  
+  AMQBroker.open_receiver( TheTarget, LinkParameters );
+}
 
 /*==============================================================================
 
@@ -57,8 +99,8 @@ void NetworkLayer::on_connection_open( proton::connection & TheBroker )
   AMQBroker = TheBroker;
   Connected = true;
   
-  AMQBroker.open_receiver( DiscoveryTopic ); 
-  AMQBroker.open_sender  ( DiscoveryTopic ); 
+  CreateReceiver( DiscoveryTopic ); 
+  CreateSender  ( DiscoveryTopic ); 
 }
 
 // When a new sender has been connected to the right topic on the AMQ broker
@@ -94,13 +136,16 @@ void NetworkLayer::on_sendable( proton::sender & ThePublisher )
   
   auto [First, Last] = MessageCache.equal_range( TheName );
   
-  for ( auto & [_, MessagePtr] : std::ranges::subrange( First, Last ) )
-    ActionQueue.add( [=, this](){ Publishers[ TheName ].send( *MessagePtr ); } );
-  
-  // Since the messages was copied by the action functions, they can be removed
-  // from the cache
-  
-  MessageCache.erase( First, Last );
+  if( First != MessageCache.end() )
+  {
+    for ( auto & [_, MessagePtr] : std::ranges::subrange( First, Last ) )
+      ThePublisher.send( *MessagePtr ); 
+    
+    // Since the messages was copied by the action functions, they can be
+    // removed from the cache
+    
+    MessageCache.erase( First, Last );
+  }
 }
 
 // When a deferred action creates the receiver, and the receiver has success-
@@ -302,9 +347,7 @@ NetworkLayer::Protocol::String( NetworkLayer::Protocol::Action TheCommand)
 }
 
 // The resolution request is sent from the Session Layer if an actor address 
-// does not have a known global address. If the actor is on this endpoint, 
-// the resolution is easy: It is just to add the local endpoint string to 
-// the actor's local identifier. If the actor is not local, a request should 
+// does not have a known global address. This means that a request should 
 // be sent on the discovery  topic to remote endpoints and that the remote 
 // endpoint will respond with the full Actor address. This will generate a 
 // message with the actor name as the  payload string, and the resolve address 
@@ -314,31 +357,21 @@ void NetworkLayer::ResolveAddress(
   const ResolutionRequest & TheRequest,
 	const Address TheSessionLayer )
 {
-  if ( TheRequest.RequestedActor.IsLocalActor() )
-  {
-    GlobalAddress ActorAddress( TheRequest.RequestedActor.AsString(),
-                                EndpointString );
-    Send( ResolutionResponse( ActorAddress, ActorAddress), 
-          Network::GetAddress( Network::Layer::Session ) );
-  }
-  else
-  {
-    std::unordered_map< std::string, std::string > ActorAddresses{
-      { "RequestedActor", TheRequest.RequestedActor.AsString()    },
-      { "RequestingActor", TheRequest.RequestingActor.AsString() }
-    };
-  
-    proton::message AMQRequest;  
-    AMQRequest.properties() = MessageProperties;
-    AMQRequest.to( DiscoveryTopic );
-    AMQRequest.reply_to( GetAddress().AsString() );
-    AMQRequest.subject( Protocol::String( Protocol::Action::ResolveAddress ) );
-    AMQRequest.body() = ActorAddresses;
-  
-    ActionQueue.add(
-      [=,this](){ Publishers[ DiscoveryTopic ].send( AMQRequest ); }
-    );
-  }
+  std::unordered_map< std::string, std::string > ActorAddresses{
+    { "RequestedActor", TheRequest.RequestedActor.AsString()    },
+    { "RequestingActor", TheRequest.RequestingActor.AsString() }
+  };
+
+  proton::message AMQRequest;  
+  AMQRequest.properties() = MessageProperties;
+  AMQRequest.to( DiscoveryTopic );
+  AMQRequest.reply_to( GetAddress().AsString() );
+  AMQRequest.subject( Protocol::String( Protocol::Action::ResolveAddress ) );
+  AMQRequest.body() = ActorAddresses;
+
+  ActionQueue.add(
+    [=,this](){ Publishers[ DiscoveryTopic ].send( AMQRequest ); }
+  );
 }
 
 // If the sought Actor is on this node, the Session Layer will respond with a 
@@ -372,7 +405,7 @@ void NetworkLayer::ResolvedAddress(
   
   ActionQueue.add(
     [=,this]()
-    { AMQBroker.open_receiver( ActorAddresses.at("RequestedActor") ); }
+    { CreateReceiver( ActorAddresses.at("RequestedActor") ); }
   );
   
   ActionQueue.add(
@@ -439,13 +472,10 @@ void NetworkLayer::OutboundMessage( const AMQ::Message & TheMessage,
     });
   else
   {
-    proton::sender_options LinkParameters;
-    
-    LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
     MessageCache.emplace( DestinationActor, RemoteMessage );
     
     ActionQueue.add( [=, this](){ 
-      AMQBroker.open_sender( DestinationActor, LinkParameters );
+      CreateSender( DestinationActor );
     });
   }
 }
@@ -463,12 +493,12 @@ void NetworkLayer::ManageTopics( const TopicSubscription & TheMessage,
   {
     case TopicSubscription::Action::Subscription:
       ActionQueue.add( [=,this](){
-        AMQBroker.open_receiver( TheMessage.TheTopic );
+        CreateReceiver( TheMessage.TheTopic );
       });
       break;
     case TopicSubscription::Action::Publisher:
       ActionQueue.add( [=, this](){ 
-        AMQBroker.open_sender( TheMessage.TheTopic ); 
+        CreateSender( TheMessage.TheTopic ); 
       });
       break;
     case TopicSubscription::Action::CloseSubscription:
@@ -505,7 +535,8 @@ NetworkLayer::NetworkLayer(
   Theron::NetworkLayer< AMQ::Message >( EndpointName.AsString() ),
   proton::messaging_handler(),
   AMQEventLoop( EndpointName.AsString() ), EventLoopExecuter(), AMQBroker(), 
-  Connected( false ), Publishers(), Subscribers(), MessageCache(), ActionQueue(),
+  Connected( false ), Publishers(), Subscribers(), MessageCache(), 
+  ActionQueue( AMQEventLoop ),
   ConnectionOptions( GivenConnectionOptions ),  
   MessageProperties( GivenMessageOptions ),
   EndpointString( EndpointName.Endpoint() )
@@ -547,6 +578,12 @@ NetworkLayer::NetworkLayer(
 void NetworkLayer::Stop( const Network::ShutDown & StopMessage,
 										     const Address Sender )
 {
+  // Mark the connection as closed
+
+  Connected = false;
+
+  // Send the closing message to all other endpoints
+
   proton::message ClosingMessage;
   
   ClosingMessage.properties() = MessageProperties;

@@ -505,12 +505,14 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   // Defining and parsing options
   // --------------------------------------------------------------------------
 
-  cxxopts::Options CLIOptions("Theron++ AMQ Distribution",
+  cxxopts::Options CLIOptions("./AMQDistribution",
     "Distributed Actors communicating using the AMQ message protocol");
 
   CLIOptions.add_options()
     ("R,responder", "Name of the remote Hello World responder", 
         cxxopts::value<std::string>()->default_value("") )
+    ("I,InteractionActorName", "Name of the hello world actor", 
+        cxxopts::value<std::string>()->default_value("HelloWorldActor"))
     ("B,broker", "The URL of the AMQ broker", 
         cxxopts::value<std::string>() )
     ("P,port", "TCP port on  AMQ Broker", 
@@ -581,6 +583,9 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   // The Hello World actor will be started with the responder Actor's address.
   // If this is not given, the address will be empty and the actor will act as
   // a responder waiting for the incoming Hello Word message.
+
+  std::string InteractionActorName 
+              = CLIValues["InteractionActorName"].as<std::string>();
 
   Theron::Address HelloWorldResponder;
 

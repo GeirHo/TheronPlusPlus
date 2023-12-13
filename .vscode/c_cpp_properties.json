@@ -30,9 +30,10 @@
                     "/home/GHo/Documents/Code/Theron++",
                     "/home/GHo/Documents/Code/CxxOpts/include",
                     "/home/GHo/Documents/Code/Theron++/Utility",
-                    "/home/GHo/Documents/Code/Theron++/Communication"
+                    "/home/GHo/Documents/Code/Theron++/Communication",
+                    "/home/GHo/Documents/Code/Theron++/Examples"
                 ],
-                "limitSymbolsToIncludedHeaders": true
+                "limitSymbolsToIncludedHeaders": false
             }
         }
     ],
