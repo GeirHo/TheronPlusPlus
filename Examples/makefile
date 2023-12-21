@@ -100,6 +100,15 @@ AMQDistribution: AMQDistribution.cpp $(THERON)/Theron++.a
 	-I/home/GHo/Documents/Code/CxxOpts/include $(LDFLAGS) -lqpid-proton-cpp
 
 #------------------------------------------------------------------------------
+# AMQ Message test
+#------------------------------------------------------------------------------
+#
+
+JsonTest: JsonTest.cpp $(THERON)/Theron++.a
+	$(CXX) JsonTest.cpp -o JsonTest $(CXXFLAGS) \
+	-I/home/GHo/Documents/Code/CxxOpts/include $(LDFLAGS) -lqpid-proton-cpp
+
+#------------------------------------------------------------------------------
 # Zero Message test
 #------------------------------------------------------------------------------
 #
