@@ -40,7 +40,7 @@ Theron is the best actor model library for C++ with an elegant C++ API; arguably
 
 ## Installation
 
-The code uses the `if constexpr` feature of C++17, and a compliant compiler is required.
+The code uses the `if constexpr` feature of C++23, and a compliant compiler is required. The library produced by the main make target 'Library' should be linked using the "gold" linker with g++. The standard linker fails to detect all symbols.
 
 The Theron++ framework is fully implemented in the Actor header and source file. The Presentation Layer header file is needed to compile the Actor source file, and the Serial Message header is needed by the Presentation Layer. There is no installation required, and these files can either be placed with the other source files of a project, or in a separate directory. 
 
