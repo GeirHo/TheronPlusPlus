@@ -190,9 +190,8 @@ private:
   // If no messages are registered or if the end of the message type map 
   // is reached with no successful construction, a runtime error is thrown.
 
-  void PolymorphicMessageHandler (
-       const PolymorphicMessage< ProtocolPayload > & Payload,
-       const Theron::Address Sender )
+  void PolymorphicMessageHandler ( const ProtocolPayload  & Payload,
+                                   const Theron::Address Sender )
   {
     if ( MessageTypes.empty() )
     {
@@ -213,11 +212,9 @@ private:
       // If the payload does not correspond to any of the available messages,
       // an exception will be thrown as this situation should not occur.
 
-      ProtocolPayload ThePayload( Payload.GetPayload() );
-
       if( std::ranges::count_if( std::ranges::views::values( MessageTypes ), 
               [&]( auto & InitialiserFunction)->bool{ 
-              return InitialiserFunction( ThePayload, Sender ); })
+              return InitialiserFunction( Payload, Sender ); })
           == 0 )
       {
         std::ostringstream ErrorMessage;
@@ -227,7 +224,7 @@ private:
                     << Location.line()<< " : " << "Actor " 
                     << GetAddress().AsString() << "in handler " 
                     << Location.function_name() << " received "
-                    << " a polymorphic message from " << Sender.AsString()
+                    << " a message from " << Sender.AsString()
                     << " which did not initialize any known message";
 
         throw std::invalid_argument( ErrorMessage.str() );

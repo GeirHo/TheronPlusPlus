@@ -13,8 +13,23 @@ received where the format is that the message contains a JavaScript Object
 Notation (JSON) meessage with separate fields fot the attribute and the value. 
 The JSON implementation uses the best JSON library available [1].
 
-The command line options for this unit test are the following:
+The command line options for this unit test are the following. First the 
+responder should be started
 
+./AMQDistribution -I HelloResponder --endpoint Responder \
+ --broker localhost --port 5672 --user admin --password admin \
+ --topics TestTopic
+
+Then one can start the sender
+
+./AMQDistribution -I HelloSender -R HelloResponder --endpoint Sender \
+--broker localhost --port 5672 --user admin --password admin \
+--topics TestTopic
+
+Provided that the AMQ broker is accessible through the localhost URL on the 
+AMQ Protocol port 5672 with standard user and password. Note that the enpoints
+must be different for the server to recognise this as two different clients 
+connecting.
 
 The command line options are parsed by the cxxopt parser [2]. This was chosen
 becuase its syntax is similar to Boost Program Options, but it uses standard
@@ -50,7 +65,6 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 #include "Communication/PolymorphicMessage.hpp"
 #include "Communication/NetworkingActor.hpp"
-#include "Utility/ConsolePrint.hpp"
 
 // AMQ related headers
 
@@ -200,7 +214,7 @@ public:
   // same Actor to detect if the message should be decoded or not.
 
   class ResponseMessage 
-  : public Theron::AMQ::JSONMessage
+  : virtual public Theron::AMQ::JSONMessage
   {
     protected:
 
@@ -242,6 +256,7 @@ private:
   void HandleRequest( const RequestMessage & TheRequest, 
                       const Address RequestingActor )
   {
+    std::cout << "HANDLING REQUEST " << std::endl;
     ResponseMessage TheResponse({
                     {"Message received", TheRequest.Text() }, 
                     {"Decision", "Idiot"}, 
@@ -257,21 +272,20 @@ private:
   // to an actor responsible for sequencing the formatted strings to the 
   // console.
 
-  Theron::ConsolePrint Output;
-
   // The message handler can then use this to print the keys and the content
   // of the received JSON object.
 
   void HandleResponse( const ResponseMessage & TheResponse, 
                        const Address RespondingActor )
   {
+    std::cout << "HANDLING RESPONSE " << std::endl;
     if( TheResponse.empty() )
-      Output << "Got an empty JSON response..." << std::endl;
+      std::cout << "Got an empty JSON response..." << std::endl;
     else if( TheResponse.is_primitive() )
-      Output << "Got a primitive JSON value : " << TheResponse << std::endl;
+      std::cout << "Got a primitive JSON value : " << TheResponse << std::endl;
     else
-      Output << "Received the following response: " << std::endl 
-             << TheResponse.dump(4) << std::endl;
+      std::cout << "Received the following response: "  << std::endl
+                << TheResponse.dump(2) << std::endl;
   }
 
   // --------------------------------------------------------------------------
@@ -404,14 +418,12 @@ public:
 
 private:
 
-  Theron::ConsolePrint Output;
-
   void PrintTopicMessage( const TopicMessage & TheMessage, 
                           const Address TopicName )
   {
-    Output << "To Actor "<< GetAddress().AsString() << " from topic " 
-           << TopicName.AsString() <<": " << std::endl
-           << TheMessage.dump(4) << std::endl;
+    std::cout << "To Actor "<< GetAddress().AsString() << " from topic " 
+              << TopicName.AsString() <<": " << std::endl
+              << TheMessage.dump(2) << std::endl;
   }
 
   // --------------------------------------------------------------------------
@@ -513,6 +525,7 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
         cxxopts::value<std::string>()->default_value("") )
     ("I,InteractionActorName", "Name of the hello world actor", 
         cxxopts::value<std::string>()->default_value("HelloWorldActor"))
+    ("E,endpoint", "The endpoint name", cxxopts::value<std::string>() )
     ("B,broker", "The URL of the AMQ broker", 
         cxxopts::value<std::string>() )
     ("P,port", "TCP port on  AMQ Broker", 
@@ -537,16 +550,9 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   }
 
   // --------------------------------------------------------------------------
-  // Printing out a welcome message
-  // --------------------------------------------------------------------------
-
-
-  // --------------------------------------------------------------------------
   // Constructing the Actors
   // --------------------------------------------------------------------------
-  
-  Theron::ConsolePrintServer ConsoleOutput;
-
+  //
   // The network endpoint takes the endpoint name as the first argument, then 
   // the URL for the broker and the port number. The user name and the password
   // are defined in the AMQ Qpid Proton connection options, and the values are
@@ -565,7 +571,8 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   // the various network endpoint servers in order to pass the defined 
   // connection options.
 
-  Theron::AMQ::NetworkEndpoint AMQNetWork( "AMQTester", 
+  Theron::AMQ::NetworkEndpoint AMQNetWork( 
+    CLIValues["endpoint"].as< std::string >(), 
     CLIValues["broker"].as< std::string >(),
     CLIValues["port"].as< unsigned int >(),
     Theron::AMQ::Network::NetworkLayerLabel,
@@ -578,7 +585,7 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   // line interface. 
 
   TopicSubscriber TopicServer( "TopicSubscriber", 
-          CLIValues["topics"].as< std::vector< Theron::AMQ::TopicName > >() );
+           CLIValues["topics"].as< std::vector< Theron::AMQ::TopicName > >() );
 
   // The Hello World actor will be started with the responder Actor's address.
   // If this is not given, the address will be empty and the actor will act as
@@ -593,7 +600,9 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
     HelloWorldResponder = 
         Theron::Address( CLIValues["responder"].as< std::string >()  );
 
-  HelloWorld InteractionActor( "HelloWorldActor", HelloWorldResponder );
+  HelloWorld 
+  InteractionActor( CLIValues["InteractionActorName"].as< std::string >(), 
+                    HelloWorldResponder );
 
   // --------------------------------------------------------------------------
   // Waiting and closing
@@ -614,6 +623,7 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   Theron::Actor::Send( Theron::Network::ShutDown(), 
                        Theron::Actor::Address(), AMQNetWork.GetAddress() );
 
+std::cout << "Ready for closing" << std::endl;
   // Then it is just to wait for all the local actors to finish handling 
   // messages. The topic susbscriber will drain as soon as the network stops
   // receiving messages.

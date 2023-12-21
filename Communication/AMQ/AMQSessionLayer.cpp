@@ -182,21 +182,20 @@ void SessionLayer::RemoveLocalActor( const RemoveActorCommand & Command,
 void SessionLayer::InboundMessage( const AMQ::Message & TheMessage,
 										               const Address TheNetworkLayer )
 {
-  TopicName TheTopic( TheMessage.GetSender().ActorName() );
+  TopicName SenderTopic( TheMessage.GetSender().ActorName() );
 
-  if( TopicSubscribers.contains( TheTopic ) )
+  if( TopicSubscribers.contains( SenderTopic ) )
   {
-    Address SenderTopic( TheMessage.GetSender().ActorAddress() ),
-            ThePresentationLayer( 
+    Address ThePresentationLayer( 
             Network::GetAddress( Network::Layer::Presentation ) );
 
     auto MessageToActors( TheMessage.GetPayload() );
 
     if( std::string_view( MessageToActors->content_type() ).empty() )
-      MessageToActors->content_type( TheTopic );
+      MessageToActors->content_type( SenderTopic );
 
     std::ranges::for_each( 
-      TopicSubscribers[ TheMessage.GetSender().ActorName() ],
+      TopicSubscribers[ SenderTopic ],
       [&,this](const Address & Subscriber){
         Send( InternalMessage( SenderTopic, Subscriber, 
                                MessageToActors ), 

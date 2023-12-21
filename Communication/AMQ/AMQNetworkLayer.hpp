@@ -67,6 +67,8 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <proton/messaging_handler.hpp>   // Event call-backs
 #include <proton/connection.hpp>          // All connections to the broker
 #include <proton/connection_options.hpp>  // Options for the broker connection
+#include <proton/session.hpp>             // Session for hosting sender and receivers
+#include <proton/session_options.hpp>     // Options for the session
 #include <proton/work_queue.hpp>          // Queue of pending send operations
 #include <proton/message.hpp>             // AMQ message format
 #include <proton/receiver.hpp>            // The subscriber object
@@ -129,7 +131,8 @@ private:
   
   proton::container  AMQEventLoop;
   std::thread        EventLoopExecuter;
-  proton::connection AMQBroker;
+  proton::connection AMQConnection;
+  proton::session    AMQBroker;
   bool               Connected;
   
   // The actual publishers and subscribers are kept in separate unordered 
@@ -200,6 +203,9 @@ private:
 
   void CreateSender  ( const TopicName & TheTarget );
   void CreateReceiver( const TopicName & TheTarget );
+
+  void SendMessage( const TopicName & TargetTopic, 
+                    const std::shared_ptr< proton::message > & TheMessage );
 
   // ---------------------------------------------------------------------------
 	// Communication event handlers

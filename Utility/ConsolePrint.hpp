@@ -21,7 +21,7 @@ Contact: Geir.Horn@mn.uio.no
 License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 Revisions:
-  Geir Horn, 2016: Put the class under the Theron name space,
+  Geir Horn: Put the class under the Theron name space,
 		   Added automatic actor naming by default
 		   Added ostream constructor argument
 		   Drain functionality moved to the destructor

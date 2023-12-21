@@ -23,8 +23,9 @@ without the need to duplicate code.
 Furthermore, this standard fall back handler will throw an exception, which may
 be caught if it is possible to recover from this runtime error.
 
-Author and Copyright: Geir Horn, 2017
-License: LGPL 3.0
+Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
+License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
 #ifndef STANDARD_FALLBACK_HANDLER
@@ -33,6 +34,7 @@ License: LGPL 3.0
 #include <sstream>					// To format the error message
 #include <stdexcept>				// To throw a standard exception
 #include <string>					  // To name the actor
+#include <source_location>  // Better error message
 
 #include <iostream>
 #include "Actor.hpp"			  // Theron++ Actor framework
@@ -43,43 +45,45 @@ namespace Theron
 class StandardFallbackHandler : public virtual Actor
 {
 private:
-	
-	// The private fall back handler format a string based on the information 
-	// provided by Theron, and then throw an exception with this string as 
-	// explanation.
-	
-	void FallbackHandler( const void *const Data, 
-												const uint32_t Size, 
-												const Address From )
-	{
-		std::ostringstream ErrorMessage;
-		const char * ByteString = reinterpret_cast< const char * >( Data );
-		
-		ErrorMessage << __FILE__ << " at line " << __LINE__ << ": "
-								 << "*** ERROR  *** Unmanaged message "
-								 << " to " << GetAddress().AsString()
-								 << " from " << From.AsString() << " with data ";
-								 
-		for ( unsigned int i=0; i < Size; i++ )
-			ErrorMessage << ByteString[i] << " ";
-		
-		throw std::runtime_error( ErrorMessage.str() );
-	}
-	
+  
+  // The private fall back handler format a string based on the information 
+  // provided by Theron, and then throw an exception with this string as 
+  // explanation.
+  
+  void FallbackHandler( const void *const Data, 
+                        const uint32_t Size, 
+                        const Address From )
+  {
+    std::ostringstream ErrorMessage;
+    std::source_location Location = std::source_location::current();
+    const char * ByteString = reinterpret_cast< const char * >( Data );
+        
+    ErrorMessage << Location.file_name() << " at line " << Location.line() 
+                 << ": *** ERROR  *** Unmanaged message "
+                 << " to " << GetAddress().AsString()
+                 << " from " << From.AsString() 
+                 << " with " << Size << " data bytes ";
+                 
+    for ( unsigned int i=0; i < Size; i++ )
+      ErrorMessage << ByteString[i] << " ";
+    
+    throw std::runtime_error( ErrorMessage.str() );
+  }
+  
 public:
-	
-	// The public constructor register the standard handler for this actor. 
-	// It takes the actor name as a string, which is default empty leaving the 
-	// assignment of the actor name to the Theron framework.
-	
-	StandardFallbackHandler( const std::string & ActorName = std::string() )
-	: Actor( ActorName )
-	{
-		SetDefaultHandler( this, &StandardFallbackHandler::FallbackHandler );
-	}
+  
+  // The public constructor register the standard handler for this actor. 
+  // It takes the actor name as a string, which is default empty leaving the 
+  // assignment of the actor name to the Theron framework.
+  
+  StandardFallbackHandler( const std::string & ActorName = std::string() )
+  : Actor( ActorName )
+  {
+    SetDefaultHandler( this, &StandardFallbackHandler::FallbackHandler );
+  }
 
-	virtual ~StandardFallbackHandler() = default;
-		
+  virtual ~StandardFallbackHandler() = default;
+    
 }; 	// End class standard fall back handler
 } 	// End name space Theron
 #endif

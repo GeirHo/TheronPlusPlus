@@ -133,7 +133,7 @@ private:
   public:
 
     RemoteMessage( const Address & TheSender, const Address & TheReceiver,
-                    const ProtocolPayload & ThePayload )
+                   const ProtocolPayload  & ThePayload )
     : From( TheSender ), To( TheReceiver ), MessagePayload( ThePayload )
     {};
     
@@ -201,7 +201,10 @@ protected:
       std::dynamic_pointer_cast< Actor::Message< RemoteMessage > >(TheMessage);
 
       // If the message conversion was successful, then this can be forwarded
-      // to the local destination actor as if it was sent from the remote
+      // to the local destination actor as a polymorphic message for which 
+      // there should be a handler defined for the Networking Actor if 
+      // instantiated on the same protocol payload type. The sender address 
+      // is just forwardes if the message was sent from the remote
       // sender. Otherwise, the message should be treated as a normal message
       // to this presentation layer actor.
 
@@ -268,7 +271,7 @@ protected:
                            << Location.line() << ": The Presentation Layer "
                            << "server " << GetAddress().AsString() 
                            << " in function " << Location.function_name()
-                           << " got a message with incompatible payload type"
+                           << " got a message with incompatible payload type "
                            << OutboundMessage->GetProtocolTypeName();
                            
               throw std::invalid_argument( ErrorMessage.str() );

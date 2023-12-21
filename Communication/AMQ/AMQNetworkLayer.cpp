@@ -13,6 +13,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <source_location>    // For error messages showing code location
 #include <stdexcept>          // For standard exceptions
 #include <cerrno>             // Standard error codes
+#include <system_error>       // Standard error codes
 #include <unordered_map>      // Attribute-value objects
 #include <vector>             // For passing sequence of parameters
 
@@ -55,10 +56,15 @@ void NetworkLayer::CreateSender(const TopicName & TheTarget)
     
   TopicParameters.capabilities( std::vector< proton::symbol >{ "topic" } );
   TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
+
+  LinkParameters.name( TheTarget );
   LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
   LinkParameters.target( TopicParameters );
-    
-  AMQBroker.open_sender( TheTarget, LinkParameters );
+
+  auto [ PublisherHandler, Success ] = Publishers.emplace( TheTarget, 
+         AMQBroker.open_sender( "topic://" + TheTarget, LinkParameters ) );
+
+  if ( Success ) PublisherHandler->second.open();
 }
 
 void NetworkLayer::CreateReceiver(const TopicName & TheTarget)
@@ -66,13 +72,50 @@ void NetworkLayer::CreateReceiver(const TopicName & TheTarget)
   proton::receiver_options LinkParameters;
   proton::source_options   TopicParameters;
 
-  TopicParameters.capabilities( std::vector< proton::symbol >{ "topic" } );
+  TopicParameters.capabilities( 
+    std::vector< proton::symbol >{ "topic", "shared", "global" } );
   TopicParameters.distribution_mode( proton::source::distribution_mode::COPY );
   TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
+  TopicParameters.expiry_policy( proton::source::NEVER );
+
+  LinkParameters.name( TheTarget );
   LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
   LinkParameters.source( TopicParameters );
   
-  AMQBroker.open_receiver( TheTarget, LinkParameters );
+  auto [ SubscriberHandler, Success ] = Subscribers.emplace( TheTarget, 
+         AMQBroker.open_receiver("topic://" + TheTarget, LinkParameters ) );
+  
+  if( Success ) SubscriberHandler->second.open();
+}
+
+// The Send message function is called from the work queue and can therefore 
+// freely use the publisher map. The message is sent if the publisher exist
+// for the topic and the link has credits. If no credit, the message will 
+// just be queued. If there is not publisher for the target topic, it will 
+// be created and the message will be queued.
+
+void NetworkLayer::SendMessage( const TopicName & TargetTopic, 
+                   const std::shared_ptr< proton::message > & TheMessage )
+{
+  auto PublisherHandler = Publishers.find( TargetTopic );
+
+  if( PublisherHandler != Publishers.end() )
+  {
+    if(  PublisherHandler->second.active() && 
+        (PublisherHandler->second.credit() >0) )
+      PublisherHandler->second.send( *TheMessage );
+    else
+    {
+      std::lock_guard< std::mutex > TheLock( MessageCacheLock );
+      MessageCache.emplace( TargetTopic, TheMessage );
+    }
+  }
+  else
+  {
+    std::lock_guard< std::mutex > TheLock( MessageCacheLock );
+    CreateSender( TargetTopic );
+    MessageCache.emplace( TargetTopic, TheMessage );
+  }
 }
 
 /*==============================================================================
@@ -85,9 +128,7 @@ void NetworkLayer::CreateReceiver(const TopicName & TheTarget)
 // started. 
 
 void NetworkLayer::on_container_start( proton::container & TheLoop )
-{
-   TheLoop.connect( AMQBrokerURL, ConnectionOptions );
-}
+{}
 
 // When it is confirmed that the connection is open, this is simply recorded 
 // in the boolean variable to indicate that the network interface is 
@@ -96,9 +137,8 @@ void NetworkLayer::on_container_start( proton::container & TheLoop )
 
 void NetworkLayer::on_connection_open( proton::connection & TheBroker )
 {
-  AMQBroker = TheBroker;
   Connected = true;
-  
+
   CreateReceiver( DiscoveryTopic ); 
   CreateSender  ( DiscoveryTopic ); 
 }
@@ -111,7 +151,8 @@ void NetworkLayer::on_connection_open( proton::connection & TheBroker )
 // The messages must be copied into the action function as the cache entries 
 // should be removed at this point. Note that the reply-to address is already 
 // set for the message in the cache and the topic name is deduced from the 
-// active sender.
+// active sender. The issue is that there is a credit on the link and so 
+// only as many messages as there are credits can be sent.
 //
 // The lock is needed on the message cache since the Network Layer Actor may 
 // receive new messages for this publisher at any time, and these will be 
@@ -124,28 +165,18 @@ void NetworkLayer::on_sendable( proton::sender & ThePublisher )
   proton::target                TheTopicID( ThePublisher.target() );
   TopicName                     TheName( TheTopicID.address() );
   std::lock_guard< std::mutex > TheLock( MessageCacheLock );
-  
-  // Add the topic and the sender to the Publishers. Because of asynchronous
-  // behaviour on this enpoint, it could be that he same publisher is created
-  // several times, and so it should only be registered the first time.
-  
-  Publishers.try_emplace( TheName, ThePublisher );
-  
+
+  if( TheName.starts_with( "topic://" ) ) TheName.erase(0,8);
+
   // Search for the cached messages awaiting the creation of this sender and 
   // forward them as delayed actions to the AMQ event loop.
-  
-  auto [First, Last] = MessageCache.equal_range( TheName );
-  
-  if( First != MessageCache.end() )
+
+  while( (ThePublisher.credit() > 0) && MessageCache.contains( TheName ) )
   {
-    for ( auto & [_, MessagePtr] : std::ranges::subrange( First, Last ) )
-      ThePublisher.send( *MessagePtr ); 
-    
-    // Since the messages was copied by the action functions, they can be
-    // removed from the cache
-    
-    MessageCache.erase( First, Last );
-  }
+    auto MessageRecord = MessageCache.find( TheName );
+    ThePublisher.send( *(MessageRecord->second) );
+    MessageCache.erase( MessageRecord );
+  }  
 }
 
 // When a deferred action creates the receiver, and the receiver has success-
@@ -153,10 +184,7 @@ void NetworkLayer::on_sendable( proton::sender & ThePublisher )
 // subscriber list under topic address of the target topic.
 
 void NetworkLayer::on_receiver_open( proton::receiver & TheSubscription )
-{
-  Subscribers.try_emplace( TheSubscription.target().address(), 
-                           TheSubscription );
-}
+{}
 
 // When a message arrives on one of the subscribed topics, the message to send 
 // back to the session layer is created, and forwarded using the Actor's 
@@ -171,7 +199,11 @@ void NetworkLayer::on_receiver_open( proton::receiver & TheSubscription )
 void NetworkLayer::on_message( proton::delivery & DeliveryStatus, 
                                proton::message  & TheMessage )
 {
-  if ( TheMessage.to() == DiscoveryTopic )
+  TopicName ReceiverTopic( TheMessage.to() );
+
+  if( ReceiverTopic.starts_with( "topic://" ) ) ReceiverTopic.erase(0,8);
+
+  if ( ReceiverTopic == DiscoveryTopic )
   {
     if ( TheMessage.reply_to() != GetAddress().AsString() )
     {       
@@ -251,8 +283,15 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
   }
   else
   {
+    TopicName SenderTopic( TheMessage.reply_to() );
+
+    if( SenderTopic.empty() )
+      SenderTopic = ReceiverTopic;
+    else if( SenderTopic.starts_with("topic://") )
+      SenderTopic.erase(0,8);
+
     Theron::AMQ::Message 
-    Inbound( TheMessage.reply_to(), TheMessage.to(), 
+    Inbound( SenderTopic, ReceiverTopic, 
              std::make_shared< proton::message >( TheMessage ) );
   
     Send( Inbound, Network::GetAddress( Network::Layer::Session ) );
@@ -284,8 +323,8 @@ void NetworkLayer::on_connection_error( proton::connection & TheBroker )
   // the system category with the error code indicating that the connection 
   // was aborted.
                
-  throw std::system_error( ECONNABORTED, std::system_category(), 
-                           ErrorMessage.str() );
+  throw std::system_error( static_cast<int>( std::errc::connection_aborted ), 
+                           std::system_category(), ErrorMessage.str() );
 }
 
 // There is a second error handler that is called for any other definite and 
@@ -307,8 +346,8 @@ void NetworkLayer::on_error( const proton::error_condition & TheError )
   // the system category with the error code indicating that the AMQ protocol is 
   // not available.
                
-  throw std::system_error( ENOPROTOOPT, std::system_category(), 
-                           ErrorMessage.str() );
+  throw std::system_error( static_cast<int>( std::errc::no_protocol_option ), 
+                           std::system_category(), ErrorMessage.str() );
 }
 
 /*==============================================================================
@@ -351,7 +390,11 @@ NetworkLayer::Protocol::String( NetworkLayer::Protocol::Action TheCommand)
 // be sent on the discovery  topic to remote endpoints and that the remote 
 // endpoint will respond with the full Actor address. This will generate a 
 // message with the actor name as the  payload string, and the resolve address 
-// command will be the message subject
+// command will be the message subject.
+// 
+// There is a strange issue with the property function as it will not work 
+// if the message is encapsulated in a shared pointer. This means that the 
+// message must be constructed first and then copied to a shared pointer 
 
 void NetworkLayer::ResolveAddress( 
   const ResolutionRequest & TheRequest,
@@ -369,9 +412,12 @@ void NetworkLayer::ResolveAddress(
   AMQRequest.subject( Protocol::String( Protocol::Action::ResolveAddress ) );
   AMQRequest.body() = ActorAddresses;
 
-  ActionQueue.add(
-    [=,this](){ Publishers[ DiscoveryTopic ].send( AMQRequest ); }
-  );
+  std::shared_ptr< proton::message > RequestToSend = 
+    std::make_shared< proton::message >( AMQRequest );
+
+  ActionQueue.add( [=,this](){ 
+    SendMessage( DiscoveryTopic, RequestToSend ); 
+  });
 }
 
 // If the sought Actor is on this node, the Session Layer will respond with a 
@@ -400,6 +446,9 @@ void NetworkLayer::ResolvedAddress(
   AMQResponse.subject( Protocol::String( Protocol::Action::GlobalAddress ) );
   AMQResponse.body() = ActorAddresses;
   
+  std::shared_ptr< proton::message > ResponseToSend = 
+    std::make_shared< proton::message >( AMQResponse );
+
   // The requested actor is on this node, and the receiver must be opened to 
   // get the messages to come from the remote requesting actor.
   
@@ -409,7 +458,7 @@ void NetworkLayer::ResolvedAddress(
   );
   
   ActionQueue.add(
-    [=,this](){ Publishers[ DiscoveryTopic ].send( AMQResponse ); }
+    [=,this](){ SendMessage( DiscoveryTopic, ResponseToSend ); }
   );
 }
 
@@ -422,18 +471,20 @@ void NetworkLayer::ActorRemoval(
   const Address TheSessionLayer )
 {
   proton::message ActorClosing;
-  
   ActorClosing.properties() = MessageProperties;
   ActorClosing.to( DiscoveryTopic );
   ActorClosing.reply_to( GetAddress().AsString() );
   ActorClosing.subject( Protocol::String( Protocol::Action::ActorRemoval ) );
   ActorClosing.body( TheCommand.GlobalAddress.AsString() );
   
+  std::shared_ptr< proton::message > ClosingMessage =
+    std::make_shared< proton::message >( ActorClosing );
+
   // It will no longer be possible to reach this Actor and this is communicated
   // to the remote endpoints and the local receiver is closed.
   
   ActionQueue.add(
-    [=,this](){ Publishers[ DiscoveryTopic ].send( ActorClosing ); }
+    [=,this](){ SendMessage( DiscoveryTopic, ClosingMessage ); }
   );
   
   ActionQueue.add(
@@ -466,18 +517,8 @@ void NetworkLayer::OutboundMessage( const AMQ::Message & TheMessage,
   RemoteMessage->reply_to( TheMessage.GetSender().AsString() );
   RemoteMessage->to( DestinationActor );
   
-  if ( Publishers.contains( DestinationActor ) )
-    ActionQueue.add( [=, this](){ 
-      Publishers[ DestinationActor ].send( *RemoteMessage ); 
-    });
-  else
-  {
-    MessageCache.emplace( DestinationActor, RemoteMessage );
-    
-    ActionQueue.add( [=, this](){ 
-      CreateSender( DestinationActor );
-    });
-  }
+  ActionQueue.add( [=, this](){ 
+      SendMessage( DestinationActor, RemoteMessage ); });
 }
 
 /*==============================================================================
@@ -534,7 +575,8 @@ NetworkLayer::NetworkLayer(
   StandardFallbackHandler( EndpointName.AsString() ),
   Theron::NetworkLayer< AMQ::Message >( EndpointName.AsString() ),
   proton::messaging_handler(),
-  AMQEventLoop( EndpointName.AsString() ), EventLoopExecuter(), AMQBroker(), 
+  AMQEventLoop( *this, EndpointName.AsString() ), EventLoopExecuter(), 
+  AMQConnection(), 
   Connected( false ), Publishers(), Subscribers(), MessageCache(), 
   ActionQueue( AMQEventLoop ),
   ConnectionOptions( GivenConnectionOptions ),  
@@ -548,12 +590,17 @@ NetworkLayer::NetworkLayer(
   URLString << BrokerURL << ":" << Port;
   AMQBrokerURL = URLString.str();
   
-  // The handler for the connection options is set to this network layer 
-  // class. It could not be set in the initialisation section above since 
-  // the 'this' pointer does not formally exist before after the initialisation
-  // block.
+  // The connection is established and opened. Then a session for the 
+  // publishers and subscribers is created for this connection.
+
+  ConnectionOptions.desired_capabilities( 
+    std::vector< proton::symbol >{ "topic", "shared", "global" } );
   
-  ConnectionOptions.handler( *this );
+  AMQConnection = AMQEventLoop.connect( AMQBrokerURL, ConnectionOptions );
+  AMQConnection.open();
+  AMQBroker = AMQConnection.open_session();
+
+  //ConnectionOptions.handler( *this );
   
   // Then the event loop is started and the rest of the processing will be 
   // done by the various message handlers and event handlers
@@ -596,13 +643,21 @@ void NetworkLayer::Stop( const Network::ShutDown & StopMessage,
     Publishers[ DiscoveryTopic ].send( ClosingMessage ); });
   
   // Delete the subscribers and publishers of this endpoint
-  
-  ActionQueue.add( [this](){ Subscribers.clear(); });
+
+  ActionQueue.add( [this](){ std::ranges::for_each( Publishers, 
+              [](auto & PublisherRecord){ PublisherRecord.second.close(); });
+  });
+  ActionQueue.add( [this](){ std::ranges::for_each( Subscribers, 
+              [](auto & SubscriberRecord){ SubscriberRecord.second.close(); });
+  });
   ActionQueue.add( [this](){ Publishers.clear(); });
+  ActionQueue.add( [this](){ Subscribers.clear(); });
   
   // Request the event loop to stop and wait for it to finish processing all 
   // pending actions and actually close.
   
+  AMQBroker.close();
+  AMQConnection.close();
   AMQEventLoop.stop();
   if ( EventLoopExecuter.joinable() )
     EventLoopExecuter.join();
