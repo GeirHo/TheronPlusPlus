@@ -1,33 +1,35 @@
 /*=============================================================================
   Network End Point
 
-  Author: Geir Horn, University of Oslo, 2015-2017
-  Contact: Geir.Horn [at] mn.uio.no
-  License: LGPL3.0
+  This file defines the static Network class pointer and the static function 
+  used to get the Theron actor framework address of the actors implementing 
+  each of the network stack layers.
+  
+  Author and Copyright: Geir Horn, University of Oslo
+  Contact: Geir.Horn@mn.uio.no
+  License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
+#include "Communication/NetworkEndpoint.hpp"
 
-#include <sstream>    // Formatted error messages
-#include <stdexcept>  // To throw exceptions if no shut down receiver
+const Theron::Network * Theron::Network::TheNetwork = nullptr; 
 
-#include "NetworkEndpoint.hpp"
+Theron::Address Theron::Network::GetAddress( Theron::Network::Layer Role )
+{
+  Theron::Address LayerAddress;
 
-/*=============================================================================
+  switch( Role )
+  {
+    case Theron::Network::Layer::Network:
+      LayerAddress = TheNetwork->NetworkLayerAddress();
+      break;
+    case Theron::Network::Layer::Session:
+      LayerAddress = TheNetwork->SessionLayerAddress();
+      break;
+    case Theron::Network::Layer::Presentation:
+      LayerAddress = TheNetwork->PresentationLayerAddress();
+      break;
+  }
 
-  Static variables
-
-=============================================================================*/
-
-// The pointers to the OSI stack layer servers are kept in a static map in order
-// for other actors to get the relevant addresses to register and de-register
-// with these servers if necessary.
-
-std::map< Theron::Network::Layer, std::shared_ptr< Theron::Actor > >
-				  Theron::Network::CommunicationActor;
-
-// There is also a place holder for the global endpoint allowing other actors
-// to obtain the address of the endpoint without having a direct reference to
-// the network endpoint actor.
-
-Theron::Actor * Theron::Network::ThisNetworkEndpoint = nullptr;
-
+  return LayerAddress;
+}

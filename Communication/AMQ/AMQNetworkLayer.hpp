@@ -2,30 +2,51 @@
 Active Message Queue: Network Layer
 
 The Active Message Queue (AMQ) [1] is a server based messaging system where
-various clients can exchange messages via a server (message broker) using
-the following two models of communication. See the ActiveMQ header file for
-details on implementation.
+various clients can exchange messages via a server (message broker).
 
-The Network Layer takes care of the interface to the AMQ server (broker). It
-initialises the AMQ library and connects to the server. It subscribes to a
-AMQ with the same topic as the endpoint name. This is the in-box for this
-endpoint. It also publishes actor discovery messages on the pre-defined topic
-"TheronPlusPlus". All endpoints subscribes to this topic, and inbound messages
-will be forwarded as discovery messages to the Session Layer.
+The Network Layer takes care of the interface to the AMQ server (broker) based
+on the Qpid Proton [2] Application Programming Interface (API) [3]. The basic
+idea is that the Network Layer will encapsulate all Proton activities and be 
+the handler for all Proton call-backs. The Network Layer will first connect 
+to the AMQ broker, and start the Proton event manager. Then it will keep two 
+maps of AMQ topics, one for publishing messages and one for receiving messages.
+When a message is sent to topic for which there is no sender, the sender 
+will be created and then the message will be sent as soon as the sender is 
+connected and active. Messages sent to the remote actor corresponding to this 
+sender during the initialisation of the sender will be forwarded sequentially 
+when the sender starts. 
 
-Finally, it supports raw topic subscriptions for messages not sent by remote
-actors. Messages arriving on these topics are forwarded to the Session Layer
-with an unknown sender. Such subscriptions can also be cancelled by the
-session layer when no local actor subscribes to the given topic any more.
+Each local actor has a local receiver as its global mailbox for external 
+messages. These local receivers are created at the end of the address resolution
+protocol when a remote actor indicates an available message for a destination 
+actor, and the network layer of the endpoint hosting the destination actor 
+gets the confirmation from the Session Layer that the actor is on this node. 
+
+Both senders and receivers will remain open as long as there are local actors 
+using them meaning that the Session Layer will inform the Network Layer that 
+an actor closes, and then the Network Layer will inform other endpoints and 
+close the publisher associated with the closing actor. The remote endpoints 
+should remove potential subscribers set for the closing actors.
+
+The Session Layer must explicitly subscribe to topics. All subscriptions will be 
+of the 'exactly once' type meaning that each message will be delivered with 
+link level flow control and only once. This is the strongest delivery guarantee
+possible.
+
+Subscriptions are also explicitly closed by the Session Layer when the last 
+local Actor holding a subscription unsubscribes, for instance when that Actor 
+closes. The session layer will also close the sender when the last local 
+Actor having used the sender closes. 
 
 References:
-
 [1] http://activemq.apache.org/
+[2] https://qpid.apache.org/proton/index.html
+[3] https://qpid.apache.org/releases/qpid-proton-0.39.0/proton/cpp/api/index.html
 
-Author and Copyright: Geir Horn, University of Oslo, 2018-2019
-License: LGPL 3.0
+Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
+License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 ==============================================================================*/
-
 
 #ifndef THERON_AMQ_NETWORK_LAYER
 #define THERON_AMQ_NETWORK_LAYER
@@ -34,406 +55,380 @@ License: LGPL 3.0
 
 #include <memory>        // For smart pointers
 #include <string>        // For standard strings
-#include <map>           // For storing properties
-#include <unordered_map> // For O(1) lookups
-#include <set>           // For storing subscribing actors
-#include <typeinfo>      // For knowing property types
-#include <typeindex>     // For storing the property types
-#include <sstream>       // For nice error messages
-#include <stdexcept>     // For standard exceptions
-#include <functional>    // Dynamic functions
+#include <unordered_map> // For O(1) lookups of topics
+#include <map>           // For outbound message cache
+#include <thread>        // For running the messaging event loop
+#include <mutex>         // For thread safe message caching
+#include <string_view>   // For references to strings
 
-// Headers for the Active Message Queue interface and the C++ Messaging System
-// (CMS) [2]. Unfortunately, the C++ library for AMQ is written to be similar
-// to the Java interface and it therefore suffers from Java or C-style ways of
-// using the various classes and functions. It also passes message and object
-// pointers around without clarifying the ownership or using shared pointers.
-// This interface is made more C++ like in this implementation, and pointers
-// to CMS objects are always protected by smart pointers if they are created
-// within the scope of this implementation.
-//
-// Note that the location of these files my be non-standard and the current
-// version is under
-// /user/include/activemq-cpp-3.9.4
+// Qpid Proton headers
 
-#include <activemq/core/ActiveMQConnectionFactory.h>
-#include <activemq/core/ActiveMQConnection.h>
-#include <activemq/core/ActiveMQSession.h>
-#include <activemq/cmsutil/CachedConsumer.h>
-#include <activemq/cmsutil/CachedProducer.h>
-#include <activemq/library/ActiveMQCPP.h>
-
-#include <cms/Connection.h>
-#include <cms/Session.h>
-#include <cms/MessageListener.h>
+#include <proton/container.hpp>           // Proton event engine
+#include <proton/messaging_handler.hpp>   // Event call-backs
+#include <proton/connection.hpp>          // All connections to the broker
+#include <proton/connection_options.hpp>  // Options for the broker connection
+#include <proton/session.hpp>             // Session for hosting sender and receivers
+#include <proton/session_options.hpp>     // Options for the session
+#include <proton/work_queue.hpp>          // Queue of pending send operations
+#include <proton/message.hpp>             // AMQ message format
+#include <proton/receiver.hpp>            // The subscriber object
+#include <proton/sender.hpp>              // The sender object
 
 // Headers for the Theron++ actor system
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
 
-#include "Communication/NetworkLayer.hpp"
-#include "Communication/AMQ/AMQMessages.hpp"
+// Headers for the Theron++ communication layers
 
-namespace Theron::ActiveMQ
+#include "Communication/LinkMessage.hpp"
+#include "Communication/NetworkLayer.hpp"
+
+// Active Message Queue network headers
+
+#include "Communication/AMQ/AMQMessage.hpp"
+
+namespace Theron::AMQ
 {
+// The AMQ topic names are just standard strings.
+
+using TopicName = std::string; 
 
 // Setting the hard coded topic for all endpoints to listen to.
 
-constexpr char DiscoveryTopic[] = "TheronPlusPlus";
-
+constexpr std::string DiscoveryTopic{ "TheronPlusPlus" };
+  
 /*==============================================================================
 
  Network layer
 
 ==============================================================================*/
 //
-// The network layer implements most of the AMQ specific issues ranging from the
-// initialisation of the protocol to the format conversion for the messages.
-// It receives outbound messages for a given topic from the session layer,
-// and forwards received messaged on a topic to the session layer which
-// maintains a mapping of actors subscribing to a particular topic.
+// The class is an Actor implementing the generic Network Layer for the AMQ 
+// protocol. It is also a message handler for the active container, and 
+// exchange messages with the Session Layer on a strict topic name base.
+//
+// This class is also provide the event handlers for the AMQ event loop and 
+// it is therefore a messaging handler even though it also encapsulates the 
+// other communication objects.
 
 class NetworkLayer
 : virtual public Actor,
   virtual public StandardFallbackHandler,
-  public Theron::NetworkLayer< TextMessage >
+  virtual public Theron::NetworkLayer< Message >,
+  virtual public proton::messaging_handler
 {
- 	// ---------------------------------------------------------------------------
-	// Connectivity
+  // --------------------------------------------------------------------------
+	// Connectivity related variables
+	// --------------------------------------------------------------------------
+	//
+  // The first variables are the event loop state machine, the thread to 
+  // execute this event loop, and the connection object managing the connection
+  // with the broker. There is also a flag to indicate the status of the 
+  // connection.
+  
+private:
+  
+  proton::container  AMQEventLoop;
+  std::thread        EventLoopExecuter;
+  proton::connection AMQConnection;
+  proton::session    AMQBroker;
+  bool               Connected;
+  
+  // The actual publishers and subscribers are kept in separate unordered 
+  // maps with the AMQ topic as the lookup key and the corresponding proton 
+  // class as destination.
+  
+  std::unordered_map< TopicName, proton::sender   > Publishers;
+  std::unordered_map< TopicName, proton::receiver > Subscribers;
+  
+  // The sender for a message is under the control of the event loop, and 
+  // messages that requires a new publisher to be established because it is 
+  // the first message for a topic must wait for that sender to connect 
+  // to the remote AMQ broker before the message can be sent. This means that 
+  // the message cache can be used by two threads; the event loop and the 
+  // Actor. It must therefore be protected by a mutex to ensure that only 
+  // one thread will manipulate the cache at the same time.
+  
+  std::mutex MessageCacheLock;
+  std::multimap< TopicName, std::shared_ptr< proton::message > > MessageCache;
+  
+  // The event loop will take actions from the action queue and adding
+  // operations to the queue is thread safe. An action can be to send a 
+  // message, or it can be an action to create a receiver subscribing to a 
+  // topic. 
+  
+  proton::work_queue ActionQueue;
+  
+  // The URL of the AMQ broker is stored if it is given. Note that the other
+  // options to connect, like user and password and security policies are 
+  // given as a part of the connection options that must be given to the 
+  // class constructor.
+  
+  std::string AMQBrokerURL;
+  
+  // The connection options must be stored since the connection is only
+  // established in the callback handler when the container has started, and 
+  // as such they could be discarded at that point. 
+  
+  proton::connection_options ConnectionOptions;
+  
+  // There could be application dependent standard options to be used for each 
+  // message and these are stored for use when sending messages. Note however 
+  // that the 'to' field and the 'reply-to' field will be set explicitly for 
+  // each message possibly overriding whatever has been given as standard
+  // options for the message header. Note that these are not supposed to change 
+  // during executions.
+  
+  const proton::message::property_map MessageProperties;
+  
+  // Finally, it keeps the endpoint string to be able to add that to local 
+  // actor names when a resolution request arrives for a local actor.
+  
+  const std::string EndpointString;
+  
+  // ---------------------------------------------------------------------------
+	// Support functions
 	// ---------------------------------------------------------------------------
 	//
-	// In order to connect to the AMQ server a connection and a session are
-	// necessary.
+  // There are two types of AMQ targets for messages: Queues or topics. The 
+  // former is used for direct communication, and the second is used for many 
+  // to many. The AMQ Broker should be instructed to create new queues or topics
+  // if a sender or receiver is created for a label that does not already exist.
+  // However, the exact behaviour depends on the server configuration, and to 
+  // ensure that only topics will be used, explicit settings will be used when
+  // the sender or receiver is created. To avoid duplication of code, support
+  // functions are used. For more details, see
+  // https://access.redhat.com/documentation/en-us/red_hat_amq_clients/2.11/html/using_the_amq_cpp_client/senders_and_receivers
 
-private:
+  void CreateSender  ( const TopicName & TheTarget );
+  void CreateReceiver( const TopicName & TheTarget );
 
-	activemq::core::ActiveMQConnection * AMQConnection;
-	activemq::core::ActiveMQSession    * AMQSession;
+  void SendMessage( const TopicName & TargetTopic, 
+                    const std::shared_ptr< proton::message > & TheMessage );
 
   // ---------------------------------------------------------------------------
-	// Handling AMQ Messages
+	// Communication event handlers
 	// ---------------------------------------------------------------------------
 	//
-	// The messages from other actors to actors on this endpoint is forwarded to
-	// the session layer for further processing. Since only serialised text
-	// messages are assumed, messages of other types of AMQ messages will lead
-	// to a run time error exception.
+  // The event handlers are listed in the order in which the will be used to 
+  // establish the connection and to handle communication events. It should 
+  // be noted that these are called from the event loop thread, and as such 
+  // they can freely use the proton variables above. This also means that the 
+  // proton variables should not be called directly from any of the Network 
+  // Layer's message handlers for messages from the Session Layer.
+  //
+  // The first event hander indicates that the event loop has been started. 
+  // When called it will simply just initialise the connection to the broker 
+  // for this event loop.
+  
+  virtual void on_container_start( proton::container & TheLoop ) override;
+  
+  // The next handler is called when the connection has been established. It 
+  // will simply record that the Network Layer is connected with the server.
+  
+  virtual void on_connection_open( proton::connection & TheBroker ) override;
+  
+  // When an outbound message is received and there is no sender for the 
+  // topic, it will be created while the message will be cached. Then when 
+  // the sender has connected, the cached messages for this topic will be 
+  // queued for sending. 
+  
+  virtual void on_sendable( proton::sender & ThePublisher ) override;
+  
+  // When a local actor is created, or when a remote actor requests an actor 
+  // address that is resolved to be on this node, a receiver will be created. 
+  // However, it cannot be stored in the list of subscribers before it is 
+  // ready, and the next event handler takes care of that.
+  
+  virtual void on_receiver_open(proton::receiver & TheSubscribtion ) override;
+  
+  // Inbound messages on any topic will call the true message handler. This 
+  // will simply send the message to the Session Layer to be forwarded to 
+  // the local Actor subscribing to the concerned topic.
+  
+  virtual void on_message( proton::delivery & DeliveryStatus, 
+                           proton::message  & TheMessage ) override;
+                           
+  // There are three functions dealing with error handling. They are defined 
+  // because they offer possibilities to get more information on the error, 
+  // and if the error is deemed to be severe, a system error exception will be 
+  // thrown with a descriptive message.
+                           
+  virtual void on_connection_error( proton::connection & TheBroker ) override;
+  virtual void on_error  (const proton::error_condition & TheError ) override;
 
-private:
+  // ---------------------------------------------------------------------------
+	// Actor system sender and receiver management
+	// ---------------------------------------------------------------------------
+	//
+  // The below handlers need a defined set of commands to be defined that can 
+  // be supported among endpoints in order to signal to other actor systems 
+  // that actors are removed, or to help the global address resolution. The 
+  // command strings are sent as the subject of messages, and the actual actor
+  // names as a string valued message body.
+  
+  class Protocol
+  {
+  public:
+    
+    enum class Action
+    {
+      ResolveAddress,
+      GlobalAddress,
+      ActorRemoval,
+      EndpointShutDown
+    };
+    
+    static Action      Command( const std::string & CommandText );
+    static std::string String ( Action TheAction );
+  };
 
-	void InboundMessage( const cms::Message * TheMessage );
-
-	// Outbound messages arrives from the Session layer server with the topic set
-	// to the remote endpoints in-box. Thus the handler will just publish the
-	// message on that queue.
-
+  // When a local Actor wants to send a message to a remote Actor, it will 
+  // typically only know the Actor by name and not the endpoint hosting that 
+  // Actor. This because the Actor system shall be deployable on a single node 
+  // as well as being distributed. For this reason a message to an unknown 
+  // Actor will be delivered to the Session Layer that has the responsibility
+  // to map the local actor address to a global address. This means that it will 
+  // place a request on the Network Layer to check with the other Network Layers
+  // where the given Actor address is hosted.   
+          
 protected:
-
-	virtual void OutboundMessage( const TextMessage & TheMessage,
-																const Address From ) override;
-
-	// A command message arrives on the discovery topic when a remote
-	// endpoint wants to send a message to an actor whose location is unknown.
-	// Thus these requests should be ignored by endpoints not hosting the actor
-	// and a reply should include the endpoint name.
-	//
-  // The currently devised AMQ protocol detects destination actors when another
-  // actor tries to send a message to this actor. If the destination actor
-  // does not exist, i.e. there are no positive responses to the resolution
-  // request, it is undefined what to do and the session layer should cache
-	// the outbound message waiting for the actor to appear.
-	//
-	// However, there is no obligation on an actor to register with the session
-	// layer when it starts up, and there is no guarantee that a particular
-	// remote actor ever will start up. The only possible protocol must therefore
-	// be to retry the discovery request later. The session layer will do this
-	// for pending discovery requests every time it needs to do a new discovery.
-	// Yet, it is possible to push the discovery response if the remote actor
-	// registers with the session layer and the session layer pushes a discovery
-	// request for the local actor, see the handler function below.
-
-private:
-
-	enum class Command : short int
-	{
-		DiscoveryRequest  = 1,
-		DiscoveryResponse = 2,
-		ActorRemoved      = 3,
-		EndpointShutDown  = 4
-	};
-
-	// The handler for this receives the corresponding CMS message and responds
-	// if the actor is on this endpoint.
-
-	void CommandHandler( const cms::Message * TheMessage );
-
-	// ---------------------------------------------------------------------------
-	// Session layer interaction
-	// ---------------------------------------------------------------------------
-	//
-	// A remote actor discovery is initiated by the session layer when a local
-	// actor registers or when a local actor wants to send a message to an
-	// external actor.
-	//
-	// A local actor must be a de-serializing actor in order to receive messages
-	// from the network. When these actors are created, they should register with
-	// the session layer. The session layer will then pro-actively request the
-	// external address of this actor from the network layer and store the
-	// mapping between the global address and the internal actor address. In this
-	// case a discovery response is generated to the other endpoints which may
-	// be waiting for this actor to become available; i.e. there may be unhanded
-	// discovery requests pending.
-	//
-	// The second situation occurs when a local actor wants to send a message
-	// to a remote actor. Then an address resolution request for the remote actor
-	// is sent and then the network layer must engage with network layers in a
-	// protocol to verify the external address of the remote actor.
-
-protected:
-
-	virtual void ResolveAddress( const ResolutionRequest & TheRequest,
+  
+  virtual void ResolveAddress( const ResolutionRequest & TheRequest,
 														   const Address TheSessionLayer ) override;
-
-  // When a resolution request arrives from the network it should be sent to
-  // the session layer that will respond with a resolution response if the
-  // actor exists on this endpoint. The resolved address will then publish
-  // this response on the discovery topic.
-
+                               
+  // A resolution request from other endpoints will be forwarded to the 
+  // Session Layer, and if the Session Layer detects that the requested 
+  // Actor name corresponds to an actor on this endpoint, it will give a 
+  // resolution response to the Network Layer that will forward the global 
+  // address of the local actor on the discovery topic for all other endpoints 
+  // to note. An resolution request is initiated by the endpoint having an 
+  // Actor wanting to send a message to the unknown destination, but all 
+  // endpoint should note the resolution and their Session Layers should 
+  // record the mapping to be prepared if some actor on another endpoint also 
+  // would like to message the same actor some time in the future.
+                               
   virtual void ResolvedAddress( const ResolutionResponse & TheResponse,
 																const Address TheSessionLayer ) override;
-
- 	// The general view on communication is that an actor needs an external
-	// address before it can send a packet because responses will be delivered
-	// to this external address. Thus, when a local actor starts up it may
-  // register with the session layer which will in turn request the external
-  // address for this local actor using the resolve address method. In this
-  // case the external address may be created by the network layer encoding
-  // its own network location into the address. For push technologies, this
-  // may imply that the new actor address is pushed to the remote endpoints so
-  // they are aware of the new actor. In this case it would be a need to inform
-  // remote endpoints when the actor disappears. For this reason a standard
-  // handler is provided to inform the network layer that a local actor is
-  // closing and that its external address can be invalidated.
-
+                                
+  // A consequence of the fact that all Session Layers should cache the global
+  // addresses of remote Actors, is that they also need to know when an Actor 
+  // closes and will no longer be available. The local Session Layer will send 
+  // a request to remove the Actor to the Network Layer that will send this 
+  // information on the discovery topic for the other endpoints to note and 
+  // potentially remove the sender for this actor.
+                                
   virtual void ActorRemoval( const RemoveActor & TheCommand,
 														 const Address TheSessionLayer ) override;
 
-	// ---------------------------------------------------------------------------
-	// Receiving and sending AMQ messages
-	// ---------------------------------------------------------------------------
-	//
-	// An AMQ topic or queue is a termed a destination, and it is possible both
-	// to subscribe to messages from a destination, or send messages to a
-	// destination. There is a small utility function to create the destinations
-  // depending on the type of the destination (topic or queue).
-private:
-
-	using DestinationPointer = std::shared_ptr< cms::Destination >;
-
-	DestinationPointer CreateDestination( const std::string & TopicOrQueue,
-																        ActiveMQ::Message::Destination Type );
-
-	// A producer is created on a destination and can be used to send messages
-	// to that destination only. Hence there is a map of producers associated
-	// with the queues or topics this endpoint can send messages to.
-
-	std::unordered_map< std::string,
-	                    std::unique_ptr< activemq::cmsutil::CachedProducer > >
-  Producers;
-
-	// Producers are created with the same arguments as above and directly
-	// inserted into the map.
-
-	void CreateProducer( const std::string & TopicOrQueue,
-							         ActiveMQ::Message::Destination Type  );
-
-	// Listening to events from arriving messages is different since the message
-	// events will arrive asynchronously and the handling will be done by a
-	// dedicated class that can provide a dedicated function for handling the
-	// arrived message. The standard handler onMessage simply calls a handler
-	// specified at the construction to support different handlers for different
-	// destinations.
-
-	class MessageMonitor : public cms::MessageListener
-	{
-	private:
-
-	  std::unique_ptr< activemq::cmsutil::CachedConsumer > Monitor;
-
-		std::function< void( const cms::Message * TheMessage ) > Handler;
-
-		// The pre-defined message handler just forwards the message pointer to
-		// the handler for processing.
-
-		virtual void onMessage( const cms::Message* TheMessage ) override
-		{	Handler( TheMessage ); }
-
-		// The constructor initialises the listener and sets the handler based
-		// on the given handler function and start the monitor to listen to the
-		// topic. The handler is supposed to be a lambda function since it will
-		// invoke a member function on the network layer class.
-
-	public:
-
-		template< class LambdaFunction >
-		MessageMonitor( cms::Session * TheSession,
-										const DestinationPointer & Destination,
-										const LambdaFunction & HandlerFunction )
-		: Monitor(), Handler( HandlerFunction )
-		{
-		  Monitor = std::make_unique< activemq::cmsutil::CachedConsumer >(
-								  TheSession->createConsumer( Destination.get() ) );
-			Monitor->setMessageListener( this );
-			Monitor->start();
-		}
-
-		// There is no default constructor that can be accidentally used.
-
-		MessageMonitor( void ) = delete;
-
-		// The destructor stops the monitor before it is automatically deleted.
-
-		~MessageMonitor( void )
-		{ Monitor->stop(); }
-	};
-
-  // The message monitors are kept in the same sort of map from the topic or
-	// queue identifier to a unique pointer for the monitor class. However, these
-	// pointers will be created when a new subscription is made and deleted when
-	// the subscription is cancelled. Thus these message handers maintain the
-	// active monitors and stops the one for which the subscription is cancelled.
-
-	std::unordered_map< std::string, std::unique_ptr< MessageMonitor > >
-	Subscriptions;
-
-	// ---------------------------------------------------------------------------
-	// Actor managed subscriptions
+ // ---------------------------------------------------------------------------
+	// Topic subscriptions
 	// ---------------------------------------------------------------------------
 	//
-  // It is easy to imagine that the AMQ server (broker) could be used for other
-	// purposes for some applications. One example is when there are other
-	// applications running providing sensor values and measurements to the actors
-	// of the distributed actor system. Then the receiving actors need to manage
-	// the subscriptions themselves. This is done by sending a subscribe request
-	// to the session layer, and the session layer will then send a subscribe
-	// request to the network layer. This is important because there need not be
-	// a one-to-one mapping between subscriptions and actors. There could be many
-	// actors subscribing to the same topic, and one actor may subscribe to many
-	// topics.
-	//
-	// Once a topic has been subscribed to, it will be a viable destination and
-	// it is also possible to send messages to the same topic. Incoming messages
-	// will be managed exactly as messages on the in-box and just forwarded to
-	// the session layer for distribution.
-
-	class CreateSubscription
-	{
-	public:
-
-		const std::string                    TopicOrQueue;
-		const ActiveMQ::Message::Destination ChannelType;
-
-		CreateSubscription( const std::string NameOfChannel,
-												const ActiveMQ::Message::Destination Type )
-		: TopicOrQueue( NameOfChannel ), ChannelType( Type )
-		{}
-
-		CreateSubscription( const CreateSubscription & Other )
-		: TopicOrQueue( Other.TopicOrQueue ), ChannelType( Other.ChannelType )
-		{}
-
-		CreateSubscription( void ) = delete;
-	};
-
-	// There is a handler for this message that creates the destination and sets
-	// up the subscription.
-
-	void NewSubscription( const CreateSubscription & Request,
-												const Address From );
-
-	// Cancelling a subscription follows the same pattern where the session layer
-	// sends a cancel subscription message. In this case only the channel name
-	// is needed.
-
-	class CancelSubscription
-	{
-	public:
-
-		const std::string TopicOrQueue;
-
-		CancelSubscription( const std::string & NameOfChannel )
-		: TopicOrQueue( NameOfChannel )
-		{}
-
-		CancelSubscription( const CancelSubscription & Other )
-		: TopicOrQueue( Other.TopicOrQueue )
-		{}
-
-		CancelSubscription( void ) = delete;
-	};
-
-	// Given that the actor system is asynchronous there may be incoming messages
-	// on this queue over the time epoch from the moment the session layer sends
-	// the cancellation request until it has been implemented by the network
-	// layer. The handler for the cancel subscription will therefore return the
-	// cancel subscription message back to the session layer (sender) to notify
-	// that this topic is now completely removed.
-
-	void RemoveSubscription( const CancelSubscription & Request,
-													 const Address From );
-
-	// Furthermore, there is no information about the format of the messages on
-	// the subscribed queue or topic. Arriving messages can therefore not be
-	// supposed to follow the above format with sender and destination encoded
-	// in the message properties. There is consequently a special handler for
-	// these messages taking the topic as the second argument and using this
-	// as the sender actor name.
-
-	void SubscriptionHandler( const std::string TopicOrQueue,
-														const cms::Message * TheMessage );
-
-	// The above messages can be sent from the session layer and only from the
-	// session layer. They are therefore declared as private, and the session
-	// layer is given special privileges.
-
-	friend class SessionLayer;
-
-	// ---------------------------------------------------------------------------
-	// Shut down management
-	// ---------------------------------------------------------------------------
-	//
-	// When a shut down message is received from the session layer it means that
-	// all the local actors have disconnected. The shut down handler will then
-	// just inform the other AMQ peers that this endpoint is shutting down, and
-	// then stop the connection.
-
-	virtual void Stop( const Network::ShutDown & StopMessage,
-										 const Address Sender ) override;
-
-	// ---------------------------------------------------------------------------
-	// Constructor and destructor
-	// ---------------------------------------------------------------------------
-	//
-	// The constructor takes the global identifier of this network endpoint as
-	// its name and the IP of the server to connect to and optionally the port
-	// used to reach the AMQ message broker. If no port is given, the standard
-	// port 61616 will be used.
-
+  // Subscriptions to individual topics are made by a dedicated message as 
+  // the topic may not be associated with a remote endpoint and therefore there
+  // is no external address to be resolved. There are two possible actions for 
+  // the topic subscription: it can be opened as a subscription, it can be 
+  // opened as a publisher. In both cases the topic can be closed when it is 
+  // no longer needed.
+                               
 public:
 
-	NetworkLayer( const std::string & EndpointName,
-								const std::string & AMQServerIP,
-							  const std::string & Port = "61616" );
+  class TopicSubscription
+  {
+  public:
+    
+    enum class Action
+    {
+      Subscription,
+      Publisher,
+      CloseSubscription,
+      ClosePublisher
+    };
+    
+    const Action    Command;
+    const TopicName TheTopic;
+    
+    TopicSubscription( const Action & WhatToDo, const TopicName & GivenTopic )
+    : Command( WhatToDo ), TheTopic( GivenTopic )
+    {}
+    
+    TopicSubscription( void )  = delete;
+    TopicSubscription( const TopicSubscription & Other ) = default;
+    ~TopicSubscription( void ) = default;
+  };
+
+protected:
+
+  // The handler for this allows the Session Layer to set up subscriptions. 
+  // The actors must subscribe to the Session layer to allow it to forward 
+  // incoming messages from subscribed topics to multiple local Actors.
+  
+  virtual void ManageTopics( const TopicSubscription & TheMessage, 
+                             const Address TheSessionLayer );
+                     
+  // ---------------------------------------------------------------------------
+	// Message handling
+	// ---------------------------------------------------------------------------
+	//
+  // When an actor sends a message to a remote actor a message is sent from 
+  // the Session layer. The handler is checking if the publisher for the given 
+  // remote receiving Actor has been created. If so, the send action is just 
+  // queued. However, if the sender has not been defined, then an action is 
+  // queued to create the sender and the received message is cached for 
+  // later sending when the publisher is ready.
+
+  virtual void OutboundMessage(const Theron::AMQ::Message & TheMessage, 
+                               const Address TheSessionLayer) override;
+
+  // ---------------------------------------------------------------------------
+	// Starting and stopping the Network Layer
+	// ---------------------------------------------------------------------------
+	//
+  // The constructor takes the endpoint name which will act as the actor name 
+  // string. The second argument is the URL string used to connect to the 
+  // broker, and the port number for the connection. The latter is given as an 
+  // integer to ensure that it is a numerical value. It is also possible to 
+  // give a set of connection options containing for instance the user name 
+  // and password to connect to the AMQ broker, and various security related 
+  // options. One can also give a property map for the messages that are sent.
+  // This will be applied first, and then the 'to' and 'reply-to' fields are 
+  // overwritten by the information in the outbound message from the Session
+  // layer.
+                     
+public:
+                     
+  NetworkLayer( const Theron::AMQ::GlobalAddress & EndpointName,
+								const std::string & BrokerURL,
+							  const unsigned int & Port = 61616,
+                const proton::connection_options & GivenConnectionOptions 
+                  = proton::connection_options(),
+                const proton::message::property_map & GivenMessageOptions 
+                  = proton::message::property_map() );
 
 	// The default constructor is deleted
 
 	NetworkLayer( void ) = delete;
 
-	// The destructor closes the connection and stops the AMQ library
+  // There is a message handler to allow the network communication to be shut 
+  // down in a structured manner. If the status is that the Network Layer is 
+  // connected when the destructor is invoked, it will call the stop function 
+  // to close connections. It will send a message on the control plane channel 
+  // to indicate to all the other instances that the endpoint is closing.
 
-	virtual ~NetworkLayer( void );
+protected:
+  
+  virtual void Stop( const Network::ShutDown & StopMessage,
+										 const Address Sender ) override;
+
+	// The destructor closes the connection and stops the AMQ connection by 
+  // calling the above stop message handler directly.
+                     
+public:
+  
+	virtual ~NetworkLayer();
 };
 
-}      // End of name space Active MQ
-#endif // THERON_AMQ_NETWORK_LAYER
+}       // End name space AMQ
+#endif  // THERON_AMQ_NETWORK_LAYER

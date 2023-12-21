@@ -22,26 +22,29 @@
   implemented by this actor before sending the message, or before delivering a
   received message to the protocol engine.
 
-  Author: Geir Horn, University of Oslo, 2015-2019
-  Contact: Geir.Horn [at] mn.uio.no
-  License: LGPL3.0
+   Author and Copyright: Geir Horn, University of Oslo
+  Contact: Geir.Horn@mn.uio.no
+  License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 =============================================================================*/
 
 #ifndef THERON_NETWORK_LAYER
 #define THERON_NETWORK_LAYER
 
-#include <string>
-#include <type_traits>
-#include <stdexcept>
-#include <ostream>
+// Standard headers
+
+#include <string>				// For standard strings
+#include <type_traits>	// For good templates
+#include <stdexcept>		// For indicating errors
+#include <ostream>			// For formatting error messages
+#include <concepts>			// For testing template parameters
+
+// Theron++ actor system files
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
 
 #include "Communication/NetworkEndpoint.hpp"
 #include "Communication/LinkMessage.hpp"
-
-#include <iostream> // TEST for debugging information
 
 namespace Theron
 {
@@ -54,83 +57,78 @@ namespace Theron
 // The network layer depends on the external message format to be exchanged
 // with remote network endpoints.
 
-template< class ExternalMessage >
+template< ValidLinkMessage ExternalMessage >
 class NetworkLayer : virtual public Actor,
-										 virtual public StandardFallbackHandler
+                     virtual public StandardFallbackHandler
 {
 public:
 
   using MessageType = ExternalMessage;
 
-  // For the link server it is not essential that the external message confirms
-  // to the Link Message interface, but it is a requirement for the protocol
-  // engine, hence the condition is enforced also here.
-
-  static_assert( std::is_base_of<
-				  LinkMessage< typename ExternalMessage::AddressType >,
-				  ExternalMessage >::value,
-				  "Network Layer: External message must be derived from Link Message" );
-
- 	// ---------------------------------------------------------------------------
-	// Resolving addresses
-	// ---------------------------------------------------------------------------
-	//
+   // ---------------------------------------------------------------------------
+  // Resolving addresses
+  // ---------------------------------------------------------------------------
+  //
   // When an actor address needs to be found in the distributed actor system
   // The address resolution and assignment of the external address is dependent
   // on the actual communication technology being used. Hence, the session
-  // layer will send a resolution request for a given actor address.
+  // layer will send a resolution request for a given remote actor address.
+  // The message also contains the requesting actor so that the remote actor 
+  // can set up a 'subscription' for this the local actor.
 
   class ResolutionRequest
   {
-	public:
+  public:
 
-		const Address NewActor;
+    const Address RequestedActor;
+    const typename ExternalMessage::AddressType RequestingActor;
 
-		ResolutionRequest( const Address & TheActor )
-		: NewActor( TheActor )
-		{ }
+    ResolutionRequest( const Address & TheRemoteActor, 
+                       const typename ExternalMessage::AddressType & LocalActor)
+    : RequestedActor( TheRemoteActor ), RequestingActor( LocalActor )
+    { }
 
-		ResolutionRequest( const ResolutionRequest & Other )
-		: NewActor( Other.NewActor )
-		{ }
+    ResolutionRequest( const ResolutionRequest & Other )
+    : ResolutionRequest(  Other.RequestedActor, Other.RequestingActor ) 
+    { }
 
-		ResolutionRequest( void ) = delete;
-	};
+    ResolutionRequest( void ) = delete;
+  };
 
-	// The handler for this message is left to the concrete protocol to
-	// implement, but it should send back the external address for the given
-	// actor. It could be that the external address encodes the actor address,
-	// but this is technology dependent, and a generic response is returned
-	// for which the actor's address is explicitly recorded.
+  // The handler for this message is left to the concrete protocol to
+  // implement, but it should send back the external address for the given
+  // actor. It could be that the external address encodes the actor address,
+  // but this is technology dependent, and a generic response is returned
+  // for which the actor's address is explicitly recorded.
 
-	class ResolutionResponse
-	{
-	public:
+  class ResolutionResponse
+  {
+  public:
 
-		const typename ExternalMessage::AddressType GlobalAddress;
-		const Address TheActor;
+    const typename ExternalMessage::AddressType 
+    RequestedActor, RequestingActor;
 
-		inline ResolutionResponse(
-					const typename ExternalMessage::AddressType & GlobalReference,
-					const Address & NewActor )
-		: GlobalAddress( GlobalReference ), TheActor( NewActor )
-		{ }
+    inline ResolutionResponse(
+          const typename ExternalMessage::AddressType & ResolvedAddress,
+          const typename ExternalMessage::AddressType & ActorRequesting )
+    : RequestedActor( ResolvedAddress ), RequestingActor( ActorRequesting )
+    { }
 
-		inline ResolutionResponse( const ResolutionResponse & Other )
-		: ResolutionResponse( Other.GlobalAddress, Other.TheActor )
-		{ }
+    inline ResolutionResponse( const ResolutionResponse & Other )
+    : ResolutionResponse( Other.RequestedActor, Other.RequestingActor )
+    { }
 
-		ResolutionResponse( void ) = delete;
-	};
+    ResolutionResponse( void ) = delete;
+  };
 
-	// The handler for the resolution request cannot be implemented because it
-	// depends on the technology used for the link, but it should take a
-	// resolution request and return a resolution response to the session layer.
+  // The handler for the resolution request cannot be implemented because it
+  // depends on the technology used for the link, but it should take a
+  // resolution request and return a resolution response to the session layer.
 
 protected:
 
-	virtual void ResolveAddress( const ResolutionRequest & TheRequest,
-														   const Address TheSessionLayer ) = 0;
+  virtual void ResolveAddress( const ResolutionRequest & TheRequest,
+                               const Address TheSessionLayer ) = 0;
 
   // It is the task of the session layer to check if a resolution request
   // arriving on the network is a local (de-serializing) actor. Hence when
@@ -140,7 +138,7 @@ protected:
   // send the resolution response back to remote endpoints.
 
   virtual void ResolvedAddress( const ResolutionResponse & TheResponse,
-																const Address TheSessionLayer ) = 0;
+                                const Address TheSessionLayer ) = 0;
 
   // There is also a mechanism to remove a local actor that is previously
   // registered. The external address should in this case be known, and
@@ -150,29 +148,29 @@ public:
 
   class RemoveActor
   {
-	public:
+  public:
 
-		const typename ExternalMessage::AddressType GlobalAddress;
+    const typename ExternalMessage::AddressType GlobalAddress;
 
-		RemoveActor( const typename ExternalMessage::AddressType & GlobalReference )
-		: GlobalAddress( GlobalReference )
-		{ }
+    RemoveActor( const typename ExternalMessage::AddressType & GlobalReference )
+    : GlobalAddress( GlobalReference )
+    { }
 
-		RemoveActor( void ) = delete;
-		RemoveActor( const RemoveActor & Other )
-		: GlobalAddress( Other.GlobalAddress )
-		{ }
-	};
+    RemoveActor( void ) = delete;
+    RemoveActor( const RemoveActor & Other )
+    : GlobalAddress( Other.GlobalAddress )
+    { }
+  };
 
 protected:
 
-	virtual void ActorRemoval( const RemoveActor & TheCommand,
-														 const Address TheSessionLayer ) = 0;
+  virtual void ActorRemoval( const RemoveActor & TheCommand,
+                             const Address TheSessionLayer ) = 0;
 
-	// ---------------------------------------------------------------------------
-	// Input and output messages
-	// ---------------------------------------------------------------------------
-	//
+  // ---------------------------------------------------------------------------
+  // Input and output messages
+  // ---------------------------------------------------------------------------
+  //
   // There is a handler to receive the messages from the session server
   // It implements the specific actions of the link layer protocol necessary to
   // send the message, and it is the Theron message handler called when an
@@ -180,24 +178,24 @@ protected:
   // implemented by derived protocol specific classes.
 
   virtual void OutboundMessage( const ExternalMessage & TheMessage,
-																const Address From ) = 0;
+                                const Address From ) = 0;
 
-	// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
   // Shut-down management
   // ---------------------------------------------------------------------------
-	//
-	// When the shut down message arrives, all local actors shall have asked to
-	// be removed, and the network layer must just inform its peers that this
-	// endpoint is shutting down and then close the connection. These actions
-	// are technology dependent and the handler for the shut down message cannot
-	// be provided at this stage.
+  //
+  // When the shut down message arrives, all local actors shall have asked to
+  // be removed, and the network layer must just inform its peers that this
+  // endpoint is shutting down and then close the connection. These actions
+  // are technology dependent and the handler for the shut down message cannot
+  // be provided at this stage.
 
-	virtual void Stop( const Network::ShutDown & StopMessage,
-										 const Address Sender ) = 0;
+  virtual void Stop( const Network::ShutDown & StopMessage,
+                     const Address Sender ) = 0;
 
-	// ---------------------------------------------------------------------------
-	// Constructor and destructor
-	// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
   //
   // The constructor initialises the actor making sure that it has the right
   // name, and registers the handler for messages received from the protocol
@@ -206,25 +204,24 @@ protected:
 
 public:
 
-	// The constructor initialises the base classes and registers the the
-	// outbound message handler.
+  // The constructor initialises the base classes and registers the the
+  // outbound message handler.
 
-	NetworkLayer( std::string ServerName = "NetworkLayerServer" )
-	: Actor( ServerName ), StandardFallbackHandler( ServerName )
-	{
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolveAddress  );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolvedAddress );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::ActorRemoval    );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );
-		RegisterHandler( this, &NetworkLayer< ExternalMessage >::Stop            );
-	}
+  NetworkLayer( std::string ServerName = "NetworkLayerServer" )
+  : Actor( ServerName ), StandardFallbackHandler( ServerName )
+  {
+    RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolveAddress  );
+    RegisterHandler( this, &NetworkLayer< ExternalMessage >::ResolvedAddress );
+    RegisterHandler( this, &NetworkLayer< ExternalMessage >::ActorRemoval    );
+    RegisterHandler( this, &NetworkLayer< ExternalMessage >::OutboundMessage );
+    RegisterHandler( this, &NetworkLayer< ExternalMessage >::Stop            );
+  }
 
   // Finally there is a virtual destructor
 
   virtual ~NetworkLayer( void )
   { };
 };
-
 
 }      // End name space Theron
 #endif // THERON_NETWORK_LAYER

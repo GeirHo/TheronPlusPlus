@@ -1,84 +1,42 @@
-
 /*==============================================================================
-Active Message Queue Session Layer
+Active Message Queue (AMQ): Session Layer
 
-The general use use of the AMQ for connecting various peer endpoints hosting
-Theron++ actors is described in the ActiveMQ.hpp header. The implementation
-maps onto Theron++ communication architecture with a Network Layer actor
-serving the technology specific protocol, a Session Layer described here, and
-a Presentation Layer responsible for serializing messages that have receivers
-on remote endpoints.
+The generic Session Layer handles the message transport and address resolution
+for actors on remote endpoints. It also handles the registration of local 
+actors and the protocol for closing the network connection and the external 
+availability of this endpoint, and close sessions to actors on closing remote 
+endpoints.
 
-The Session Layer is responsible for keeping track of the addresses of external
-actors receiving messages from actors on this endpoint. It is responsible of
-informing the Session Layer actors on remote endpoints about new communicating
-actors on this endpoint, and caches the external addresses for these local
-actors. Thus the external address of a remote actor should, in theory, already
-be available when a local actor sends a message to this remote actor. Should
-this not be the case, then the Session Layer initiates an address resolution
-transaction with the other peer endpoints and caches the messages for the
-remote actor until one of the other endpoints confirm the external actor
-address. When resolution requests arrives from remote endpoints, the session
-layer looks up in its registry of local actors and initialises the resolution
-response if the requested actor is hosted on this endpoint. All of this is
-standard operation of the Session Layer independent of the underling
-communication protocol and technology.
+The AMQ Session Layer adds support for the direct topic publish and subscribe
+modes.
 
-The AMQ Session Layer adds support for an actor to subscribe to other topics
-on the AMQ server (message broker). The only requirement is that the
-publishers on the topic send serialized AMQ text messages. This can typically
-be topics for recorded sensor values that are not originating from the activity
-of remote actors. As multiple local actors can subscribe to the same topic,
-the Session Layer maintains these subscriptions and dispatches incoming messages
-on the topic to all local actors subscribing to the topic. A subscription can
-be lifted at any time if a local actor no longer wants messages from a given
-topic.
-
-References:
-
-Author and Copyright: Geir Horn, 2017-2019
-License: LGPL 3.0
+Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
+License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 ==============================================================================*/
 
-#ifndef THERON_ACTIVEMQ_CLIENT
-#define THERON_ACTIVEMQ_CLIENT
+#ifndef THERON_AMQ_SESSION_LAYER
+#define THERON_AMQ_SESSION_LAYER
 
 // Standard headers
 
-#include <string>            // Standard strings
-#include <unordered_map>     // For mapping subscribed topics to actors
-#include <unordered_set>     // For storing topic subscribers
+#include <string>        // For standard strings
+#include <unordered_map> // For O(1) lookups of topics
+#include <set>           // For actors subscrigin to topics
 
-// Headers for the Active Message Queue interface and the C++ Messaging System
-// (CMS) [2]. Unfortunately, the C++ library for AMQ is written to be similar
-// to the Java interface and it therefore suffers from Java or C-style ways of
-// using the various classes and functions. It also passes message and object
-// pointers around without clarifying the ownership or using shared pointers.
-// This interface is made more C++ like in this implementation, and pointers
-// to CMS objects are always protected by smart pointers if they are created
-// within the scope of this implementation.
-//
-// Note that the location of these files my be non-standard and the current
-// version is under
-// /user/include/activemq-cpp-3.9.4
-
-#include <activemq/library/ActiveMQCPP.h>
-#include <activemq/core/ActiveMQConnectionFactory.h>
-#include <cms/Connection.h>
-
-// Headers for the Theron++ actor system
+// Theron++ Actor Framework headers
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
-#include "Communication/SerialMessage.hpp"
+#include "Communication/NetworkEndpoint.hpp"
 #include "Communication/SessionLayer.hpp"
 
-// AMQ specific Theron++ classes
+// Active Message Queue network servers
 
-#include "Communication/AMQ/AMQMessages.hpp"
+#include "Communication/AMQ/AMQMessage.hpp"
 #include "Communication/AMQ/AMQNetworkLayer.hpp"
 
-namespace Theron::ActiveMQ
+namespace Theron::AMQ
 {
 /*==============================================================================
 
@@ -86,107 +44,116 @@ namespace Theron::ActiveMQ
 
 ==============================================================================*/
 //
-// The actor class encapsulating the Active MQ interface is performing tasks
-// close to the role of the session layer of the OSI stack mapping external
-// and internal communication layers and maintaining sessions.
+// The session layer inherits the standard Session Layer using the AMQ 
+// messsage as the external message type to be exchanged with the Network 
+// Layer.
 
 class SessionLayer
 : virtual public Actor,
   virtual public StandardFallbackHandler,
-	virtual public Theron::SessionLayer< TextMessage >
+	virtual public Theron::SessionLayer< AMQ::Message >
 {
-	// The topics subscribed to by at least one actor on this endpoint are
-	// stored in an unordered map so that they can easily be looked up. As
-	// there can be many subscribers per topic, these are kept in a set of
-	// actors to ensure that each actor only receives one copy of a message on
-	// the topic.
-
 private:
 
-	std::unordered_map< std::string, std::unordered_set< Address > >
-	Subscriptions;
-
-	// ---------------------------------------------------------------------------
-	// Subscription management messages
-	// ---------------------------------------------------------------------------
-	//
-	// Actors on this endpoint subscribes to topics by using the messages
-	// defined in the network layer. However, to ensure that these are seen as
-	// session layer defined messages by the actors, they are private in the
-	// Network Layer server, and redeclared as public here.
+  using GenericSessionLayer = Theron::SessionLayer< AMQ::Message >;
 
 public:
 
-	using CreateSubscription = NetworkLayer::CreateSubscription;
-	using CancelSubscription = NetworkLayer::CancelSubscription;
+  // --------------------------------------------------------------------------
+  // Topic management
+  // --------------------------------------------------------------------------
+  //
+  // Topics have a name, and local actors can publish to topics, or they can 
+  // subscribe to topics to receive messages from the topics. The use of 
+  // a topic must be explicit because otherwise the Network Layer will try to 
+  // resolve the name the topic as the name of an actor on a remote endpoint. 
+  // Since the topic name does not exist as an actor on any endpoint, the 
+  // resolution will stay pending and the topic will not be used. Hence, local
+  // actors that wants to post or receive information from a topic must 
+  // make a topic subscription to the Session Layer. The format of the message
+  // is identical to the format the session layer will use towards the Network
+  // Layer to set up the topic senders or receivers, and so the message is 
+  // just re-used for actors on this topic to send to the Session Layer.
 
-	// The corresponding handlers basically maintains the subscription map of
-	// active subscriptions. If an arriving subscription is for a topic or queue
-	// not yet subscribed, then a subscription request is sent to the network
-	// layer. Otherwise, the actor is just added to the subscriber set for an
-	// existing subscription.
+  using TopicSubscription = NetworkLayer::TopicSubscription;
+
+  // The topic identifier is a global address without an endpoint, and 
+  // with respect to the global address format it corresponds to the actor 
+  // name of inbound messages. The inbound message will be forwarded to all 
+  // subscribing actors, and these are stored using the topic identifier as 
+  // the key.
+  // 
+  // The same goes for actors publishing to topics. As there can be many local
+  // actors publishing, then it is necessary to track the topics that are use
+  // for publishing messages and the actors using these topics. The topic is 
+  // closed when there are no more publishers.
 
 private:
 
-	void NewSubscription( const CreateSubscription & Request,
-												const Address From );
-
-	// The handler removing subscriptions are basically reversing the
-	// subscription requests, and when the last actor subscribing to a topic or
-	// queue deletes the subscription, then a notification is sent to the
-	// Network Layer that the corresponding message listener can be shut down.
-
-	void RemoveSubscription( const CancelSubscription & Request,
-													 const Address From );
-
-	// When the session layer is requested to stop it will force a removal of
-	// all active subscriptions, and hence it needs to override the handler
-	// for the stop messages.
-
-	virtual void Stop( const Network::ShutDown & StopMessage,
-										 const Address Sender ) override;
-
-	// ---------------------------------------------------------------------------
-	// Inbound messages
-	// ---------------------------------------------------------------------------
-	//
-	// The overloaded version of the inbound message handler checks if the
-	// arriving message has a receiver actor name or not. If the name is empty,
-	// it means that the message comes from a topic subscribed to and not from
-	// actors on remote endpoints. It will then be forwarded to all actors
-	// subscribing to this topic with the topic name as the sender actor. It is
-	// the responsibility of the receiving actor never to respond to such a
-	// message as it will just be held unsent by the session layer.
+  std::unordered_map< TopicName, std::set< Address > > 
+  TopicSubscribers, TopicPublishers;
 
 protected:
 
-	virtual void InboundMessage( const TextMessage & TheMessage,
+  // The handler for the topic subscriptions will handle subscriptions from 
+  // local actors to remote topics. 
+  
+  virtual void ManageTopics( const TopicSubscription & TheMessage, 
+                             const Address PubSubActor );
+
+  // --------------------------------------------------------------------------
+  // Managing actors
+  // --------------------------------------------------------------------------
+  //
+  // If an actor closes without unsubscribing from the topics inbound messages
+  // will continuously be forwarded to the non-existing actor and this could 
+  // cause problems. Therefore, if an actor closes without having unsubscribed
+  // from any topics, it will be automatically unsubscribed. To ensure this, 
+  // the handler function for remove actor message must be overloaded.
+                    
+  virtual void RemoveLocalActor( const RemoveActorCommand & Command,
+                                 const Address ClosingActor ) override;
+
+  // --------------------------------------------------------------------------
+  // Messages on topics
+  // --------------------------------------------------------------------------
+  //
+  // Messages arriving from remote endpoints must first be checked to see 
+  // if they come from topics and if so it should just be sent to all the 
+  // subscribing actors. If the message is not from a topic, it is from a 
+  // remote actor and those sessions will be managed by the standard Session 
+  // Layer. 
+
+  virtual void InboundMessage( const AMQ::Message & TheMessage,
 										           const Address TheNetworkLayer ) override;
 
- 	// ---------------------------------------------------------------------------
-	// Constructor and destructor
-	// ---------------------------------------------------------------------------
-	//
-  // The only thing that is needed to create the AMQ session layer is the
-  // actor name, although it does have a default name for this endpoint as
-  // there should be only one AMQ session layer per endpoint.
+  // The same consideration are used for outbound messages. If the name of the 
+  // destination actor correspond with a topic name, then the message is just 
+  // forwarded to the Network Layer. If the name is not known as a publisher 
+  // topic, it may be a remote actor and the standard Session Layer will look 
+  // up the address or initiate an address resolution request if the remote 
+  // actor name is unknown.
+
+  virtual void OutboundMessage( const InternalMessage & TheMessage,
+                                const Address ThePresentationLayer ) override;
+
+  // --------------------------------------------------------------------------
+  // Constructor and destructor
+  // --------------------------------------------------------------------------
+  //
+  // The constructor only takes the name of the endpoint and the name of the 
+  // Session Layer as arguments. The default constructor and the copy 
+  // constructor are removed, and the virtual destructor is just the default.
 
 public:
 
-  SessionLayer( const std::string & ServerName = "AMQSessionLayer" );
+  SessionLayer(const std::string & TheEndPoint, const std::string & ServerName);
 
-	// The destructor will ask the network layer to remove all the special topic
-	// or queue listeners created if there are still subscriptions active that
-	// have not been cleared by the endpoint actors. By definition this should
-	// not be necessary as closing the Session Layer should be followed by
-	// closing the Network Layer which will again close all listeners and stop
-	// the connection with the AMQ Broker. Hence, this is just done as a
-	// precaution to ensure no further errors.
+  SessionLayer() = delete;
+  SessionLayer( const SessionLayer & Other ) = delete;
 
-	virtual ~SessionLayer();
+  virtual ~SessionLayer( void );
 };
 
-
-
-}      // Name space ActiveMQ
-#endif // THERON_ACTIVEMQ_CLIENT
+}      // Name space Theron AMQ
+#endif // THERON_AMQ_SESSION_LAYER

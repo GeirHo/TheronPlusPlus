@@ -1,154 +1,113 @@
-/*=============================================================================
-Active Message Queue interface
+/*==============================================================================
+Active Message Queue Interface
 
 The Active Message Queue (AMQ) [1] is a server based messaging system where
-various clients can exchange messages via a server (message broker) using
-the following two models of communication.
+various clients can exchange messages via a server (called a message broker). 
+The interface to the AMQ server (broker) is based on the Qpid Proton [2] 
+Application Programming Interface (API) [3]. The Network Layer encapsulates 
+all Proton activities and is the handler for all Proton call-backs. 
 
-1. Publish-subscribe: A "topic" is defined on the message broker and clients
-   in the system can subscribe to the topic and will receive the messages
-   other clients publish to this topic.
-2. Queue-to-workers: A queue held by the message broker and the subscribers
-   receives the messages put to this queue in a round-robin way.
+The Network Layer represents externally the Actors on an endpoint. As an Actor 
+does not know where another Actor is located, Actor endpoint locations will be 
+resolved for distributed Actor systems using a protocol among the Network 
+Layers. There is a dedicated AMQ topic 'TheronPlusPlus' used for this purpose. 
+When a local Actor sends a message that can not be delivered locally, the 
+message will be cached first at the Session Layer sending a resolution request 
+to the Network Layer. An endpoint resolution request will be posted on the 
+'TheronPlusPlus' topic. The endpoint hosting the searched Actor 
+will then set up a Subscription for the requesting Actor topic knowing that 
+a message will be coming soon, and respond back on the 'TheronPlusPlus' topic
+the global address of the requested Actor. All endpoints will cache all 
+discovered global addresses to avoid resolving an address again. 
 
-Implementing a distributed Theron++ actor system implies having actors on many
-different endpoints, and any actor should be able to send a message to any
-other actor. Essentially this calls for a peer-to-peer endpoint overlay network.
-Furthermore, just like actors can be created and destroyed at run-time,
-endpoints of the system may come and go. Thus there is a need for mechanism
-that enables a new endpoint to join the communication graph of the other
-endpoints.
+When an Actor closes its address will be broadcast so that all remote endpoints 
+having subscriptions for the closing Actor will remove these. Another broadcast
+will follow when an endpoint closes to indicate that all Actors on this endpoint
+are unavailable and all publishers for these actors should be removed. 
 
-A publish-subscribe model requires some tweaking for a dynamic peer-to-peer
-system. A new endpoint can be directed to subscribe to one of the other peers'
-publish channel, but when the owner of that channel has no knowledge about the
-subscribers, it cannot subscribe back to establish a two-way communication with
-the new endpoint, and tell the new endpoint about other peers it may know about.
-This can be solved in a peer-to-peer system by having a pre-defined topic for
-the endpoints. Ideally, this should be persisted so that new endpoints can just
-subscribe to the topic and thereby receive all past messages sent to this topic.
-However, this may require a special configuration of the message broker, and
-it cannot be an assumption for the endpoint discovery. Instead, a very simple
-protocol is being used: Each joining endpoint simply subscribes to a pre-defined
-"TheronPlusPlus" topic on a given broker. This channel will be used for the
-actor discovery protocol described next.
+This is the basic Actor-to-Actor protocol. However it is also possible for an 
+Actor to request a topic for just publishing information without knowing if
+there is any remote Actor subscribing to these messages. On the same note, an 
+Actor can also subscribe to any topic, even if the publisher for that topic is 
+not an Actor. One only needs to obey the use of the AMQ headers:
+  - The 'to' field is the 'topic', which could be an Actor address
+  - The 'reply-to' field is the Actor or topic sending the message.
+  - The 'subject' is the command only on the 'TheronPlusPlus' control topic
+  - The 'body' is defined only for the 'TheronPlusPlus' control topic
+  
+The main purpose of the Session Layer is to maintain a bidirectional mapping 
+between the global address of an Actor and its local address since the global 
+address depends on the underlying Network Layer technology. As described above,
+the Session Layer will initiate a global address resolution if it does not have 
+the mapping entry for the requested global Actor. The second task of the 
+Session Layer is to keep track of 'sessions' between local Actors and external 
+actors. These sessions are opened when any of the two Actors sends the first 
+message, and definitely closed if any of the two actors closes, or if the 
+endpoint hosting remote actors closes forcing all sessions with these actors to
+close.
 
-There are three approaches possible for the actor-to-actor communication, all
-with their pros and cons:
+The Presentation Layer is mapping messages from a binary message used among 
+Actors on this endpoint to a network message that can be transmitted across 
+the network. 
 
-I.   There is one common message channel where all endpoints post messages from
-     their actors. This is conceptually simple, but all messages from all goes
-     through this topic, and the messages arrives at all endpoint also those not
-     having an actor with the destination identifier.
-II.  Each endpoint has an associated actor message topic and publishes messages
-     from its actors on this topic. Essentially this is the same as the first
-     option, but endpoints with no communication will not need to subscribe.
-     All subscribing endpoints gets all sent messages and receiver side filters
-     must be applied to ignore messages for actors not on the current endpoint.
-III. There is a destination actor discovery: The sending actor's endpoint sends
-     a discovery message on the pre-defined channel. The endpoint hosting the
-     destination actor sends a "hosting message" on the pre-defined
-     discovery topic. When this is received by the sending endpoint, it will
-     publish message on hold on the right endpoint-to-endpoint topic. This will
-     make the data traffic endpoint peer-to-peer, and avoid flooding for the
-     other endpoints, at the expense of a longer delay for the first message on
-     an actor-to-actor communication pair.
-
-The one-to-one actor-to-actor communication is application defined and based
-on the actor names. Distributing the actor system across several endpoints
-can be done to increase performance or for architectural reasons, but it is
-still one actor system. Thus, there should be only one other endpoint
-responding to an actor discovery message. The outgoing message is then published
-to in-box of the endpoint of the destination actor. Consequently, each endpoint
-subscribes to a AMQ topic having the endpoint name to receive messages for
-actors running on that endpoint.
-
-The implementation here follows the concept of the Theron++ transparent
-communication over the following layers:
-
-A. The network layer taking care of the AMQ specific parts. It initializes the
-   AMQ library, connects to the server, and subscribes to two topics: The
-   discovery channel "TheronPlusPlus" and the in-box for data messages with
-   the same name as the endpoint.
-B. The session layer mapping actors to external endpoint (topics). When
-   receiving a discovery request it will check if the requested actor is local,
-	 if it is a response will be sent, otherwise the message will be discarded.
-	 When a discovery has been made, the external endpoint is cached as a topic
-	 for the external actor. As actors can be created and destroyed, and nobody
-	 needs to inform anyone about such events, the cache will be considered
-	 valid only for a limited amount of time. By default one hour. If there has
-	 been no messages sent to a remote actor for that amount of time, the
-	 cached endpoint topic will be removed, and a new discovery must be done on
-	 the next message for this remote actor.
-
-However, the AMQ may also be used for data acquisition and used to distribute
-messages from entities that are not remote actors. A receiving actor may
-subscribe to any topic by sending a subscription message to the session layer.
-The session layer will then request a subscription to be made by the network
-layer, and messages received on these topics will have an empty sender actor.
-The session layer will dispatch all these messages to the subscribing actors.
-This implies that a subscribing actor should unsubscribe before closing to
-avoid that further notification will be sent to a non-existing receiver actor.
-
-IMPORTANT: Since the transparent communication of Theron++ assumes that the
-messages sent and received are serialised, only text messages are supported in
-the current implementation. It should be the job of the presentation layer to
-implement a higher level protocol for serialising or de-serialising the arrived
-string.
-
-When this AMQ interface is used, the application must be linked with the
-AMQ library and the SSL library is also necessary since the interface uses
-Open SSL for encrypted communication (if needed) according to Kevin Boone [4]:
-
--lactivemq-cpp -lssl
+The EndPoint Actor is encapsulating these three layers for a given network 
+protocol to ensure that they all work on compatible address and message formats.
+Hence, in an application only the AMQ End Point Actor needs to be started, and
+the following parameters must be given to its constructor:
+1. The name of the endpoint. All external addresses will contain this 
+   endpoint name in the global address, see the AMQ Message header defining 
+   the global address format.
+2. The URL of the AMQ message Broker to be used
+3. The network port of the AMQ Broker to be used (an integer)
+4. The name string of the Network Layer Actor
+5. The name string of the Session Layer Actor
+6. The name string of the Presentation Layer
+7. The Qpid Proton Connection Option class. This is given as a class since it 
+   contains the parameters needed to connect to the server, like the user name 
+   and password, as well as settings for encrypting the communication.
+8. The Qpid Proton Message Properties class. These message properties will be 
+   added to all outbound messages. Hence if one wants to use specific message 
+   properties they must not be set in this default class as the default will
+   override the specific properties set in a message if they are given in the 
+   property class passed to the AMQ Endpoint class. The 'to' and 'reply-to'
+   fields will always be set as indicated above.
 
 References:
-
 [1] http://activemq.apache.org/
-[2] http://activemq.apache.org/cms/index.html
-[3] http://activemq.apache.org/cms/cms-api-overview.html
-[4] http://kevinboone.net/cmstest.html
+[2] https://qpid.apache.org/proton/index.html
+[3] https://qpid.apache.org/releases/qpid-proton-0.39.0/proton/cpp/api/index.html
 
-Author and Copyright: Geir Horn, University of Oslo, 2018-2019
-License: LGPL 3.0
+Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
+License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 ==============================================================================*/
 
-#ifndef THERON_ACTIVE_MESSAGE_QUEUE
-#define THERON_ACTIVE_MESSAGE_QUEUE
+#ifndef THERON_AMQ_NETWORK
+#define THERON_AMQ_NETWORK
 
 // Standard headers
 
-#include <string>     // Standard strings
+#include <string_view>            // For constant strings
+
+// Qpid Proton interface headers
+
+#include "proton/message.hpp"
+#include "proton/connection_options.hpp"
 
 // Theron++ Actor Framework headers
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
-
-// Generic network endpoint
-
 #include "Communication/NetworkEndpoint.hpp"
 
-// This header file is the master file ensuring that all the class level
-// headers are correctly included.
+// Active Message Queue network servers
 
-#include "Communication/AMQ/AMQMessages.hpp"
 #include "Communication/AMQ/AMQNetworkLayer.hpp"
 #include "Communication/AMQ/AMQSessionLayer.hpp"
+#include "Communication/AMQ/AMQPresentationLayer.hpp"
 
-namespace Theron::ActiveMQ
+namespace Theron::AMQ
 {
-/*==============================================================================
-
- Presentation layer
-
-==============================================================================*/
-//
-// The standard version of the presentation layer can be used with no
-// modification, and so it is simply defined as an alias here.
-
-using PresentationLayer = Theron::PresentationLayer;
-
 /*==============================================================================
 
  AMQ Network
@@ -163,64 +122,92 @@ class Network
   virtual public StandardFallbackHandler,
   public Theron::Network
 {
+  // ---------------------------------------------------------------------------
+  // Storing layer servers
+  // ---------------------------------------------------------------------------
+  //
+  // This AMQ Network class is final class and it should not be further
+  // inherited. The network layer actors can therefore be direct data member
+  // of this class.
+
+private:
+
+  NetworkLayer      NetworkServer;
+  SessionLayer      SessionServer;
+  PresentationLayer PresentationServer;
+
+  // ---------------------------------------------------------------------------
+  // Address access
+  // ---------------------------------------------------------------------------
+  //
+  // The addresses of these layer servers are returned by virtual functions
+  // that are so simple that they can be defined in-line
+
 protected:
 
-	// To avoid storing the network endpoint name, the AMQ server IP, and the
-	// server port in the class waiting for the network endpoint to call the
-	// functions to create the layers, the layers are directly created by the
-	// constructor and the create functions are left empty.
+  virtual Address NetworkLayerAddress( void ) const final
+  { return NetworkServer.GetAddress(); }
 
-	virtual void CreateNetworkLayer( void ) override
-	{	}
+  virtual Address SessionLayerAddress( void ) const final
+  { return SessionServer.GetAddress(); }
 
-	virtual void CreateSessionLayer( void ) override
-	{ }
+  virtual Address PresentationLayerAddress( void ) const final
+  { return PresentationServer.GetAddress(); }
 
-	virtual void CreatePresentationLayer( void ) override
-	{ }
+  // ---------------------------------------------------------------------------
+  // Constructor and destructor
+  // ---------------------------------------------------------------------------
+  //
+  // The constructor must have an endpoint name, and it should be noted that
+  // this is the external name to be used towards the remote AMQ endpoints
+  // giving actor addresses like <actor name>@<endpoint name>. The IP address 
+  // or the DNS lookup name for the AMQ server (or message broker) must be 
+  // given. Note that this does not specify the protocol as the TCP will be 
+  // added to this IP when connecting. An optional server port can be given and
+  // this is given as an integer to ensure that it is a proper port.
+  //
+  // Finally, the names for the Session Layer server and the Presentation Layer
+  // server can be given. They are only used to create the named actors,
+  // and default names are used if they are not given. These are defined as 
+  // standard string views as they needs to be passed in order to be able to 
+  // change and pass the connection options.
 
-	// There is no special shut down management for AMQ networks. It is difficult
-	// to see how it can be implemented since first of all the local actors on
-	// this endpoint using the AMQ interface must be stopped.
+public:
 
-	// The constructor must have an endpoint name, and it should be noted that
-	// This is the external name to be used towards the remote AMQ endpoints
-	// giving actor addresses like <actor name>@<endpoint name>. The endpoint
-	// name is also the name of the Network Layer server - not the endpoint
-	// actor. To avoid a name clash for the network server actors, an optional
-	// endpoint prefix can be given. This defaults to "AMQ:" and so the
-	// name of a server actor will be "AMQ:<servername>" and the endpoint
-	// Network actor, the Session Layer server, and the Presentation layer
-	// server will all receive this name.
-	//
-	// The IP address or the DNS lookup name for the AMQ server (or message
-	// broker) must be given. Note that this does not specify the protocol as
-	// the TCP will be added to this IP when connecting. An optional server port
-	// can be given.
-	//
-	// Finally, the names for the Session Layer server and the Presentation Layer
-	// server can be given. They are only used to create the named actors,
-	// and default names are used if they are not given. The final argument to
-	// the constructor is the optional endpoint prefix to be added to these
-	// server names and to the network endpoint actor.
+  static constexpr std::string NetworkLayerLabel = "AMQNetwork";
+  static constexpr std::string SessionLayerLabel = "AMQSession";
+  static constexpr std::string PresentationLayerLabel = "AMQPresentation";
 
-	Network( const std::string & EndpointName,
-					 const std::string & AMQServerIP,
-					 const std::string & AMQServerPort = "61616",
-					 const std::string & SessionServer = "SessionLayer",
-					 const std::string & PresentationServer = "PresentationLayer",
-					 const std::string & AMQPrefix = "AMQ:" )
-	: Actor( EndpointName ),
-	  StandardFallbackHandler( Actor::GetAddress().AsString() ),
-	  Theron::Network( Actor::GetAddress().AsString() )
-	{
-		CreateServer< Layer::Network, NetworkLayer >(
-			AMQPrefix + EndpointName, AMQServerIP, AMQServerPort );
-		CreateServer< Layer::Session, SessionLayer >(
-			AMQPrefix + SessionServer );
-		CreateServer< Layer::Presentation, PresentationLayer >(
-			AMQPrefix + PresentationServer );
-	}
+protected:
+
+  Network( const std::string & EndpointName,
+           const std::string & AMQServerIP,
+           const unsigned    & AMQServerPort = 1616,
+           const std::string & NetworkLayerName = NetworkLayerLabel,
+           const std::string & SessionServerName = SessionLayerLabel,
+           const std::string & PresentationServerName = PresentationLayerLabel,
+           const proton::connection_options & GivenConnectionOptions 
+               = proton::connection_options(),
+           const proton::message::property_map & GivenMessageOptions 
+               = proton::message::property_map()  )
+  : Actor( EndpointName ), 
+    StandardFallbackHandler( Actor::GetAddress().AsString() ),
+    Theron::Network( Actor::GetAddress().AsString() ),
+    NetworkServer( GlobalAddress( NetworkLayerName, EndpointName ),
+                   AMQServerIP, AMQServerPort, GivenConnectionOptions,
+                   GivenMessageOptions ),
+    SessionServer( EndpointName, SessionServerName ),
+    PresentationServer( PresentationServerName )
+  {}
+
+  // The default constructor and the copy constructor are deleted
+
+  Network( void ) = delete;
+  Network( const Network & Other ) = delete;
+
+  // The destructor is virtual to ensure proper closing of base classes
+
+  virtual ~Network() = default;
 };
 
 /*==============================================================================
@@ -232,7 +219,7 @@ protected:
 // Setting up the endpoint for AMQ implies simply to reuse the standard network
 // endpoint for the above network class creating the right servers.
 
-using NetworkEndpoint = Theron::NetworkEndpoint< Theron::ActiveMQ::Network >;
+using NetworkEndpoint = Theron::NetworkEndpoint< Theron::AMQ::Network >;
 
-}      // End name space Theron AMQ
-#endif // THERON_ACTIVE_MESSAGE_QUEUE
+}      // Name space Theron AMQ
+#endif // THERON_AMQ_NETWORK

@@ -37,15 +37,15 @@ ARFLAGS = ruvs
 
 # The compiler is instructed to produce all warnings and provide output for
 # the code to be debugged with GDB. This produces larger object files and if
-# this is a concern the GDB switch can be dropped.
+# this is a concern the GDB switch can be dropped. -Wall to be added
 
-GENERAL_OPTIONS = -c -Wall -std=c++17 -ggdb
+GENERAL_OPTIONS = -c -Wall -std=c++23 -ggdb
 
 # Optimisation -O3 is the highest level of optimisation and should be used
 # with production code. -Og is the code optimising and offering debugging
 # transparency and should be use while the code is under development
 
-OPTIMISATION_FLAG =
+OPTIMISATION_FLAG = 
 
 # It is useful to let the compiler generate the dependencies for the various
 # files, and the following will produce .d files that can be included at the
@@ -64,7 +64,7 @@ CXXFLAGS = $(DEPENDENCY_FLAGS) $(OPTIMISATION_FLAG) $(GENERAL_OPTIONS)
 # implementation of standard C++ threads and is explicitly needed on some
 # systems.
 
-LDFLAGS = -Wl,--allow-multiple-definition -ggdb -D_DEBUG -pthread
+LDFLAGS = -ggdb -D_DEBUG -pthread
 
 #------------------------------------------------------------------------------
 #
@@ -124,10 +124,10 @@ $(OBJECTS_DIR)/%.o : $(UTILITY_DIR)/%.cpp
 # by the technology specific protocols.
 
 COMMUNICATION_DIR     = Communication
-COMMUNICATION_HEADERS = DeserializingActor.hpp LinkMessage.hpp \
-                        NetworkEndpoint.hpp NetworkLayer.hpp \
-                        PresentationLayer.hpp SerialMessage.hpp \
-                        SessionLayer.hpp
+COMMUNICATION_HEADERS = LinkMessage.hpp NetworkEndpoint.hpp \
+						NetworkingActor.hpp NetworkLayer.hpp \
+						PolymorphicMessage.hpp PresentationLayer.hpp \
+						SessionLayer.hpp
 COMMUNICATION_SOURCE  = NetworkEndpoint.cpp
 COMMUNICATION_OBJECTS = ${COMMUNICATION_SOURCE:.cpp=.o}
 
@@ -143,33 +143,20 @@ $(OBJECTS_DIR)/%.o : $(COMMUNICATION_DIR)/%.cpp
 #
 #------------------------------------------------------------------------------
 #
-# The support for the Active Message Queue (AMQ) is based on the standard
-# AMQ bindings for C++ and when using the AMQ library one should link against
-# the AMQ libraries: -lactivemq-cpp -lssl
-# where the SSL library is needed if secure transport is used by the AMQ server
-# (message broker)
+# The support for the Active Message Queue (AMQ) is based on the Qpid Proton
+# AMQ API.
 
 AMQ_DIR     = $(COMMUNICATION_DIR)/AMQ
-AMQ_HEADERS = AMQEndPoint.hpp AMQMessages.hpp AMQNetworkLayer.hpp \
-              AMQSessionLayer.hpp
-AMQ_SOURCE  = AMQMessages.cpp AMQNetworkLayer.cpp AMQSessionLayer.cpp
+AMQ_HEADERS = AMQEndpoint.hpp  AMQMessage.hpp AMQPresentationLayer.hpp \
+			  AMQjson.hpp AMQNetworkLayer.hpp AMQSessionLayer.hpp
+AMQ_SOURCE  = AMQjson.cpp AMQNetworkLayer.cpp AMQSessionLayer.cpp
+
 AMQ_OBJECTS = ${AMQ_SOURCE:.cpp=.o}
-
-# The involved AMQ libraries are in non-standard locations and the include
-# directories must be set accordingly.
-
-AMQ_INCLUDE = -I/usr/include/activemq-cpp-3.9.4/ -I/usr/include/apr-1
-
-# It will by default create complaints about depreciated declarations, and
-# this warning is disabled.
-
-AMQ_FLAGS = -Wno-deprecated-declarations
 
 # Then the build command is set to include these additional definitions.
 
 $(OBJECTS_DIR)/%.o : $(AMQ_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) $(AMQ_FLAGS) $< -o $@ $(INCLUDE_DIRECTORIES) \
-	$(AMQ_INCLUDE)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(INCLUDE_DIRECTORIES)
 
 #------------------------------------------------------------------------------
 #
@@ -192,8 +179,10 @@ ALL_OBJECTS         = $(addprefix $(OBJECTS_DIR)/, $(ACTOR_OBJECTS) \
 #
 # Building the library
 
-Library: $(ALL_OBJECTS)
+Theron++.a: $(ALL_OBJECTS)
 	$(AR) $(ARFLAGS) Theron++.a $?
+
+Library: Theron++.a
 
 # Cleaning means deleting the object and dependencies and the library
 

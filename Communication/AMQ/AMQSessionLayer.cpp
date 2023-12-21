@@ -1,114 +1,232 @@
 /*==============================================================================
-Active Message Queue session layer
+Active Message Queue (AMQ): Session Layer
 
-Please see the details in the associated header file.
+The Session Layer adds the support for topic subscriptions and forwarding 
+inbound messages from topics to the subscribing actors. 
 
-Author and Copyright: Geir Horn, 2017
-License: LGPL 3.0
+Author and Copyright: Geir Horn, University of Oslo
+Contact: Geir.Horn@mn.uio.no
+License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 ==============================================================================*/
+
+// Standard headers
+
+#include <ranges>     // Container ranges
+#include <algorithm>  // Standard algorithms
+#include <vector>     // Vectors 
+
+// The Theron++ headers
 
 #include "Communication/AMQ/AMQSessionLayer.hpp"
 
+namespace Theron::AMQ
+{
 /*==============================================================================
 
- Message handling
+ Message handlers
 
 ==============================================================================*/
 //
-// The inbound messages could either come from remote actors for which both
-// the actors' global sender addresses are known, and the default message
-// lookup of the standard Session Layer can be used; or the message is from a
-// topic or queue subscribed to by one or more local actors, and the message
-// is forwarded to these destination actors via the presentation layer.
+// ----------------------------------------------------------------------------
+// Topic management
+// ----------------------------------------------------------------------------
+//  
+// The handler allowing an actor to subscribe to messages or cancel 
+// subscriptions will add the topic subscription with a message to the Network 
+// Layer if this is the first time an actor subscribes to the topic. If any 
+// other actor already holds a subscription, the actor is just added to the 
+// set of subscribers.
+// 
+// The inverse happens when an actor unsubscribes, as the actor address is just
+// removed if there are other actors still subscribing, and only when the last
+// actor holding a subscription unsubscribes will the Network layer be 
+// instructed to cancel the topic subscription from this endpoint.
 
-void Theron::ActiveMQ::SessionLayer::InboundMessage(
-	const Theron::ActiveMQ::TextMessage & TheMessage,
-	const Theron::Actor::Address TheNetworkLayer )
+void SessionLayer::ManageTopics( const TopicSubscription & TheMessage, 
+                                 const Address PubSubActor )
 {
-  if ( TheMessage.GetRecipient().ActorName().empty() )
-	{
-		// This message is from a topic subscribed to and not from a remote actor.
-		// It should therefore be forwarded to all local actors subscribing to
-		// this topic.
-
-		std::string TopicOrQueue = TheMessage.GetSender().ActorName();
-		auto Subscribers         = Subscriptions.find( TopicOrQueue );
-
-		if ( Subscribers != Subscriptions.end() )
-		{
-			Address Sender( TopicOrQueue );
-			SerialMessage::Payload ThePayload( TheMessage.GetPayload() );
-
-			for ( const Address & TheSubscriber : Subscribers->second )
-				Send( RemoteMessage( Sender, TheSubscriber, ThePayload ),
-					    Network::GetAddress( Network::Layer::Presentation ) );
-		}
-	}
-	else
-		Theron::SessionLayer< TextMessage >::InboundMessage( TheMessage,
-																												 TheNetworkLayer );
-}
-
-// Setting up new subscriptions implies creating a record for the subscription
-// and adding the actor to the list of subscribers. If this was the first
-// actor subscribing, the Network Layer must be notified so that it can set up
-// a listener for the given topic.
-
-void Theron::ActiveMQ::SessionLayer::NewSubscription(
-	const Theron::ActiveMQ::SessionLayer::CreateSubscription & Request,
-	const Theron::Actor::Address From )
-{
-	auto NovelSubscription = Subscriptions.emplace( Request.TopicOrQueue, From );
-
-	NovelSubscription.first->second.emplace( From );
-
-	// If this was the first actor subscribing then the request is forwarded to
-	// the network layer.
-
-	if ( NovelSubscription.second == true )
-		Send( Request, Network::GetAddress( Network::Layer::Network ) );
-}
-
-// Removing the subscription necessitates first to find if there is a
-// subscription for the given topic or queue name, and then if the requesting
-// actor is one of the subscribers. If the subscriber set is empty after the
-// removal of the requesting actor's address, then the network layer is
-// asked to remove the message listener for this topic or queue.
-
-void Theron::ActiveMQ::SessionLayer::RemoveSubscription(
-	const Theron::ActiveMQ::SessionLayer::CancelSubscription & Request,
-	const Theron::Actor::Address From)
-{
-	auto Subscribers = Subscriptions.find( Request.TopicOrQueue );
-
-	if ( Subscribers != Subscriptions.end() )
+  switch( TheMessage.Command )
   {
-		Subscribers->second.erase( From );
+    case TopicSubscription::Action::Subscription:
+      if( TopicSubscribers.contains( TheMessage.TheTopic ) )
+          TopicSubscribers[ TheMessage.TheTopic ].insert( PubSubActor );
+      else
+      {
+        TopicSubscribers[ TheMessage.TheTopic ].insert( PubSubActor );
+        Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
+      }
+      break;
+    case TopicSubscription::Action::CloseSubscription:
+      {
+        auto Subscribers = TopicSubscribers.find( TheMessage.TheTopic );
 
-		if ( Subscribers->second.empty() )
-		{
-			Send( Request, Network::GetAddress( Network::Layer::Network ) );
-			Subscriptions.erase( Subscribers );
-		}
-	}
+        if( Subscribers != TopicSubscribers.end() )
+        {
+          if ( Subscribers->second.size() > 1 )
+            Subscribers->second.erase( PubSubActor );
+          else
+          {
+            Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
+            TopicSubscribers.erase( Subscribers );
+          }
+        }
+      }
+      break;
+    case TopicSubscription::Action::Publisher:
+      if( TopicPublishers.contains( TheMessage.TheTopic ) )
+        TopicPublishers[ TheMessage.TheTopic ].insert( PubSubActor );
+      else
+      {
+        TopicPublishers[ TheMessage.TheTopic ].insert( PubSubActor );
+        Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
+      }
+      break;
+    case TopicSubscription::Action::ClosePublisher:
+      {
+        auto Publishers = TopicPublishers.find( TheMessage.TheTopic );
+
+        if( Publishers != TopicPublishers.end() )
+        {
+          if( Publishers->second.size() > 1 )
+            Publishers->second.erase( PubSubActor );
+          else
+          {
+            Send( TheMessage, Network::GetAddress( Network::Layer::Network ) );
+            TopicPublishers.erase( Publishers );
+          }
+        }
+      }
+      break;
+  };
 }
 
-// Stopping the communication means that the network layer server should be
-// asked to cancel all subscriptions, and then the subscriptions are removed
-// before the base class shut down protocol is started.
+// ----------------------------------------------------------------------------
+// Removing local actors
+// ----------------------------------------------------------------------------
+//
+// When a local actor closes, all its topic subscriptions should be deleted. 
+// This means invoking the above function to manage topics for each of the 
+// topics subcribed to or published to must be removed one by one. It is 
+// tempting to remove the subscriptions as they are found, but if the closing 
+// actor is the only one subscribing to a topic, the topic will also be removed
+// and this has the side effect that the subscriber or publisher map is changed
+// and iterators may be invalidated. The solution is to collect the names of 
+// the topics subscribed to or published to first, and then remove them by 
+// their names.
 
-void Theron::ActiveMQ::SessionLayer::Stop(
-	const Network::ShutDown & StopMessage, const Theron::Actor::Address Sender )
+void SessionLayer::RemoveLocalActor( const RemoveActorCommand & Command,
+                                     const Address ClosingActor )
 {
-	for ( auto & ActiveSubscription : Subscriptions )
+  // Removing the subscriptions first
+
+  auto FoundSubscriptions = std::ranges::views::keys( 
+      std::ranges::views::filter( TopicSubscribers, 
+      [&]( const auto & SubsriptionRecord){ 
+        return SubsriptionRecord.second.contains( ClosingActor ); 
+  }) );
+
+  if( !FoundSubscriptions.empty() )
   {
-		CancelSubscription Cancellation( ActiveSubscription.first );
-		Send( Cancellation, Network::GetAddress( Network::Layer::Network ) );
-	}
+    std::vector< TopicName > 
+    SubscribedTopic( FoundSubscriptions.begin(), FoundSubscriptions.end() );
 
-	Subscriptions.clear();
+    std::ranges::for_each( SubscribedTopic, [&]( const TopicName & TheTopic ){
+      ManageTopics( TopicSubscription( 
+      TopicSubscription::Action::CloseSubscription, TheTopic ), ClosingActor );
+    });
+  }
+    
+  // The same actions are repeated for the topics to which the actor is 
+  // publishing
 
-	Theron::SessionLayer< TextMessage >::Stop( StopMessage, Sender );
+  auto FoundPublications = std::ranges::views::keys( 
+      std::ranges::views::filter( TopicPublishers, 
+      [&]( const auto & PublicationRecord){ 
+        return PublicationRecord.second.contains( ClosingActor ); 
+  }) );
+
+  if( !FoundPublications.empty() )
+  {
+    std::vector< TopicName >
+    PublicationTopic( FoundPublications.begin(), FoundPublications.end() );
+
+    std::ranges::for_each( PublicationTopic, [&]( const TopicName & TheTopic ){
+      ManageTopics( TopicSubscription( 
+      TopicSubscription::Action::ClosePublisher, TheTopic ), ClosingActor );
+    });
+  }
+
+  // After closing all subscribed and published topics associated with the 
+  // closing agent, the generic Session Layer can take over and remove the 
+  // actor-to-actor sessions associated with the closing actor.
+
+  GenericSessionLayer::RemoveLocalActor( Command, ClosingActor );
+}
+
+// ----------------------------------------------------------------------------
+// Inbound messages
+// ----------------------------------------------------------------------------
+//  
+// An inbound message will first be checked if they come from a topic, 
+// and if so the message will be sent to all subscribers. If not, it is 
+// taken to be a message from a remote actor and passed on for handling by 
+// the generic Session Layer.
+//
+// Normally, there should be one message type per topic, and the message 
+// identifier should be in the message content type. This works if the remote
+// sender knows the message identifier. Since pure topics are not for actor 
+// to actor communication, it is likely that the sender will not set the 
+// content type file of the message, and if this is not set, the Session Layer
+// will set it to the topic name.
+
+void SessionLayer::InboundMessage( const AMQ::Message & TheMessage,
+										               const Address TheNetworkLayer )
+{
+  TopicName SenderTopic( TheMessage.GetSender().ActorName() );
+
+  if( TopicSubscribers.contains( SenderTopic ) )
+  {
+    Address ThePresentationLayer( 
+            Network::GetAddress( Network::Layer::Presentation ) );
+
+    auto MessageToActors( TheMessage.GetPayload() );
+
+    if( std::string_view( MessageToActors->content_type() ).empty() )
+      MessageToActors->content_type( SenderTopic );
+
+    std::ranges::for_each( 
+      TopicSubscribers[ SenderTopic ],
+      [&,this](const Address & Subscriber){
+        Send( InternalMessage( SenderTopic, Subscriber, 
+                               MessageToActors ), 
+              ThePresentationLayer ); 
+    });
+  }
+  else
+    Theron::SessionLayer< AMQ::Message >::InboundMessage( 
+      TheMessage, TheNetworkLayer );
+}
+
+// ----------------------------------------------------------------------------
+// Outbound messages
+// ----------------------------------------------------------------------------
+//  
+// A check is made to see if the actor name of the destination address is a
+// known publisher topic. If it is, then the message will be sent directly to 
+// the Network Layer for transmission. If it is not, the message is for a 
+// remote actor, and it should be handled by the generic session layer.
+
+void SessionLayer::OutboundMessage( const InternalMessage & TheMessage,
+                                    const Address ThePresentationLayer )
+{
+  if( TopicPublishers.contains( TheMessage.To.AsString() ) )
+    Send( AMQ::Message( AMQ::GlobalAddress( TheMessage.From, EndpointName ),
+                        AMQ::GlobalAddress( TheMessage.To, "" ),
+                        TheMessage.MessagePayload ),
+          Network::GetAddress( Network::Layer::Network ) );
+  else
+    Theron::SessionLayer< AMQ::Message >::OutboundMessage( 
+      TheMessage, ThePresentationLayer );
 }
 
 /*==============================================================================
@@ -117,26 +235,20 @@ void Theron::ActiveMQ::SessionLayer::Stop(
 
 ==============================================================================*/
 //
-// The constructor initializes the base classes and registers the message
-// handlers that are specific to the AMQ layer. The virtual handlers are
-// already registered by the base classes.
+// The constructor simply initialises the base classes and the map of 
+// subscribed topics.
 
-Theron::ActiveMQ::SessionLayer::SessionLayer(
-	const std::string & ServerName )
-: Actor( ServerName ), StandardFallbackHandler( ServerName ),
-  Theron::SessionLayer< TextMessage >( ServerName ),
-  Subscriptions()
+SessionLayer::SessionLayer( const std::string & TheEndPoint, 
+                            const std::string & ServerName )
+: Actor( GlobalAddress( ServerName, TheEndPoint ).AsString() ),
+  StandardFallbackHandler( GetAddress().AsString() ),
+  Theron::SessionLayer< AMQ::Message >( TheEndPoint, ServerName ),
+  TopicSubscribers()
 {
-	RegisterHandler( this, &SessionLayer::NewSubscription    );
-	RegisterHandler( this, &SessionLayer::RemoveSubscription );
+  RegisterHandler( this, &SessionLayer::ManageTopics );
 }
 
-// The destructor simply closes the open subscriptions if there are any.
+SessionLayer::~SessionLayer( void )
+{}
 
-Theron::ActiveMQ::SessionLayer::~SessionLayer()
-{
-	for ( auto & Subscription : Subscriptions )
-		Send( CancelSubscription( Subscription.first ),
-					Network::GetAddress( Network::Layer::Network ) );
-}
-
+} // End name space Theron AMQ
