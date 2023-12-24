@@ -40,6 +40,8 @@ Revisions:
 #include <stdexcept>												// Standard exceptions
 #include <source_location>                  // Improved reporting of errors
 
+#include <syncstream>                       // Replacing it all with standard
+
 #include "Actor.hpp"												// The Theron++ framework
 #include "StandardFallbackHandler.hpp"			// Debugging and error handling
 
@@ -60,6 +62,7 @@ namespace Theron
 
 ******************************************************************************/
 
+[[deprecated("Console print server should not be used only use ConsoleOutput")]]
 class ConsolePrintServer : public virtual Actor,
 													 public virtual StandardFallbackHandler
 {
@@ -204,6 +207,7 @@ we send the stream if its length is larger than zero.
 
 ******************************************************************************/
 
+[[deprecated("Use ConsoleOutput instead of ConsolePrint") ]]
 class ConsolePrint : public virtual std::ostringstream
 {
 private:
@@ -263,6 +267,16 @@ public:
 			if ( str().length() > 0 )
 			  ConsolePrintServer::TheServer->Send( std::string( str() ), TheConsole );
     };
+};
+
+class ConsoleOutput 
+: public std::osyncstream
+{
+public:
+
+  ConsoleOutput( void )
+  : std::osyncstream( std::cout )
+  {}
 };
 
 }       // End name space Theron

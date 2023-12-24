@@ -62,6 +62,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 #include "Actor.hpp"
 #include "Utility/StandardFallbackHandler.hpp"
+#include "Utility/ConsolePrint.hpp"
 
 #include "Communication/PolymorphicMessage.hpp"
 #include "Communication/NetworkingActor.hpp"
@@ -256,7 +257,10 @@ private:
   void HandleRequest( const RequestMessage & TheRequest, 
                       const Address RequestingActor )
   {
-    std::cout << "HANDLING REQUEST " << std::endl;
+    Theron::ConsoleOutput Output;
+
+    Output << "HANDLING REQUEST " << std::endl;
+    
     ResponseMessage TheResponse({
                     {"Message received", TheRequest.Text() }, 
                     {"Decision", "Idiot"}, 
@@ -278,14 +282,16 @@ private:
   void HandleResponse( const ResponseMessage & TheResponse, 
                        const Address RespondingActor )
   {
-    std::cout << "HANDLING RESPONSE " << std::endl;
+    Theron::ConsoleOutput Output;
+
+    Output << "HANDLING RESPONSE " << std::endl;
     if( TheResponse.empty() )
-      std::cout << "Got an empty JSON response..." << std::endl;
+      Output << "Got an empty JSON response..." << std::endl;
     else if( TheResponse.is_primitive() )
-      std::cout << "Got a primitive JSON value : " << TheResponse << std::endl;
+      Output << "Got a primitive JSON value : " << TheResponse << std::endl;
     else
-      std::cout << "Received the following response: "  << std::endl
-                << TheResponse.dump(2) << std::endl;
+      Output << "Received the following response: "  << std::endl
+             << TheResponse.dump(2) << std::endl;
   }
 
   // --------------------------------------------------------------------------
@@ -421,9 +427,11 @@ private:
   void PrintTopicMessage( const TopicMessage & TheMessage, 
                           const Address TopicName )
   {
-    std::cout << "To Actor "<< GetAddress().AsString() << " from topic " 
-              << TopicName.AsString() <<": " << std::endl
-              << TheMessage.dump(2) << std::endl;
+    Theron::ConsoleOutput Output;
+
+    Output << "To Actor "<< GetAddress().AsString() << " from topic " 
+           << TopicName.AsString() <<": " << std::endl
+           << TheMessage.dump(2) << std::endl;
   }
 
   // --------------------------------------------------------------------------
