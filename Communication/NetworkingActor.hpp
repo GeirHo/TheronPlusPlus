@@ -376,6 +376,12 @@ protected:
     RegisterWithSessionLayer();
   }
 
+  // There is also a trivial function to get the stored session layer address
+  // if derived Actors would need to use this directly.
+
+  inline Address GetSessionLayerAddress( void )
+  { return SessionLayerAddress; }
+
   // The constructor is defined in the code file because it will register the
   // actor with the session layer to create an external presence for this actor.
   // The philosophy is that in order to be able to participate in network
@@ -393,7 +399,7 @@ protected:
 public:
 
   NetworkingActor( const std::string & name = std::string(),
-                   const Address TheSessionLayer = Address::Null() )
+                   const Address TheSessionLayer )
   : Actor( name ),
     StandardFallbackHandler( GetAddress().AsString() ),
     NetworkConnected( false ), SessionLayerAddress( TheSessionLayer )
@@ -404,6 +410,17 @@ public:
     if ( SessionLayerAddress )
       RegisterWithSessionLayer();
   }
+
+  // The normal behaviour is to start the network endpoint before creating the
+  // networking actors, and so the normal constructor will resolve the Session
+  // Layer address from the endpoint. If that is not possible, and one really
+  // would need the delayed session layer address registration, the previous 
+  // constructor should be used with the session layer explicityly set to 
+  // Address::Null()
+
+  NetworkingActor( const std::string & name = std::string() )
+  : NetworkingActor( name, Network::GetAddress( Network::Layer::Session ) )
+  {}
 
   // And we need a virtual destructor to ensure that everything will be
   // cleaned correctly. It should also inform the session layer actor
