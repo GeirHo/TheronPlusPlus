@@ -9,6 +9,7 @@
                 "/home/GHo/Documents/Code/Theron++/Utility",
                 "/home/GHo/Documents/Code/Theron++/Communication",
                 "/home/GHo/Documents/Code/Theron++/Communication/AMQ",
+                "/opt/AMPL/amplapi/include/ampl",
                 "${workspaceFolder}/**"
             ],
             "defines": [],
@@ -18,7 +19,8 @@
             "compilerArgs": [
                 "-std=c++23",
                 "-I/home/GHo/Documents/Code/Theron++",
-                "-I/home/GHo/Documents/Code/CxxOpts/include"
+                "-I/home/GHo/Documents/Code/CxxOpts/include",
+                "-I/opt/AMPL/amplapi/include/ampl"
             ],
             "cppStandard": "c++23",
             "compilerPathInCppPropertiesJson": "/usr/bin/g++",

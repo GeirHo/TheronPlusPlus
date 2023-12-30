@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${default}",
+                "/home/GHo/Documents/Code/Theron++/",
+                "/home/GHo/Documents/Code/CxxOpts",
+                "/opt/AMPL/amplapi/include/ampl/"
+            ],
+            "defines": [],
+            "compilerPath": "/usr/bin/g++",
+            "compilerArgs": [
+                "--std=c++23",
+                "-I/home/GHo/Documents/Code/Theron++/",
+                "-I/home/GHo/Documents/Code/CxxOpts",
+                "-I/opt/AMPL/amplapi/include/ampl"
+            ],
+            "cStandard": "c23",
+            "cppStandard": "c++23"
+        }
+    ],
+    "version": 4
+}
