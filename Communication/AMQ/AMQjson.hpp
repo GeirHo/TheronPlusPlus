@@ -186,6 +186,10 @@ public:
   : JSONMessage( TheTopicName )
   {}
 
+  JSONTopicMessage( const std::string & TheTopicName, const JSON & JSONData )
+  : JSONMessage( TheTopicName, JSONData )
+  {}
+
   JSONTopicMessage( const JSONTopicMessage & Other )
   : JSONMessage( Other )
   {}
@@ -235,6 +239,11 @@ public:
 
   JSONWildcardMessage( const std::string & TopicIdentifier )
   : JSONMessage( TopicIdentifier )
+  {}
+
+  JSONWildcardMessage( const std::string & TopicIdentifier, 
+                       const JSON & JSONData )
+  : JSONMessage( TopicIdentifier, JSONData )
   {}
   
   JSONWildcardMessage( const JSONWildcardMessage & Other )
