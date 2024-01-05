@@ -71,7 +71,9 @@ LDFLAGS = -fuse-ld=gold -ggdb -D_DEBUG -pthread -l$(THERON)/Theron++.a
 #THERON_SOURCE  := $(shell find $(THEORN) -maxdepth 2 -not \( -path "../Examples" -prune \) -name "*.cpp" -type f -print0 )
 
 .PHONY: $(THERON)/Theron++.a 
-	 make Library -C $(THEORN)
+
+ $(THERON)/Theron++.a:
+	 make -C $(THERON) Library
 
 #------------------------------------------------------------------------------
 # The Hello World

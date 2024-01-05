@@ -101,12 +101,16 @@ $(OBJECTS_DIR)/%.o : %.cpp
 # The utilities are useful classes that may help in setting up a working
 # actor system. Some of the classes are header only, and some of them requires
 # accompanying object files.
+#
+# Note that the Console Print class is deprecated and the file ConsolePrint.cpp
+# should only be included for backward compatibility (creates unnecessary 
+# warnings otherwise)
 
 UTILITY_DIR     = Utility
 UTILITY_HEADERS = ActorRegistry.hpp AddressHash.hpp ConsolePrint.hpp \
 	          EventHandler.hpp StandardFallbackHandler.hpp \
 	          TerminationWatch.hpp WallClockEvent.hpp
-UTILITY_SOURCE  = ActorRegistry.cpp ConsolePrint.cpp EventHandler.cpp
+UTILITY_SOURCE  = ActorRegistry.cpp EventHandler.cpp
 UTILITY_OBJECTS = ${UTILITY_SOURCE:.cpp=.o}
 
 # The command to build the object files for the utility files

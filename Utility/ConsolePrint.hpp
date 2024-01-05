@@ -62,9 +62,9 @@ namespace Theron
 
 ******************************************************************************/
 
-[[deprecated("Console print server should not be used only use ConsoleOutput")]]
-class ConsolePrintServer : public virtual Actor,
-													 public virtual StandardFallbackHandler
+class [[deprecated("Console print server should not be used only use ConsoleOutput")]]
+ConsolePrintServer : public virtual Actor,
+										 public virtual StandardFallbackHandler
 {
 public:
 
@@ -206,9 +206,9 @@ thing we need to care about is to improve the flush function and to make sure
 we send the stream if its length is larger than zero.
 
 ******************************************************************************/
-
-[[deprecated("Use ConsoleOutput instead of ConsolePrint") ]]
-class ConsolePrint : public virtual std::ostringstream
+/*
+class [[deprecated("Use ConsoleOutput instead of ConsolePrint") ]]
+ConsolePrint : public virtual std::ostringstream
 {
 private:
 	
@@ -268,7 +268,7 @@ public:
 			  ConsolePrintServer::TheServer->Send( std::string( str() ), TheConsole );
     };
 };
-
+*/
 class ConsoleOutput 
 : public std::osyncstream
 {
@@ -277,6 +277,13 @@ public:
   ConsoleOutput( void )
   : std::osyncstream( std::cout )
   {}
+};
+
+class [[deprecated("Use ConsoleOutput instead of ConsolePrint") ]]
+ConsolePrint : public ConsoleOutput
+{
+public:
+  ConsolePrint() = default;
 };
 
 }       // End name space Theron

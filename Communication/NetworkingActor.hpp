@@ -398,8 +398,8 @@ protected:
 
 public:
 
-  NetworkingActor( const std::string & name = std::string(),
-                   const Address TheSessionLayer )
+  explicit NetworkingActor( const std::string & name,
+                            const Address TheSessionLayer )
   : Actor( name ),
     StandardFallbackHandler( GetAddress().AsString() ),
     NetworkConnected( false ), SessionLayerAddress( TheSessionLayer )
