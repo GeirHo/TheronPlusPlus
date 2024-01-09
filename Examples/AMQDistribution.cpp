@@ -631,7 +631,6 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
   Theron::Actor::Send( Theron::Network::ShutDown(), 
                        Theron::Actor::Address(), AMQNetWork.GetAddress() );
 
-std::cout << "Ready for closing" << std::endl;
   // Then it is just to wait for all the local actors to finish handling 
   // messages. The topic susbscriber will drain as soon as the network stops
   // receiving messages.
