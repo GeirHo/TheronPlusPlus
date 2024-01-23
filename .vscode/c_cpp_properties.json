@@ -6,9 +6,6 @@
                 "/usr/lib/gcc/x86_64-redhat-linux/13/../../../../include/c++/13",
                 "/home/GHo/Documents/Code/CxxOpts/include",
                 "/home/GHo/Documents/Code/Theron++",
-                "/home/GHo/Documents/Code/Theron++/Utility",
-                "/home/GHo/Documents/Code/Theron++/Communication",
-                "/home/GHo/Documents/Code/Theron++/Communication/AMQ",
                 "/opt/AMPL/amplapi/include/ampl",
                 "${workspaceFolder}/**"
             ],
@@ -29,10 +26,7 @@
                 "path": [
                     "/usr/lib/gcc/x86_64-redhat-linux/13/../../../../include/c++/13",
                     "/home/GHo/Documents/Code/Theron++",
-                    "/home/GHo/Documents/Code/CxxOpts/include",
-                    "/home/GHo/Documents/Code/Theron++/Utility",
-                    "/home/GHo/Documents/Code/Theron++/Communication",
-                    "/home/GHo/Documents/Code/Theron++/Examples"
+                    "/home/GHo/Documents/Code/CxxOpts/include"
                 ],
                 "limitSymbolsToIncludedHeaders": false
             }

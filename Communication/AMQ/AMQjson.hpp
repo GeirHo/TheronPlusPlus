@@ -185,15 +185,8 @@ protected:
   {
     if( ThePayload->reply_to() == GetMessageIdentifier() )
     {
-      Theron::ConsoleOutput Output;
-
       ThePayload->content_type( GetMessageIdentifier() );
-      JSONMessage::Initialize( ThePayload );
-
-      Output << "Initialised message: " << std::endl
-             << dump(2) << std::endl;
-
-      return true;
+      return JSONMessage::Initialize( ThePayload );
     }
     else return false;
   }
