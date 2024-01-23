@@ -290,6 +290,8 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
     else if( SenderTopic.starts_with("topic://") )
       SenderTopic.erase(0,8);
 
+    TheMessage.reply_to( SenderTopic );
+    
     Theron::AMQ::Message 
     Inbound( SenderTopic, ReceiverTopic, 
              std::make_shared< proton::message >( TheMessage ) );

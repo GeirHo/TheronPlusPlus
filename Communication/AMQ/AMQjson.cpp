@@ -30,6 +30,8 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 #include "Communication/AMQ/AMQjson.hpp"
 
+#include "Utility/ConsolePrint.hpp"
+
 namespace Theron::AMQ
 {
 

@@ -47,6 +47,10 @@ using JSON = nlohmann::json;
 #include "Communication/AMQ/AMQMessage.hpp"
 #include "Communication/AMQ/AMQEndpoint.hpp"
 
+// Debugging
+
+#include "Utility/ConsolePrint.hpp"
+
 namespace Theron::AMQ
 {
 
@@ -57,8 +61,7 @@ namespace Theron::AMQ
 ==============================================================================*/
 
 class JSONMessage
-: virtual public Theron::PolymorphicMessage<
-                 typename Theron::AMQ::Message::PayloadType >,
+: virtual public Theron::PolymorphicMessage<typename Theron::AMQ::Message::PayloadType>,
   virtual public JSON
 {
  public:
@@ -116,19 +119,26 @@ public:
   // the incoming message types by the content type field set.
 
   JSONMessage( const std::string & TheMessageID )
-  : JSON(), UniqueMessageIdentifier( TheMessageID )
+  : PolymorphicMessage(), JSON(), UniqueMessageIdentifier( TheMessageID )
   {}
 
   // The default constructor not allowed 
 
   JSONMessage() = delete;
   
-  // The copy constructor just copies the content to the JSON  base class and
-  // copies the message identifier string,
+  // The copy constructor is much more complicated since structured objects
+  // cannot be directly copied. The to_json and from_json methods works only
+  // if the structure of the message is known and cannot be used in general.
+  // The only solution found is to serialise the message and then parse it 
+  // back to the new object. This is largely undocumented feature, but this
+  // wasteful operation works also for messages with complex structures.
 
   JSONMessage( const JSONMessage & Other )
-  : JSON( Other ), UniqueMessageIdentifier( Other.UniqueMessageIdentifier )
-  {}
+  : PolymorphicMessage(), JSON(), 
+    UniqueMessageIdentifier( Other.UniqueMessageIdentifier )
+  {
+    this->JSON::operator=( parse( Other.dump() ) );
+  }
 
   // Since the JSON object accepts being initialised, there is a constructor
   // to forward the initialiser type. Even though it compiles to copy construct
@@ -138,7 +148,7 @@ public:
 
   JSONMessage( const std::string & TheMessageID, 
                const JSON & JSONData )
-  : JSON(), UniqueMessageIdentifier( TheMessageID )
+  : PolymorphicMessage(), JSON(), UniqueMessageIdentifier( TheMessageID )
   {
     this->JSON::operator=( JSONData );
   }
@@ -165,7 +175,8 @@ public:
 // function above.
 
 class JSONTopicMessage
-: public JSONMessage
+: virtual public JSON,
+  public JSONMessage
 {
 protected: 
 
@@ -174,8 +185,15 @@ protected:
   {
     if( ThePayload->reply_to() == GetMessageIdentifier() )
     {
+      Theron::ConsoleOutput Output;
+
       ThePayload->content_type( GetMessageIdentifier() );
-      return JSONMessage::Initialize( ThePayload );
+      JSONMessage::Initialize( ThePayload );
+
+      Output << "Initialised message: " << std::endl
+             << dump(2) << std::endl;
+
+      return true;
     }
     else return false;
   }
@@ -183,15 +201,15 @@ protected:
 public:
 
   JSONTopicMessage( const std::string & TheTopicName )
-  : JSONMessage( TheTopicName )
+  : JSON(), JSONMessage( TheTopicName )
   {}
 
   JSONTopicMessage( const std::string & TheTopicName, const JSON & JSONData )
-  : JSONMessage( TheTopicName, JSONData )
+  : JSON(), JSONMessage( TheTopicName, JSONData )
   {}
 
   JSONTopicMessage( const JSONTopicMessage & Other )
-  : JSONMessage( Other )
+  : JSON(), JSONMessage( Other )
   {}
 
   JSONTopicMessage() = delete;

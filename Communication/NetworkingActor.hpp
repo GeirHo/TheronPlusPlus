@@ -104,6 +104,11 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 #include "Communication/PolymorphicMessage.hpp" // The protocol message base
 
+//Debuging
+
+#include "Utility/ConsolePrint.hpp"
+#include <boost/core/demangle.hpp>              // To print readable types
+
 namespace Theron {
   
 template< class ProtocolPayload >
@@ -223,7 +228,7 @@ private:
         ErrorMessage << Location.file_name() << " on line " 
                     << Location.line()<< " : " << "Actor " 
                     << GetAddress().AsString() << "in handler " 
-                    << Location.function_name() << " received "
+                    << Location.function_name() << " received"
                     << " a message from " << Sender.AsString()
                     << " which did not initialize any known message";
 

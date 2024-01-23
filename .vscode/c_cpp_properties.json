@@ -23,7 +23,6 @@
                 "-I/opt/AMPL/amplapi/include/ampl"
             ],
             "cppStandard": "c++23",
-            "compilerPathInCppPropertiesJson": "/usr/bin/g++",
             "mergeConfigurations": false,
             "configurationProvider": "ms-vscode.makefile-tools",
             "browse": {
