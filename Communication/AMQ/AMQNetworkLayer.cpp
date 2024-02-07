@@ -77,7 +77,7 @@ void NetworkLayer::CreateReceiver(const TopicName & TheTarget)
   TopicParameters.distribution_mode( proton::source::distribution_mode::COPY );
   TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
   TopicParameters.expiry_policy( proton::source::NEVER );
-
+  
   LinkParameters.name( TheTarget );
   LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
   LinkParameters.source( TopicParameters );

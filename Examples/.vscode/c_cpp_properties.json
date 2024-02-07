@@ -6,7 +6,7 @@
                 "${default}",
                 "/home/GHo/Documents/Code/Theron++/",
                 "/home/GHo/Documents/Code/CxxOpts",
-                "/opt/AMPL/amplapi/include/ampl/"
+                "/opt/AMPL/amplapi/include/"
             ],
             "defines": [],
             "compilerPath": "/usr/bin/g++",
@@ -14,7 +14,7 @@
                 "--std=c++23",
                 "-I/home/GHo/Documents/Code/Theron++/",
                 "-I/home/GHo/Documents/Code/CxxOpts",
-                "-I/opt/AMPL/amplapi/include/ampl"
+                "-I/opt/AMPL/amplapi/include/"
             ],
             "cStandard": "c23",
             "cppStandard": "c++23"
