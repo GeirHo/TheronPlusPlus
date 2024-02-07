@@ -557,27 +557,60 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
     exit( 0 );
   }
 
+// --------------------------------------------------------------------------
+  // AMQ Options
+  // --------------------------------------------------------------------------
+  //
+  // In order to offer full flexibility to the user in defining the AMQ options
+  // for various parts of the communication, the options should be returned 
+  // from functions on an option class. The only options in this case is the 
+  // user name and the password of the connection options, and everything else
+  // can be left as implemented by the default option class
+
+  class AMQOptions
+  : public Theron::AMQ::NetworkLayer::AMQProperties
+  {
+  private:
+
+    const std::string User, Password;
+
+  protected:
+
+    virtual proton::connection_options ConnectionOptions(void) const override
+    {
+      proton::connection_options Options;
+
+      Options.user( User );
+      Options.password( Password );
+
+      return Options;
+    };
+    
+  public:
+
+    AMQOptions( const std::string & TheUser, const std::string & ThePW )
+    : User( TheUser ), Password( ThePW )
+    {}
+
+    AMQOptions( const AMQOptions & Other ) 
+    : User( Other.User ), Password( Other.Password )
+    {}
+
+    virtual ~AMQOptions() = default;
+  };
+
   // --------------------------------------------------------------------------
   // Constructing the Actors
   // --------------------------------------------------------------------------
   //
   // The network endpoint takes the endpoint name as the first argument, then 
-  // the URL for the broker and the port number. The user name and the password
-  // are defined in the AMQ Qpid Proton connection options, and the values are
-  // therefore set for the connection options if they are given. Note that 
-  // if the user name is given, then the password must also be given.
-
-  proton::connection_options AMQOptions;
-
-  if( CLIValues.count("user") && CLIValues.count("password") )
-  {
-    AMQOptions.user( CLIValues["user"].as< std::string >() );
-    AMQOptions.password( CLIValues["password"].as< std::string >() );
-  }
-
-  // Then the network endpoint cna be constructed using the default names for
-  // the various network endpoint servers in order to pass the defined 
-  // connection options.
+  // the URL for the broker and the port number. Tthe network endpoint can be 
+  // constructed using the default names for the various network endpoint 
+  // servers in order to pass the AMQ opion class.The user name and the 
+  // password are optionally given on the command line, but if one is present
+  // they should both be present, and only in this case will the AMQ option 
+  // class be instantiated in a shared pointer and passed to the AMQ network 
+  // endpoint.
 
   Theron::AMQ::NetworkEndpoint AMQNetWork( 
     CLIValues["endpoint"].as< std::string >(), 
@@ -586,7 +619,11 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
     Theron::AMQ::Network::NetworkLayerLabel,
     Theron::AMQ::Network::SessionLayerLabel,
     Theron::AMQ::Network::PresentationLayerLabel,
-    AMQOptions
+    ( CLIValues.count("user") && CLIValues.count("password") ) ?
+      std::make_shared< AMQOptions >( 
+        CLIValues["user"].as< std::string >(), 
+        CLIValues["password"].as< std::string >() )
+    : std::make_shared< Theron::AMQ::NetworkLayer::AMQProperties >() 
   );
 
   // The topic subscriber is started on the topic names given on the command

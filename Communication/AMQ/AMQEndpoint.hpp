@@ -186,16 +186,13 @@ protected:
            const std::string & NetworkLayerName = NetworkLayerLabel,
            const std::string & SessionServerName = SessionLayerLabel,
            const std::string & PresentationServerName = PresentationLayerLabel,
-           const proton::connection_options & GivenConnectionOptions 
-               = proton::connection_options(),
-           const proton::message::property_map & GivenMessageOptions 
-               = proton::message::property_map()  )
+           const std::shared_ptr< NetworkLayer::AMQProperties > GivenProperties 
+                      = std::make_shared< NetworkLayer::AMQProperties >()  )
   : Actor( EndpointName ), 
     StandardFallbackHandler( Actor::GetAddress().AsString() ),
     Theron::Network( Actor::GetAddress().AsString() ),
     NetworkServer( GlobalAddress( NetworkLayerName, EndpointName ),
-                   AMQServerIP, AMQServerPort, GivenConnectionOptions,
-                   GivenMessageOptions ),
+                   AMQServerIP, AMQServerPort, GivenProperties ),
     SessionServer( EndpointName, SessionServerName ),
     PresentationServer( PresentationServerName )
   {}

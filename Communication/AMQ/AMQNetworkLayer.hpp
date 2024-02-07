@@ -167,21 +167,6 @@ private:
   
   std::string AMQBrokerURL;
   
-  // The connection options must be stored since the connection is only
-  // established in the callback handler when the container has started, and 
-  // as such they could be discarded at that point. 
-  
-  proton::connection_options ConnectionOptions;
-  
-  // There could be application dependent standard options to be used for each 
-  // message and these are stored for use when sending messages. Note however 
-  // that the 'to' field and the 'reply-to' field will be set explicitly for 
-  // each message possibly overriding whatever has been given as standard
-  // options for the message header. Note that these are not supposed to change 
-  // during executions.
-  
-  const proton::message::property_map MessageProperties;
-  
   // Finally, it keeps the endpoint string to be able to add that to local 
   // actor names when a resolution request arrives for a local actor.
   
@@ -206,6 +191,58 @@ private:
 
   void SendMessage( const TopicName & TargetTopic, 
                     const std::shared_ptr< proton::message > & TheMessage );
+
+  // ---------------------------------------------------------------------------
+	// Property management
+	// ---------------------------------------------------------------------------
+	//
+  // There are different parameters used when creating subscribers or publisers
+  // or when sending messages. Normally, these will be static during the 
+  // application execution, but they do not have to be, and a user of the 
+  // class may want to implement own defaults or even dynamic versions of the
+  // properties. The solution is therefore to enable the property management 
+  // as a separate class with methods that can be overridden by any user 
+  // class, but where the default settings are provided by the basic class 
+  // functions.
+  //
+  // The options for the Qpid Proton API seems to be unsettled and there 
+  // are many differences among the different versions of the code. At
+  // the time of writing the most recent API version is 0.39.0. A user of the
+  // AMQ network should check the documentation and ensure that the options
+  // are correctly set.
+  //
+  // In general the default implementation provides methods returning the 
+  // option classes with default options set.
+
+public:
+
+  class AMQProperties
+  : public std::enable_shared_from_this< AMQProperties >
+  {
+  protected:
+
+    virtual proton::connection_options ConnectionOptions(void) const;
+    virtual proton::message::property_map MessageProperties( void ) const;
+    virtual proton::message::annotation_map MessageAnnotations( void ) const;
+    virtual proton::message::annotation_map MessageDelivery( void ) const;
+    virtual proton::sender_options SenderOptions( void ) const;
+    virtual proton::receiver_options ReceiverOptions( void ) const;
+
+    friend class NetworkLayer;
+
+  public:
+
+    AMQProperties() = default;
+    AMQProperties( const AMQProperties & Other ) = default;
+    virtual ~AMQProperties() = default;
+  };
+
+  // The pointer to the property class is stored by the constructor and is 
+  // by default initialised to the default base class above.
+
+private:
+
+  const std::shared_ptr< AMQProperties > Properties;
 
   // ---------------------------------------------------------------------------
 	// Communication event handlers
@@ -402,10 +439,8 @@ public:
   NetworkLayer( const Theron::AMQ::GlobalAddress & EndpointName,
 								const std::string & BrokerURL,
 							  const unsigned int & Port = 61616,
-                const proton::connection_options & GivenConnectionOptions 
-                  = proton::connection_options(),
-                const proton::message::property_map & GivenMessageOptions 
-                  = proton::message::property_map() );
+                const std::shared_ptr< AMQProperties > GivenProperties 
+                      = std::make_shared< AMQProperties >() );
 
 	// The default constructor is deleted
 

@@ -37,6 +37,96 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 namespace Theron::AMQ
 {
+/*==============================================================================
+
+ Options and properties
+
+==============================================================================*/
+//
+// There are several classes dealing with options for the connection, the sender
+// the receiver and the messages. Many of these will be application specific 
+// and should be provided by the user. Instead offering all options to be given
+// to the constructor, the options are centralised to a class construcing the 
+// necessary option object on demand.
+//
+// The first function constructs the connection options used when establishing 
+// the connection to the AMQ Broker. This contains information about the 
+// connection parameters like the user name and password and certificates for 
+// encrypted communication. By default it only sets the desired capabilities 
+// for the connection. These are taken from a Red Hat documentation page, 
+// and they may or may not have an effect. The idea is that the connection 
+// must support topics, these are shared and global.
+
+proton::connection_options 
+NetworkLayer::AMQProperties::ConnectionOptions(void) const
+{
+  proton::connection_options Options;
+
+  Options.desired_capabilities( 
+    std::vector< proton::symbol >{ "topic", "shared", "global" } );
+
+  return Options;
+}
+
+// The next set of options are applied to each outgoing message. By default
+// there will be no properties set. The same goes for the message annotations
+// that will also be left empty by default. There is also a function for the 
+// delivery annotations, even though it is not clear what these will do or 
+// if they will be used.
+
+proton::message::property_map 
+NetworkLayer::AMQProperties::MessageProperties( void ) const
+{ return proton::message::property_map(); }
+
+proton::message::annotation_map
+NetworkLayer::AMQProperties::MessageAnnotations( void ) const
+{ return proton::message::annotation_map(); }
+
+proton::message::annotation_map
+NetworkLayer::AMQProperties::MessageDelivery( void ) const
+{ return proton::message::annotation_map(); }
+
+// The sender options are more involved because the sender options also 
+// contains options for the target of the messages. The main purpose of the
+// default setting is to ensure that the desired form for the publisher is 
+// to publish to a topic requiring an acknowledgement from the receiver to 
+// delete the message.
+
+proton::sender_options NetworkLayer::AMQProperties::SenderOptions( void ) const
+{
+  proton::sender_options LinkParameters;
+  proton::target_options TopicParameters;
+    
+  TopicParameters.capabilities( std::vector< proton::symbol >{ "topic" } );
+  TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
+
+  LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
+  LinkParameters.target( TopicParameters );
+
+  return LinkParameters;
+}
+
+// Receivers have their own set of parameters, and some of these are again other
+// parameter classes. Otherwise the options are very much equal to the other 
+// default options.
+
+proton::receiver_options 
+NetworkLayer::AMQProperties::ReceiverOptions( void ) const 
+{
+  proton::receiver_options LinkParameters;
+  proton::source_options   TopicParameters;
+
+  TopicParameters.capabilities( 
+    std::vector< proton::symbol >{ "topic", "shared", "global" } );
+  TopicParameters.distribution_mode( proton::source::distribution_mode::COPY );
+  TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
+  TopicParameters.expiry_policy( proton::source::NEVER );
+  
+  LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
+  LinkParameters.source( TopicParameters );
+
+  return LinkParameters;
+}
 
 /*==============================================================================
 
@@ -49,18 +139,12 @@ namespace Theron::AMQ
 // and receivers to ensure that topics are created if the given target topic 
 // does not exist already on the message broker.
 
-void NetworkLayer::CreateSender(const TopicName & TheTarget)
+void NetworkLayer::CreateSender( const TopicName & TheTarget )
 {
-  proton::sender_options LinkParameters;
-  proton::target_options TopicParameters;
-    
-  TopicParameters.capabilities( std::vector< proton::symbol >{ "topic" } );
-  TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
-
+  proton::sender_options LinkParameters( Properties->SenderOptions() );
+  
   LinkParameters.name( TheTarget );
-  LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
-  LinkParameters.target( TopicParameters );
-
+  
   auto [ PublisherHandler, Success ] = Publishers.emplace( TheTarget, 
          AMQBroker.open_sender( "topic://" + TheTarget, LinkParameters ) );
 
@@ -69,19 +153,10 @@ void NetworkLayer::CreateSender(const TopicName & TheTarget)
 
 void NetworkLayer::CreateReceiver(const TopicName & TheTarget)
 {
-  proton::receiver_options LinkParameters;
-  proton::source_options   TopicParameters;
+  proton::receiver_options LinkParameters( Properties->ReceiverOptions() );
 
-  TopicParameters.capabilities( 
-    std::vector< proton::symbol >{ "topic", "shared", "global" } );
-  TopicParameters.distribution_mode( proton::source::distribution_mode::COPY );
-  TopicParameters.durability_mode( proton::terminus::durability_mode::UNSETTLED_STATE );
-  TopicParameters.expiry_policy( proton::source::NEVER );
-  
   LinkParameters.name( TheTarget );
-  LinkParameters.delivery_mode( proton::delivery_mode::AT_LEAST_ONCE );
-  LinkParameters.source( TopicParameters );
-  
+    
   auto [ SubscriberHandler, Success ] = Subscribers.emplace( TheTarget, 
          AMQBroker.open_receiver("topic://" + TheTarget, LinkParameters ) );
   
@@ -408,11 +483,21 @@ void NetworkLayer::ResolveAddress(
   };
 
   proton::message AMQRequest;  
-  AMQRequest.properties() = MessageProperties;
+
+  // Setting the message properties
+
+  AMQRequest.properties()           = Properties->MessageProperties();
+  AMQRequest.message_annotations()  = Properties->MessageAnnotations();
+  AMQRequest.delivery_annotations() = Properties->MessageDelivery();
+
+  // Setting the header fields and the message body
+
   AMQRequest.to( DiscoveryTopic );
   AMQRequest.reply_to( GetAddress().AsString() );
   AMQRequest.subject( Protocol::String( Protocol::Action::ResolveAddress ) );
   AMQRequest.body() = ActorAddresses;
+
+  // Creating a copy of the filled message and send it to the other endpoints
 
   std::shared_ptr< proton::message > RequestToSend = 
     std::make_shared< proton::message >( AMQRequest );
@@ -442,12 +527,20 @@ void NetworkLayer::ResolvedAddress(
   };
   
   proton::message AMQResponse;
-  AMQResponse.properties() = MessageProperties;
+
+  // Settingt the message properties
+
+  AMQResponse.properties()           = Properties->MessageProperties();
+  AMQResponse.message_annotations()  = Properties->MessageAnnotations();
+  AMQResponse.delivery_annotations() = Properties->MessageDelivery();
+
+  // Setting the header fields and the message body
+
   AMQResponse.to( DiscoveryTopic );
   AMQResponse.reply_to( GetAddress().AsString() );
   AMQResponse.subject( Protocol::String( Protocol::Action::GlobalAddress ) );
   AMQResponse.body() = ActorAddresses;
-  
+
   std::shared_ptr< proton::message > ResponseToSend = 
     std::make_shared< proton::message >( AMQResponse );
 
@@ -473,7 +566,15 @@ void NetworkLayer::ActorRemoval(
   const Address TheSessionLayer )
 {
   proton::message ActorClosing;
-  ActorClosing.properties() = MessageProperties;
+  
+  // Setting the message properties
+
+  ActorClosing.properties()           = Properties->MessageProperties();
+  ActorClosing.message_annotations()  = Properties->MessageAnnotations();
+  ActorClosing.delivery_annotations() = Properties->MessageDelivery();
+
+  // Setting the header fields and the message body
+
   ActorClosing.to( DiscoveryTopic );
   ActorClosing.reply_to( GetAddress().AsString() );
   ActorClosing.subject( Protocol::String( Protocol::Action::ActorRemoval ) );
@@ -515,7 +616,10 @@ void NetworkLayer::OutboundMessage( const AMQ::Message & TheMessage,
   
   TopicName DestinationActor( TheMessage.GetRecipient().AsString() );
   
-  RemoteMessage->properties() = MessageProperties;
+  RemoteMessage->properties()           = Properties->MessageProperties();
+  RemoteMessage->message_annotations()  = Properties->MessageAnnotations();
+  RemoteMessage->delivery_annotations() = Properties->MessageDelivery();
+
   RemoteMessage->reply_to( TheMessage.GetSender().AsString() );
   RemoteMessage->to( DestinationActor );
   
@@ -571,8 +675,7 @@ NetworkLayer::NetworkLayer(
   const Theron::AMQ::GlobalAddress & EndpointName,
 	const std::string & BrokerURL,
 	const unsigned int & Port,
-  const proton::connection_options & GivenConnectionOptions,
-  const proton::message::property_map & GivenMessageOptions )
+  const std::shared_ptr< AMQProperties > GivenProperties )
 : Actor( EndpointName.AsString() ),
   StandardFallbackHandler( EndpointName.AsString() ),
   Theron::NetworkLayer< AMQ::Message >( EndpointName.AsString() ),
@@ -581,9 +684,8 @@ NetworkLayer::NetworkLayer(
   AMQConnection(), 
   Connected( false ), Publishers(), Subscribers(), MessageCache(), 
   ActionQueue( AMQEventLoop ),
-  ConnectionOptions( GivenConnectionOptions ),  
-  MessageProperties( GivenMessageOptions ),
-  EndpointString( EndpointName.Endpoint() )
+  EndpointString( EndpointName.Endpoint() ),
+  Properties( GivenProperties )
 {
   // First define the URL string for the connection and store it.
   
@@ -594,16 +696,13 @@ NetworkLayer::NetworkLayer(
   
   // The connection is established and opened. Then a session for the 
   // publishers and subscribers is created for this connection.
-
-  ConnectionOptions.desired_capabilities( 
-    std::vector< proton::symbol >{ "topic", "shared", "global" } );
   
-  AMQConnection = AMQEventLoop.connect( AMQBrokerURL, ConnectionOptions );
+  AMQConnection = AMQEventLoop.connect( AMQBrokerURL, 
+                                        Properties->ConnectionOptions() );
   AMQConnection.open();
-  AMQBroker = AMQConnection.open_session();
+  //AMQBroker = AMQConnection.open_session();
+  AMQBroker = AMQConnection.default_session();
 
-  //ConnectionOptions.handler( *this );
-  
   // Then the event loop is started and the rest of the processing will be 
   // done by the various message handlers and event handlers
   
@@ -635,7 +734,10 @@ void NetworkLayer::Stop( const Network::ShutDown & StopMessage,
 
   proton::message ClosingMessage;
   
-  ClosingMessage.properties() = MessageProperties;
+  ClosingMessage.properties()           = Properties->MessageProperties();
+  ClosingMessage.message_annotations()  = Properties->MessageAnnotations();
+  ClosingMessage.delivery_annotations() = Properties->MessageDelivery();
+
   ClosingMessage.reply_to( GetAddress().AsString() );
   ClosingMessage.to( DiscoveryTopic );
   ClosingMessage.subject(Protocol::String(Protocol::Action::EndpointShutDown));
