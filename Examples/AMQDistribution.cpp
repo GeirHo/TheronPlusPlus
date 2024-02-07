@@ -578,7 +578,8 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
 
     virtual proton::connection_options ConnectionOptions(void) const override
     {
-      proton::connection_options Options;
+      proton::connection_options Options( 
+              Theron::AMQ::NetworkLayer::AMQProperties::ConnectionOptions() );
 
       Options.user( User );
       Options.password( Password );
