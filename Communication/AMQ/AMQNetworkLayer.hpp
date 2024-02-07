@@ -465,5 +465,20 @@ public:
 	virtual ~NetworkLayer();
 };
 
+/*==============================================================================
+
+ Default AMQ options
+
+==============================================================================*/
+//
+// In order to set the default options conveniently, there is a small helper 
+// function that simply returns a smart pointer to the default options class
+
+constexpr std::shared_ptr< NetworkLayer::AMQProperties > DefaultOptions( void )
+{
+  return std::shared_ptr< NetworkLayer::AMQProperties >();
+}
+
+
 }       // End name space AMQ
 #endif  // THERON_AMQ_NETWORK_LAYER

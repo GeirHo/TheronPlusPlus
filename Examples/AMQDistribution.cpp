@@ -623,7 +623,7 @@ int main( int NumberOfCLIOptions, char ** CLIOptionStrings )
       std::make_shared< AMQOptions >( 
         CLIValues["user"].as< std::string >(), 
         CLIValues["password"].as< std::string >() )
-    : std::make_shared< Theron::AMQ::NetworkLayer::AMQProperties >() 
+    : Theron::AMQ::DefaultOptions() 
   );
 
   // The topic subscriber is started on the topic names given on the command
