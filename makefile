@@ -25,7 +25,7 @@
 # The standard is explicitly given, and currently it is C++ 2017 version.
 # Both Gnu C++ and CLang has been tested and can be used.
 
-CXX = g++
+CXX = ccache g++
 
 # The standard archive utility is used with the following flags:
 # r = Replace an existing library entry with the new one
