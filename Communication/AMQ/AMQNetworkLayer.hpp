@@ -72,7 +72,9 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <proton/work_queue.hpp>          // Queue of pending send operations
 #include <proton/message.hpp>             // AMQ message format
 #include <proton/receiver.hpp>            // The subscriber object
+#include <proton/receiver_options.hpp>    // The receiver options
 #include <proton/sender.hpp>              // The sender object
+#include <proton/sender_options.hpp>      // The sender options
 
 // Headers for the Theron++ actor system
 
