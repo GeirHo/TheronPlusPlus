@@ -286,5 +286,19 @@ public:
   ConsolePrint() = default;
 };
 
+// Simple logging can be made to the stdandard log output in the same way as
+// console printing. For more advanced features, the Google logging framework
+// is recommended, see https://github.com/google/glog
+
+class ConsoleLog
+: public std::osyncstream
+{
+public:
+
+  ConsoleLog( void )
+  : std::osyncstream( std::log )
+  {}
+};
+
 }       // End name space Theron
 #endif  // CONSOLE_PRINT
