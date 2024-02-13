@@ -296,7 +296,7 @@ class ConsoleLog
 public:
 
   ConsoleLog( void )
-  : std::osyncstream( std::log )
+  : std::osyncstream( std::clog )
   {}
 };
 
