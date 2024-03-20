@@ -213,6 +213,12 @@ private:
   // AMQ network should check the documentation and ensure that the options
   // are correctly set.
   //
+  // There may be application sepcific properties for the messages and these
+  // may differ from message type to message type. Hence, all the message 
+  // properties takes the current values of the properties as input and 
+  // then it is up to the user implementation to override these, change these
+  // or amend new ones.
+  //
   // In general the default implementation provides methods returning the 
   // option classes with default options set.
 
@@ -224,12 +230,21 @@ public:
   protected:
 
     virtual proton::connection_options ConnectionOptions(void) const;
-    virtual proton::message::property_map MessageProperties( void ) const;
-    virtual proton::message::annotation_map MessageAnnotations( void ) const;
-    virtual proton::message::annotation_map MessageDelivery( void ) const;
-    virtual proton::sender_options SenderOptions( void ) const;
-    virtual proton::receiver_options ReceiverOptions( void ) const;
+    virtual proton::sender_options     SenderOptions( void ) const;
+    virtual proton::receiver_options   ReceiverOptions( void ) const;
 
+    virtual proton::message::property_map MessageProperties( 
+      const proton::message::property_map & CurrentProperties 
+          = proton::message::property_map() ) const;
+
+    virtual proton::message::annotation_map MessageAnnotations( 
+      const proton::message::annotation_map & CurrentAnnotations 
+          = proton::message::annotation_map() ) const;
+
+    virtual proton::message::annotation_map MessageDelivery( 
+      const proton::message::annotation_map & CurrentAnnotations 
+          = proton::message::annotation_map() ) const;
+    
     friend class NetworkLayer;
 
   public:

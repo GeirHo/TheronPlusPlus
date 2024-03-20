@@ -75,16 +75,19 @@ NetworkLayer::AMQProperties::ConnectionOptions(void) const
 // if they will be used.
 
 proton::message::property_map 
-NetworkLayer::AMQProperties::MessageProperties( void ) const
-{ return proton::message::property_map(); }
+NetworkLayer::AMQProperties::MessageProperties( 
+const proton::message::property_map & CurrentProperties ) const
+{ return CurrentProperties; }
 
 proton::message::annotation_map
-NetworkLayer::AMQProperties::MessageAnnotations( void ) const
-{ return proton::message::annotation_map(); }
+NetworkLayer::AMQProperties::MessageAnnotations( 
+const proton::message::annotation_map & CurrentAnnotations ) const
+{ return CurrentAnnotations; }
 
 proton::message::annotation_map
-NetworkLayer::AMQProperties::MessageDelivery( void ) const
-{ return proton::message::annotation_map(); }
+NetworkLayer::AMQProperties::MessageDelivery( 
+const proton::message::annotation_map & CurrentAnnotations ) const
+{ return CurrentAnnotations; }
 
 // The sender options are more involved because the sender options also 
 // contains options for the target of the messages. The main purpose of the
@@ -173,6 +176,15 @@ void NetworkLayer::SendMessage( const TopicName & TargetTopic,
                    const std::shared_ptr< proton::message > & TheMessage )
 {
   auto PublisherHandler = Publishers.find( TargetTopic );
+
+  // Adding the default values to the message properties and annotations
+
+  TheMessage->properties()           
+    = Properties->MessageProperties( TheMessage->properties() );
+  TheMessage->message_annotations()  
+    = Properties->MessageAnnotations( TheMessage->message_annotations() );
+  TheMessage->delivery_annotations() 
+    = Properties->MessageDelivery( TheMessage->message_annotations() );
 
   if( PublisherHandler != Publishers.end() )
   {
@@ -484,12 +496,6 @@ void NetworkLayer::ResolveAddress(
 
   proton::message AMQRequest;  
 
-  // Setting the message properties
-
-  AMQRequest.properties()           = Properties->MessageProperties();
-  AMQRequest.message_annotations()  = Properties->MessageAnnotations();
-  AMQRequest.delivery_annotations() = Properties->MessageDelivery();
-
   // Setting the header fields and the message body
 
   AMQRequest.to( DiscoveryTopic );
@@ -528,12 +534,6 @@ void NetworkLayer::ResolvedAddress(
   
   proton::message AMQResponse;
 
-  // Settingt the message properties
-
-  AMQResponse.properties()           = Properties->MessageProperties();
-  AMQResponse.message_annotations()  = Properties->MessageAnnotations();
-  AMQResponse.delivery_annotations() = Properties->MessageDelivery();
-
   // Setting the header fields and the message body
 
   AMQResponse.to( DiscoveryTopic );
@@ -567,12 +567,6 @@ void NetworkLayer::ActorRemoval(
 {
   proton::message ActorClosing;
   
-  // Setting the message properties
-
-  ActorClosing.properties()           = Properties->MessageProperties();
-  ActorClosing.message_annotations()  = Properties->MessageAnnotations();
-  ActorClosing.delivery_annotations() = Properties->MessageDelivery();
-
   // Setting the header fields and the message body
 
   ActorClosing.to( DiscoveryTopic );
@@ -616,10 +610,6 @@ void NetworkLayer::OutboundMessage( const AMQ::Message & TheMessage,
   
   TopicName DestinationActor( TheMessage.GetRecipient().AsString() );
   
-  RemoteMessage->properties()           = Properties->MessageProperties();
-  RemoteMessage->message_annotations()  = Properties->MessageAnnotations();
-  RemoteMessage->delivery_annotations() = Properties->MessageDelivery();
-
   RemoteMessage->reply_to( TheMessage.GetSender().AsString() );
   RemoteMessage->to( DestinationActor );
   
@@ -732,21 +722,16 @@ void NetworkLayer::Stop( const Network::ShutDown & StopMessage,
 
   // Send the closing message to all other endpoints
 
-  proton::message ClosingMessage;
+  std::shared_ptr< proton::message > ClosingMessage;
   
-  ClosingMessage.properties()           = Properties->MessageProperties();
-  ClosingMessage.message_annotations()  = Properties->MessageAnnotations();
-  ClosingMessage.delivery_annotations() = Properties->MessageDelivery();
-
-  ClosingMessage.reply_to( GetAddress().AsString() );
-  ClosingMessage.to( DiscoveryTopic );
-  ClosingMessage.subject(Protocol::String(Protocol::Action::EndpointShutDown));
-  ClosingMessage.body( GetAddress().AsString() );
+  ClosingMessage->reply_to( GetAddress().AsString() );
+  ClosingMessage->to( DiscoveryTopic );
+  ClosingMessage->subject(Protocol::String(Protocol::Action::EndpointShutDown));
+  ClosingMessage->body( GetAddress().AsString() );
   
-  ActionQueue.add( [=,this](){ 
-    Publishers[ DiscoveryTopic ].send( ClosingMessage ); });
-  
-  // Delete the subscribers and publishers of this endpoint
+  ActionQueue.add(
+    [=,this](){ SendMessage( DiscoveryTopic, ClosingMessage ); }
+  );
 
   ActionQueue.add( [this](){ std::ranges::for_each( Publishers, 
               [](auto & PublisherRecord){ PublisherRecord.second.close(); });
