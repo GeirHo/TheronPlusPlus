@@ -398,8 +398,8 @@ public:
 
   public:
 
-    TopicMessage( const std::string & MessageIdentifier )
-    : JSONMessage( MessageIdentifier )
+    TopicMessage( const std::string & AMQTopic )
+    : JSONMessage( AMQTopic )
     {}
 
     TopicMessage()

@@ -92,10 +92,6 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 namespace Theron::AMQ
 {
-// The AMQ topic names are just standard strings.
-
-using TopicName = std::string; 
-
 // Setting the hard coded topic for all endpoints to listen to.
 
 constexpr std::string DiscoveryTopic{ "TheronPlusPlus" };

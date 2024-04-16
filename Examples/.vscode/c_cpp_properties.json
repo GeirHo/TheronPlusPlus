@@ -6,10 +6,11 @@
                 "${default}",
                 "/home/GHo/Documents/Code/Theron++/",
                 "/home/GHo/Documents/Code/CxxOpts",
-                "/opt/AMPL/amplapi/include/"
+                "/opt/AMPL/amplapi/include/",
+                "/usr/include/c++/13"
             ],
             "defines": [],
-            "compilerPath": "/usr/bin/g++",
+            "compilerPath": "/usr/lib64/ccache/g++",
             "compilerArgs": [
                 "--std=c++23",
                 "-I/home/GHo/Documents/Code/Theron++/",
@@ -17,7 +18,12 @@
                 "-I/opt/AMPL/amplapi/include/"
             ],
             "cStandard": "c23",
-            "cppStandard": "c++23"
+            "cppStandard": "c++23",
+            "browse": {
+                "path": [
+                    "/usr/include"
+                ]
+            }
         }
     ],
     "version": 4

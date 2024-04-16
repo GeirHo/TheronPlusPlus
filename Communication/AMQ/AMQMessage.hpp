@@ -32,7 +32,6 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 
 namespace Theron::AMQ
 {
-
 /*==============================================================================
 
   Global Actor addresses
@@ -98,6 +97,37 @@ public:
 
 /*==============================================================================
 
+  Topic names
+
+==============================================================================*/
+//
+// The AMQ topic names are just standard strings, but defined as a class to 
+// admit implicit conversion from string views.
+
+class TopicName 
+: public std::string
+{
+public:
+  
+  TopicName( const std::string & TheName )
+  : std::string( TheName )
+  {}
+
+  TopicName( const std::string_view & TheName )
+  : std::string( static_cast<std::string>( TheName ) )
+  {}
+
+  TopicName( const Address & AnActor )
+  : std::string( AnActor.AsString() )
+  {}
+
+  TopicName( const AMQ::GlobalAddress & TheAddress )
+  : std::string( TheAddress.AsString() )
+  {}
+}; 
+
+/*==============================================================================
+
   Message class
 
 ==============================================================================*/
@@ -157,6 +187,16 @@ public:
 // Specialisation for the standard map hash function
 
 namespace std {
+
+  template<>
+  class hash< Theron::AMQ::TopicName >
+  {
+  public:
+
+    size_t operator() ( const Theron::AMQ::TopicName & TheID ) const
+    { return std::hash< std::string >()( TheID ); }
+  };
+
   template<>
   class hash< Theron::AMQ::GlobalAddress >
   {
@@ -165,11 +205,22 @@ namespace std {
     size_t operator() ( const Theron::AMQ::GlobalAddress & TheID ) const
     { return std::hash< std::string >()( TheID.AsString() ); }
   };
+
 } // end name space std
 
 // Specialisation for the boost bi-maps
 
 namespace boost {
+  
+  template<>
+  class hash< Theron::AMQ::TopicName >
+  {
+  public:
+
+    size_t operator() ( const Theron::AMQ::TopicName & TheID ) const
+    { return std::hash< std::string >()( TheID ); }
+  };
+
   template<>
   class hash< Theron::AMQ::GlobalAddress >
   {
@@ -178,6 +229,7 @@ namespace boost {
     size_t operator() ( const Theron::AMQ::GlobalAddress & TheID ) const
     { return std::hash< std::string >()( TheID.AsString() ); }
   };
+
 } // end name space boost
 
 #endif // THERON_AMQ_MESSAGES

@@ -308,7 +308,7 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             
             Send(  RemoveActor( ActorAddress ), 
                    Network::GetAddress( Network::Layer::Session ) );
-            Publishers.erase( ActorAddress );
+            Publishers.erase( ActorAddress  );
           }
           break;
         case Protocol::Action::GlobalAddress:

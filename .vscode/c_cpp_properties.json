@@ -8,12 +8,12 @@
                 "/home/GHo/Documents/Code/Theron++",
                 "/opt/AMPL/amplapi/include/",
                 "${workspaceFolder}/**",
-                "/home/GHo/Documents/Code/Theron++"
+                "/usr/include/c++/13"
             ],
             "defines": [],
             "cStandard": "c23",
             "intelliSenseMode": "linux-gcc-x64",
-            "compilerPath": "/usr/bin/g++",
+            "compilerPath": "/usr/lib64/ccache/g++",
             "compilerArgs": [
                 "-std=c++23",
                 "-I/home/GHo/Documents/Code/Theron++/",
