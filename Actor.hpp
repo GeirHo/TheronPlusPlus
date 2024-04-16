@@ -410,8 +410,8 @@ public:
   // (const char *const name). These will simply use the Actor identification's
   // lookup, and then delegate to the above constructors.
 
-  inline Address( const std::string & Name )
-  : Address( Identification::Lookup( Name ) )
+  inline Address( std::string_view Name )
+  : Address( Identification::Lookup( std::string( Name )  ) )
   {
     // The lookup may fail if no actor, either locally or remotely, exists by
     // that name. In that case, it is understood that this is a reference to
@@ -420,7 +420,7 @@ public:
     // address.
 
     if ( get() == nullptr )
-      *this = Identification::Create( Name );
+      *this = Identification::Create( std::string( Name ) );
   }
 
   // Oddly enough, but Theron has no constructor to get an address by the

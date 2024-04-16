@@ -338,8 +338,10 @@ void NetworkLayer::on_message( proton::delivery & DeliveryStatus,
             std::unordered_map< std::string, std::string > ActorAddresses;
             proton::get( TheMessage.body(), ActorAddresses );
 
-            Send( ResolutionRequest( ActorAddresses.at("RequestedActor"), 
-                                     ActorAddresses.at("RequestingActor") ), 
+            Address RequestedActor( ActorAddresses.at("RequestedActor") );
+            GlobalAddress RequestingActor( ActorAddresses.at("RequestingActor") );
+
+            Send( ResolutionRequest( RequestedActor, RequestingActor ), 
                   Network::GetAddress( Network::Layer::Session ) ); 
           }
           break;

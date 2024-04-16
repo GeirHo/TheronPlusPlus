@@ -197,7 +197,7 @@ void SessionLayer::InboundMessage( const AMQ::Message & TheMessage,
     std::ranges::for_each( 
       TopicSubscribers[ SenderTopic ],
       [&,this](const Address & Subscriber){
-        Send( InternalMessage( SenderTopic, Subscriber, 
+        Send( InternalMessage( Address( SenderTopic ), Subscriber, 
                                MessageToActors ), 
               ThePresentationLayer ); 
     });
