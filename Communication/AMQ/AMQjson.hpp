@@ -118,8 +118,9 @@ public:
   // The constructor requires the unique message identifier to recognise 
   // the incoming message types by the content type field set.
 
-  JSONMessage( const std::string & TheMessageID )
-  : PolymorphicMessage(), JSON(), UniqueMessageIdentifier( TheMessageID )
+  JSONMessage( const std::string_view & TheMessageID )
+  : PolymorphicMessage(), JSON(), 
+    UniqueMessageIdentifier( static_cast< std::string >( TheMessageID ) )
   {}
 
   // The default constructor not allowed 
@@ -146,9 +147,10 @@ public:
   // JSON message. However, the equal operator works well, and it is therefore
   // used as a backup.
 
-  JSONMessage( const std::string & TheMessageID, 
+  JSONMessage( const std::string_view & TheMessageID, 
                const JSON & JSONData )
-  : PolymorphicMessage(), JSON(), UniqueMessageIdentifier( TheMessageID )
+  : PolymorphicMessage(), JSON(), 
+    UniqueMessageIdentifier( static_cast< std::string >( TheMessageID ) )
   {
     this->JSON::operator=( JSONData );
   }
@@ -193,11 +195,12 @@ protected:
 
 public:
 
-  JSONTopicMessage( const std::string & TheTopicName )
+  JSONTopicMessage( const std::string_view & TheTopicName )
   : JSON(), JSONMessage( TheTopicName )
   {}
 
-  JSONTopicMessage( const std::string & TheTopicName, const JSON & JSONData )
+  JSONTopicMessage( const std::string_view & TheTopicName, 
+                    const JSON & JSONData )
   : JSON(), JSONMessage( TheTopicName, JSONData )
   {}
 
@@ -248,11 +251,11 @@ protected:
 
 public:
 
-  JSONWildcardMessage( const std::string & TopicIdentifier )
+  JSONWildcardMessage( const std::string_view & TopicIdentifier )
   : JSONMessage( TopicIdentifier )
   {}
 
-  JSONWildcardMessage( const std::string & TopicIdentifier, 
+  JSONWildcardMessage( const std::string_view & TopicIdentifier, 
                        const JSON & JSONData )
   : JSONMessage( TopicIdentifier, JSONData )
   {}
