@@ -74,10 +74,14 @@ NetworkLayer::AMQProperties::ConnectionOptions(void) const
 // delivery annotations, even though it is not clear what these will do or 
 // if they will be used.
 
-proton::message::property_map 
+std::map<std::string, proton::scalar> 
 NetworkLayer::AMQProperties::MessageProperties( 
 const proton::message::property_map & CurrentProperties ) const
-{ return CurrentProperties; }
+{ 
+  std::map<std::string, proton::scalar> TheProperties;
+  proton::get( CurrentProperties, TheProperties );
+  return TheProperties; 
+}
 
 proton::message::annotation_map
 NetworkLayer::AMQProperties::MessageAnnotations( 

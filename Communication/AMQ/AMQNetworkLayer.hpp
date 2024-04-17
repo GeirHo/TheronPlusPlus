@@ -71,6 +71,7 @@ License: LGPL 3.0 (https://www.gnu.org/licenses/lgpl-3.0.en.html)
 #include <proton/session_options.hpp>     // Options for the session
 #include <proton/work_queue.hpp>          // Queue of pending send operations
 #include <proton/message.hpp>             // AMQ message format
+#include <proton/types.hpp>               // Type support
 #include <proton/receiver.hpp>            // The subscriber object
 #include <proton/receiver_options.hpp>    // The receiver options
 #include <proton/sender.hpp>              // The sender object
@@ -229,7 +230,7 @@ public:
     virtual proton::sender_options     SenderOptions( void ) const;
     virtual proton::receiver_options   ReceiverOptions( void ) const;
 
-    virtual proton::message::property_map MessageProperties( 
+    virtual std::map<std::string, proton::scalar> MessageProperties( 
       const proton::message::property_map & CurrentProperties 
           = proton::message::property_map() ) const;
 

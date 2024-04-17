@@ -124,6 +124,7 @@ public:
   TopicName( const AMQ::GlobalAddress & TheAddress )
   : std::string( TheAddress.AsString() )
   {}
+
 }; 
 
 /*==============================================================================
