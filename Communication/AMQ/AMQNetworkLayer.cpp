@@ -692,10 +692,12 @@ NetworkLayer::NetworkLayer(
   
   // The connection is established and opened. Then a session for the 
   // publishers and subscribers is created for this connection.
+
+  proton::connection_options ConnectionOptions( Properties->ConnectionOptions() );
   
   AMQConnection = AMQEventLoop.connect( AMQBrokerURL, 
-                                        Properties->ConnectionOptions() );
-  AMQConnection.open();
+                                        ConnectionOptions );
+  AMQConnection.open( ConnectionOptions );
   //AMQBroker = AMQConnection.open_session();
   AMQBroker = AMQConnection.default_session();
 

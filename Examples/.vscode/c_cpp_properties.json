@@ -4,10 +4,11 @@
             "name": "Linux",
             "includePath": [
                 "${default}",
+                "/usr/include",
                 "/home/GHo/Documents/Code/Theron++/",
                 "/home/GHo/Documents/Code/CxxOpts",
                 "/opt/AMPL/amplapi/include/",
-                "/usr/include/c++/13"
+                "/usr/include/c++/15"
             ],
             "defines": [],
             "compilerPath": "/usr/lib64/ccache/g++",
@@ -18,7 +19,7 @@
                 "-I/opt/AMPL/amplapi/include/"
             ],
             "cStandard": "c23",
-            "cppStandard": "c++23",
+            "cppStandard": "c++26",
             "browse": {
                 "path": [
                     "/usr/include"

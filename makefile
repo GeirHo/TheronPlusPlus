@@ -39,7 +39,7 @@ ARFLAGS = ruvs
 # the code to be debugged with GDB. This produces larger object files and if
 # this is a concern the GDB switch can be dropped. -Wall to be added
 
-GENERAL_OPTIONS = -c -Wall -std=c++23 -ggdb -fPIC
+GENERAL_OPTIONS = -c -Wall -std=c++26 -ggdb -fPIC
 
 # Optimisation -O3 is the highest level of optimisation and should be used
 # with production code. -Og is the code optimising and offering debugging
@@ -187,8 +187,8 @@ Theron++.a: $(ALL_OBJECTS)
 	$(AR) $(ARFLAGS) Theron++.a $?
 	
 Theron++.so: Theron++.a
-	g++ -shared -o Theron++.so -Wl,--whole-archive Theron++.a \
-	-Wl,--no-whole-archive
+	g++ -shared -std=c++23 -ggdb -fPIC -o Theron++.so -Wl,--whole-archive \
+	Theron++.a -Wl,--no-whole-archive
 
 
 Library: Theron++.a

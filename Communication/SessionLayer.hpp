@@ -180,39 +180,16 @@ public:
     // taken from the exposition of the container compatible range on the page
     // https://en.cppreference.com/w/cpp/ranges/to#container_compatible_range
 
-    #ifdef __cpp_lib_containers_ranges
     template< class RangeType >
     requires std::ranges::input_range< RangeType > &&
              std::convertible_to< std::ranges::range_reference_t< RangeType >, 
                                   Address >
     NewPeerAdded( RangeType & AddressRange )
-    : std::set< Address >( AddressRange )
+    : std::set< Address >( std::from_range, AddressRange )
     {}
-    #pragma message("C++23: Range inserters available! Rewrite SessionLayer.hpp!")
-    #else
-    template< class RangeType >
-    requires std::ranges::input_range< RangeType > &&
-             std::convertible_to< std::ranges::range_reference_t< RangeType >, 
-                                  Address >
-    NewPeerAdded( RangeType & AddressRange )
-    : std::set< Address >( AddressRange.cbegin(), AddressRange.cend() )
-    {}
-    #endif 
-  
 
-    // The insert ranges is a C++23 feature that may not be implemented yet
-    // and this provide the implementation if needed
-
-    #ifndef __cpp_lib_containers_ranges
-
-      template< class RangeType >
-      requires std::ranges::input_range< RangeType > &&
-               std::convertible_to< std::ranges::range_reference_t< RangeType >, 
-                                    Address >
-      void insert_range( const RangeType & AddressRange )
-      { insert( AddressRange.cbegin(), AddressRange.cend() ); }
-
-    #endif
+    // The default constructor is needed for the message to be sent to the  
+    // subscribers. 
 
     NewPeerAdded()  = default;
     ~NewPeerAdded() = default;
@@ -236,24 +213,13 @@ public:
     // message above and basically requires a range with a type that is or is 
     // convertible to an actor address.
 
-    #ifdef __cpp_lib_containers_ranges
     template< class RangeType >
     requires std::ranges::input_range< RangeType > &&
              std::convertible_to< std::ranges::range_reference_t< RangeType >, 
                                   Address >
     PeerRemoved( RangeType && AddressRange )
-    : std::set< Address >( AddressRange )
+    : std::set< Address >( std::from_range, AddressRange )
     {}
-    #else
-    template< class RangeType >
-    requires std::ranges::input_range< RangeType > &&
-             std::convertible_to< std::ranges::range_reference_t< RangeType >, 
-                                  Address >
-    PeerRemoved( RangeType && AddressRange )
-    : std::set< Address >( AddressRange.cbegin(), AddressRange.cend())
-    {}    
-    #endif
-
 
     PeerRemoved()  = default;
     ~PeerRemoved() = default;
